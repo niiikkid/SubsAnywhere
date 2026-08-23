@@ -18,6 +18,7 @@
       first: null,
       second: null,
     };
+    const builtInTrackResolver = runtime.createBuiltInTrackResolver();
     const originalTrackModes = new Map();
     const cleanup = [];
 
@@ -58,12 +59,26 @@
         const external = state.externalTracks.find((track) => `external:${track.id}` === id);
         return external ? runtime.cueTextAt(external.cues, video.currentTime, external.offsetSeconds) : '';
       }
-      return runtime.activeCueText(runtime.findBuiltInTrack(video.textTracks, id));
+      return runtime.activeCueText(builtInTrackResolver.find(video.textTracks, id));
+    }
+
+    function overlayHost(video) {
+      const fullscreenElement = document.fullscreenElement ?? document.webkitFullscreenElement;
+      if (fullscreenElement && (fullscreenElement === video || fullscreenElement.contains?.(video))) {
+        return fullscreenElement;
+      }
+      return document.documentElement;
+    }
+
+    function syncOverlayHost(video) {
+      const host = overlayHost(video);
+      if (state.root?.parentElement !== host) host.append(state.root);
     }
 
     function positionOverlay() {
       const { video } = manager.current();
       if (!video || !state.root) return;
+      syncOverlayHost(video);
       const rect = video.getBoundingClientRect();
       state.root.style.left = `${rect.left}px`;
       state.root.style.top = `${rect.top}px`;
@@ -157,6 +172,7 @@
       [window, 'resize', positionOverlay],
       [window, 'scroll', positionOverlay, true],
       [document, 'fullscreenchange', positionOverlay],
+      [document, 'webkitfullscreenchange', positionOverlay],
     ]) {
       target.addEventListener(type, listener, options);
       cleanup.push(() => target.removeEventListener(type, listener, options));

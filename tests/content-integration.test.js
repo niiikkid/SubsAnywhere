@@ -11,6 +11,9 @@ class FakeTarget {
     this.listeners.set(type, set);
   }
   removeEventListener(type, listener) { this.listeners.get(type)?.delete(listener); }
+  dispatch(type, event = {}) {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
   listenerCount() { return [...this.listeners.values()].reduce((sum, set) => sum + set.size, 0); }
 }
 
@@ -24,15 +27,26 @@ class FakeElement extends FakeTarget {
     this.textContent = '';
     this.id = '';
     this.className = '';
+    this.parentElement = null;
   }
   setAttribute() {}
   append(...children) {
     for (const child of children) {
+      if (child.parentElement) {
+        child.parentElement.children = child.parentElement.children.filter((item) => item !== child);
+      }
       child.isConnected = true;
+      child.parentElement = this;
       this.children.push(child);
     }
   }
-  remove() { this.isConnected = false; }
+  remove() {
+    if (this.parentElement) {
+      this.parentElement.children = this.parentElement.children.filter((item) => item !== this);
+    }
+    this.parentElement = null;
+    this.isConnected = false;
+  }
 }
 
 class FakeChromeEvent {
@@ -133,6 +147,68 @@ test('production content message renders built-in and imported tracks safely', a
   assert.equal(overlay.children[1].textContent, 'Imported');
   assert.equal(overlay.children[0].style.bottom, '20%');
   assert.equal(overlay.children[1].style.bottom, '8%');
+});
+
+test('production keeps a selected built-in track when the player recreates it during an audio switch', async () => {
+  const harness = await makeHarness();
+  const video = harness.document.videos[0];
+  const originalTrack = video.textTracks[0];
+  originalTrack.id = 'subtitle-before-audio-switch';
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  const selectedId = harness.context.DualCaptionsContentRuntime.trackChoices(video.textTracks)[0].id;
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { firstTrackId: selectedId, secondTrackId: '', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    externalTracks: [],
+  }, {}, () => {});
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+
+  const recreatedTrack = Object.assign(new FakeTarget(), {
+    id: 'subtitle-after-audio-switch',
+    kind: 'subtitles', label: 'English', language: 'en', mode: 'disabled', activeCues: [{ text: 'After switch' }],
+  });
+  video.textTracks[0] = recreatedTrack;
+  video.textTracks.dispatch('removetrack', { track: originalTrack });
+  video.textTracks.dispatch('addtrack', { track: recreatedTrack });
+
+  assert.equal(overlay.children[0].textContent, 'After switch');
+});
+
+test('production late built-in track report keeps the bound video reference', async () => {
+  const harness = await makeHarness();
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const reportsBefore = harness.reports.length;
+
+  harness.document.videos[0].dispatch('loadedmetadata');
+
+  assert.equal(harness.reports.length, reportsBefore + 1);
+  assert.equal(harness.reports.at(-1).player.tracks[0].label, 'English');
+});
+
+test('production overlay moves inside a fullscreen player container and returns afterwards', async () => {
+  const harness = await makeHarness();
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { firstTrackId: 'track-0', secondTrackId: '', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    externalTracks: [],
+  }, {}, () => {});
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  const fullscreenPlayer = new FakeElement('div');
+  fullscreenPlayer.contains = (node) => node === harness.document.videos[0];
+
+  harness.document.fullscreenElement = fullscreenPlayer;
+  harness.document.dispatch('fullscreenchange');
+  assert.equal(overlay.parentElement, fullscreenPlayer);
+
+  harness.document.fullscreenElement = null;
+  harness.document.dispatch('fullscreenchange');
+  assert.equal(overlay.parentElement, harness.document.documentElement);
 });
 
 test('production overlay text changes do not trigger a discovery-report loop', async () => {

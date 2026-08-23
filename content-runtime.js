@@ -58,6 +58,7 @@
 
   function builtInTrackEntries(tracks) {
     const occurrences = new Map();
+    const identityOccurrences = new Map();
     return Array.from(tracks ?? [])
       .map((track, index) => ({ track, index }))
       .filter(({ track }) => isCaptionTrack(track))
@@ -68,10 +69,14 @@
           : `meta:${track.kind || ''}|${track.language || ''}|${track.label || ''}`;
         const occurrence = occurrences.get(fingerprint) ?? 0;
         occurrences.set(fingerprint, occurrence + 1);
+        const identityFingerprint = `meta:${track.kind || ''}|${track.language || ''}|${track.label || ''}`;
+        const identityOccurrence = identityOccurrences.get(identityFingerprint) ?? 0;
+        identityOccurrences.set(identityFingerprint, identityOccurrence + 1);
         return {
           track,
           id: `builtin:${encodeURIComponent(fingerprint)}:${occurrence}`,
           legacyId: `track-${index}`,
+          identity: `${identityFingerprint}:${identityOccurrence}`,
           label: track.label || track.language || `Субтитры ${occurrence + 1}`,
           language: track.language || '',
         };
@@ -94,6 +99,23 @@
       return isCaptionTrack(track) ? track : null;
     }
     return builtInTrackEntries(tracks).find((entry) => entry.id === id)?.track ?? null;
+  }
+
+  function createBuiltInTrackResolver() {
+    const rememberedIdentities = new Map();
+    return {
+      find(tracks, id) {
+        if (!id) return null;
+        const entries = builtInTrackEntries(tracks);
+        const exact = entries.find((entry) => entry.id === id || entry.legacyId === id);
+        if (exact) {
+          rememberedIdentities.set(id, exact.identity);
+          return exact.track;
+        }
+        const identity = rememberedIdentities.get(id);
+        return entries.find((entry) => entry.identity === identity)?.track ?? null;
+      },
+    };
   }
 
   function activeCueText(track) {
@@ -208,7 +230,10 @@
           cleanup?.();
           video = candidate.video;
           index = candidate.index;
-          cleanup = bindVideoEvents(video, callbacks);
+          cleanup = bindVideoEvents(video, {
+            render: callbacks.render,
+            report: () => callbacks.report(video, index),
+          });
         }
         callbacks.report(video, index);
         callbacks.render();
@@ -238,6 +263,7 @@
     bindVideoEvents,
     chooseVideo,
     cleanSubtitleText,
+    createBuiltInTrackResolver,
     createVideoManager,
     cueTextAt,
     findBuiltInTrack,
