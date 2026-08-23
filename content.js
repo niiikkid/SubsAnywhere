@@ -43,14 +43,16 @@
       state.root = root;
     }
 
+    function restoreTrackMode(track) {
+      if (originalTrackModes.has(track)) {
+        track.mode = originalTrackModes.get(track);
+        originalTrackModes.delete(track);
+      }
+    }
+
     function restoreModes(video) {
       if (!video?.textTracks) return;
-      for (const track of video.textTracks) {
-        if (originalTrackModes.has(track)) {
-          track.mode = originalTrackModes.get(track);
-          originalTrackModes.delete(track);
-        }
-      }
+      for (const track of video.textTracks) restoreTrackMode(track);
     }
 
     function selectedText(id, video) {
@@ -121,7 +123,7 @@
       }).catch(() => undefined);
     }
 
-    const manager = runtime.createVideoManager({ report, render });
+    const manager = runtime.createVideoManager({ report, render, trackRemoved: restoreTrackMode });
 
     function discover() {
       const previous = manager.current().video;

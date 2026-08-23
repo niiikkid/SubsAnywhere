@@ -199,6 +199,7 @@
     });
     on(video.textTracks, 'removetrack', (event) => {
       if (event.track) unbindTrack(event.track);
+      if (event.track) callbacks.trackRemoved?.(event.track);
       callbacks.report();
       callbacks.render();
     });
@@ -233,6 +234,7 @@
           cleanup = bindVideoEvents(video, {
             render: callbacks.render,
             report: () => callbacks.report(video, index),
+            trackRemoved: callbacks.trackRemoved,
           });
         }
         callbacks.report(video, index);

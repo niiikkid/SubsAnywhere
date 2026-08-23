@@ -174,6 +174,7 @@ test('production keeps a selected built-in track when the player recreates it du
   video.textTracks.dispatch('addtrack', { track: recreatedTrack });
 
   assert.equal(overlay.children[0].textContent, 'After switch');
+  assert.equal(originalTrack.mode, 'disabled');
 });
 
 test('production late built-in track report keeps the bound video reference', async () => {
