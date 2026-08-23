@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="popup.css">
+  <title>SubsAnywhere</title>
+</head>
+<body>
+  <main>
+    <h1>SubsAnywhere</h1>
+    <p id="status" class="status">Нажмите «Подключить к плееру» на странице с видео.</p>
+
+    <button id="activate" class="primary">Подключить к плееру</button>
+
+    <section id="controls" hidden>
+      <label>Плеер
+        <select id="player"></select>
+      </label>
+      <label>Субтитры 1
+        <select id="firstTrack"></select>
+      </label>
+      <label>Положение субтитров 1 <output id="firstBottomValue"></output>
+        <input id="firstBottom" type="range" min="0" max="95" value="14">
+      </label>
+      <label>Субтитры 2
+        <select id="secondTrack"></select>
+      </label>
+      <label>Положение субтитров 2 <output id="secondBottomValue"></output>
+        <input id="secondBottom" type="range" min="0" max="95" value="5">
+      </label>
+      <label>Размер текста <output id="fontSizeValue"></output>
+        <input id="fontSize" type="range" min="12" max="48" value="22">
+      </label>
+
+      <section class="import-box">
+        <h2>Мои субтитры</h2>
+        <p class="hint">Добавьте готовый файл SRT. Он появится отдельной группой в списках выше.</p>
+        <label class="file-button">Добавить SRT
+          <input id="subtitleFile" type="file" accept=".srt,application/x-subrip,text/plain">
+        </label>
+        <div id="externalList" class="external-list"></div>
+      </section>
+
+      <section id="syncBox" class="sync-box" hidden>
+        <h2>Синхронизация</h2>
+        <label>Файл
+          <select id="syncTrack"></select>
+        </label>
+        <label>Смещение, секунд
+          <input id="offsetSeconds" type="number" min="-3600" max="3600" step="0.1" value="0">
+        </label>
+        <div class="sync-buttons" aria-label="Изменить смещение">
+          <button type="button" data-shift="-5">−5</button>
+          <button type="button" data-shift="-1">−1</button>
+          <button type="button" data-shift="-0.1">−0,1</button>
+          <button type="button" data-shift="0.1">+0,1</button>
+          <button type="button" data-shift="1">+1</button>
+          <button type="button" data-shift="5">+5</button>
+        </div>
+        <p class="hint"><b>Минус</b> — показать раньше. <b>Плюс</b> — показать позже.</p>
+      </section>
+
+      <p class="hint">Положение: 0% — у нижней границы видео, 95% — почти вверху. Настройки сохраняются.</p>
+    </section>
+  </main>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

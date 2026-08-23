@@ -1,0 +1,22 @@
+:root { color-scheme: dark; font: 14px/1.35 system-ui, sans-serif; }
+body { width: 340px; margin: 0; background: #17181c; color: #f2f3f5; max-height: 580px; overflow-y: auto; }
+main { padding: 16px; }
+h1 { margin: 0 0 10px; font-size: 17px; }
+.status, .hint { color: #b7bac3; margin: 0 0 12px; }
+.status.error { color: #ff9494; }
+label { display: block; margin: 13px 0; font-weight: 600; }
+select, input { box-sizing: border-box; width: 100%; margin-top: 5px; }
+output { float: right; color: #a7c7ff; font-weight: 500; }
+.primary { width: 100%; border: 0; border-radius: 7px; padding: 9px; background: #5d8dff; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+.hint { font-size: 12px; }
+h2 { margin: 0 0 8px; font-size: 14px; }
+.import-box, .sync-box { margin: 16px 0; padding: 12px; border: 1px solid #343740; border-radius: 8px; background: #202228; }
+.file-button { display: block; margin: 8px 0; padding: 8px; border-radius: 6px; background: #30343d; text-align: center; cursor: pointer; }
+.file-button input { display: none; }
+.external-item { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #343740; }
+.external-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.external-meta { color: #9ca1ad; font-size: 11px; }
+.delete { border: 0; border-radius: 5px; padding: 4px 7px; background: #4a2930; color: #ffb4bf; cursor: pointer; }
+.sync-buttons { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin: 8px 0; }
+.sync-buttons button { border: 1px solid #414652; border-radius: 5px; padding: 5px 1px; background: #292c34; color: #fff; cursor: pointer; }
+optgroup { font-weight: 700; }
