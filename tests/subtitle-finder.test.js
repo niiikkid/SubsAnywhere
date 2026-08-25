@@ -185,3 +185,85 @@ test('autofind keeps built-in original second and downloads optional Russian fir
   assert.equal(result.summary.russian.kind, 'subdl');
   assert.match(result.summary.notes.join(' '), /ручн/);
 });
+
+test('autofind asks DeepSeek first and searches by the normalized English title for a Russian page title', async () => {
+  const titleUrl = 'https://subdl.com/subtitle/sd1300025/game-of-thrones';
+  const englishUrl = `${titleUrl}/english`;
+  const russianUrl = `${titleUrl}/russian`;
+  const downloadUrl = 'https://dl.subdl.com/subtitle/3053683-3061490.zip';
+  const archive = storedZip('Game.of.Thrones.1080p.srt', makeSrt('Original'));
+  const searchQueries = [];
+  let aiMetadata;
+
+  const fetchImpl = async (url) => {
+    const value = String(url);
+    if (value.startsWith('https://api3.subdl.com/auto?query=')) {
+      const query = decodeURIComponent(value.split('query=')[1]);
+      searchQueries.push(query);
+      const results = query.toLowerCase().includes('game of thrones')
+        ? [{ type: 'movie', name: 'Game of Thrones', original_name: 'Game of Thrones', year: 2011, link: '/subtitle/sd1300025/game-of-thrones' }]
+        : [];
+      return new Response(JSON.stringify({ results }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (value === titleUrl) {
+      return new Response(`<a href="${englishUrl}">English</a> <a href="${russianUrl}">Russian</a>`, { status: 200 });
+    }
+    if (value === englishUrl || value === russianUrl) {
+      return new Response(`<li data-row="" data-id="3053683"><a><h4>Game.of.Thrones.1080p.BluRay</h4></a><a href="${downloadUrl}">Download</a></li>`, { status: 200 });
+    }
+    if (value === downloadUrl) {
+      return new Response(archive, { status: 200, headers: { 'content-length': String(archive.length) } });
+    }
+    throw new Error(`Unexpected URL: ${value}`);
+  };
+
+  const ai = {
+    available: async () => true,
+    async detectMedia(metadata) {
+      aiMetadata = metadata;
+      return { englishSearchTitle: 'Game of Thrones', alternateSearchTitles: [], originalLanguage: 'en', confidence: 0.9 };
+    },
+    async matchSubtitleSamples() { return { reference: [], candidate: [], pairs: [], confidence: 0 }; },
+  };
+  const finder = new SubtitleFinder(fetchImpl, ai);
+
+  const result = await finder.find({
+    media: { title: 'Игра престолов смотреть онлайн бесплатно все серии подряд' },
+    player: {
+      title: 'Игра престолов смотреть онлайн бесплатно все серии подряд',
+      sourceName: 'igra.prestolov.s01e01.1080p.mkv',
+      duration: 60,
+      tracks: [],
+    },
+    aiOptions: { model: 'deepseek-v4-flash', reasoningEffort: 'low' },
+  });
+
+  assert.ok(searchQueries.includes('Game of Thrones'));
+  assert.ok(searchQueries.every((query) => !/престолов/.test(query)), 'Russian title must not be sent to SubDL');
+  assert.equal(aiMetadata.title, 'Игра престолов смотреть онлайн бесплатно все серии подряд');
+  assert.equal(result.summary.title, 'Game of Thrones');
+  assert.equal(result.settingsPatch.mediaTitle, 'Game of Thrones');
+});
+
+test('autofind fails fast with a clear message when the title is Russian and DeepSeek is unavailable', async () => {
+  const searchQueries = [];
+  const fetchImpl = async (url) => {
+    if (String(url).startsWith('https://api3.subdl.com/auto?query=')) {
+      searchQueries.push(decodeURIComponent(String(url).split('query=')[1]));
+      return new Response(JSON.stringify({ results: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+  const ai = { available: async () => false };
+  const finder = new SubtitleFinder(fetchImpl, ai);
+
+  await assert.rejects(
+    () => finder.find({
+      media: { title: 'Игра престолов смотреть онлайн бесплатно' },
+      player: { title: 'Игра престолов', sourceName: 'video.mkv', duration: 60, tracks: [] },
+      aiOptions: { model: 'deepseek-v4-flash', reasoningEffort: 'low' },
+    }),
+    /DeepSeek/,
+  );
+  assert.equal(searchQueries.length, 0);
+});

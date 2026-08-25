@@ -443,53 +443,64 @@ export class SubtitleFinder {
     const normalizedAi = normalizeAiOptions(aiOptions);
     const tracks = Array.isArray(player.tracks) ? player.tracks : [];
     const sourceName = String(player.sourceName || '');
+    const pageTitle = String(player.title || player.tabTitle || '').trim();
     let originalLanguage = likelyOriginalLanguage(tracks);
     const enteredTitle = String(media.title || '').trim();
-    const sourceTitle = inferMediaDescriptor({ sourceName }).title;
-    let originalTitle = enteredTitle || sourceTitle;
-    const searchTitles = [enteredTitle, sourceTitle].filter(Boolean);
+    const heuristicTitle = inferMediaDescriptor({
+      title: enteredTitle,
+      sourceName,
+      playerTitle: pageTitle,
+    }).title;
     const notes = [];
+    const isNonLatin = (value) => /[^\p{Script=Latin}\p{N}\p{P}\p{Z}]/u.test(String(value || ''));
+    const nonLatinInput = [enteredTitle, heuristicTitle, pageTitle].some(isNonLatin);
     let aiAvailable = false;
 
     try { aiAvailable = await this.#ai.available(); } catch { aiAvailable = false; }
-    const enteredIsNonLatin = /[^\p{Script=Latin}\p{N}\p{P}\p{Z}]/u.test(enteredTitle);
-    if (enteredIsNonLatin && !aiAvailable) {
-      notes.push('AI недоступен (нет ключа DeepSeek или ключ не работает). SubDL плохо ищет по русским названиям: сохраните ключ DeepSeek или введите английское название вручную.');
-    }
-    const cleanedEnteredTitle = enteredIsNonLatin
-      ? inferMediaDescriptor({ title: enteredTitle }).title
-      : '';
-    const hasExplicitOriginalTrack = tracks.some((track) => (
-      /\boriginal\b/i.test(track?.label || '') && normalizeLanguageCode(track?.language || track?.label)
-    ));
-    const needsIdentification = !hasExplicitOriginalTrack
-      || !originalLanguage
-      || enteredIsNonLatin;
-    if (aiAvailable && needsIdentification && originalTitle) {
+
+    let aiTitle = '';
+    let aiAlternates = [];
+    if (aiAvailable && (enteredTitle || heuristicTitle)) {
       try {
-        const detected = await this.#ai.detectMedia({ ...media, title: originalTitle, sourceName }, normalizedAi);
-        const suggested = detected.englishSearchTitle || detected.originalTitle;
-        if (suggested && detected.confidence >= 0.45) {
-          originalTitle = suggested;
-          searchTitles.unshift(
-            originalTitle,
-            ...(Array.isArray(detected.alternateSearchTitles) ? detected.alternateSearchTitles : []),
-          );
-          originalLanguage = normalizeLanguageCode(detected.originalLanguage) || originalLanguage;
-          notes.push(`AI создал английское название для поиска: ${originalTitle}${originalLanguage ? `; оригинальный язык ${originalLanguage}` : ''}`);
-        } else if (suggested) {
-          searchTitles.push(suggested);
-          notes.push(`AI предложил название с низкой уверенностью, оно добавлено как запасной вариант: ${suggested}`);
+        const detected = await this.#ai.detectMedia({
+          ...media,
+          title: enteredTitle || pageTitle || heuristicTitle,
+          pageTitle,
+          sourceName,
+        }, normalizedAi);
+        aiTitle = String(detected.englishSearchTitle || detected.originalTitle || '').trim();
+        aiAlternates = (Array.isArray(detected.alternateSearchTitles) ? detected.alternateSearchTitles : [])
+          .map((title) => String(title || '').trim())
+          .filter((title) => title && title !== aiTitle)
+          .slice(0, 3);
+        const detectedLanguage = normalizeLanguageCode(detected.originalLanguage);
+        if (detectedLanguage) originalLanguage = detectedLanguage;
+        if (aiTitle) {
+          notes.push(`DeepSeek определил название для поиска: ${aiTitle}${originalLanguage ? `; язык оригинала ${originalLanguage}` : ''}`);
+        } else {
+          notes.push('DeepSeek не вернул название для поиска; использую название со страницы.');
         }
       } catch (error) {
-        notes.push(`AI не смог определить фильм: ${error.message}`);
+        notes.push(`DeepSeek не смог определить название: ${error.message}`);
       }
     }
-    if (cleanedEnteredTitle && cleanedEnteredTitle !== enteredTitle) {
-      searchTitles.push(cleanedEnteredTitle);
+
+    const titles = [aiTitle, ...aiAlternates];
+    for (const candidate of [enteredTitle, heuristicTitle]) {
+      if (candidate && !isNonLatin(candidate)) titles.push(candidate);
     }
+    const searchTitles = [...new Set(titles.filter((title) => typeof title === 'string' && title.trim()))];
+    if (!searchTitles.length) {
+      if (nonLatinInput && !aiAvailable) {
+        throw new Error('Название на русском, а ключ DeepSeek не сохранён. Сохраните ключ DeepSeek в настройках расширения или введите английское название вручную.');
+      }
+      if (nonLatinInput) {
+        throw new Error('DeepSeek не смог определить название для поиска. Введите английское название вручную.');
+      }
+      throw new Error('Не удалось определить название. Введите его вручную.');
+    }
+    const originalTitle = searchTitles[0];
     originalLanguage ||= 'en';
-    if (!originalTitle) throw new Error('Не удалось определить название. Введите его вручную.');
 
     const roles = chooseBuiltInRoles(tracks, originalLanguage);
     if (roles.original && originalLanguage && trackLanguage(roles.original) && trackLanguage(roles.original) !== originalLanguage) {
