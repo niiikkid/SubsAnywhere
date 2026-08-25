@@ -8,8 +8,9 @@
       .trim();
   }
 
-  function cueTextAt(cues, videoTime, offsetSeconds = 0) {
-    const sourceTime = Number(videoTime) - Number(offsetSeconds || 0);
+  function cueTextAt(cues, videoTime, offsetSeconds = 0, timeScale = 1) {
+    const scale = Number(timeScale);
+    const sourceTime = (Number(videoTime) - Number(offsetSeconds || 0)) / (Number.isFinite(scale) && scale > 0 ? scale : 1);
     if (!Number.isFinite(sourceTime)) return '';
     const source = cues && typeof cues === 'object' ? cues : [];
     let index = cueIndexCache.get(source);
@@ -130,6 +131,27 @@
       }
     }
     return lines.join('\n');
+  }
+
+  function sampleTextTrack(track, limit = 24) {
+    const cues = Array.from(track?.cues ?? [])
+      .map((cue) => ({
+        start: Number(cue.startTime ?? cue.start),
+        end: Number(cue.endTime ?? cue.end),
+        text: cleanSubtitleText(cue.text),
+      }))
+      .filter((cue) => Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.end > cue.start && cue.text);
+    if (!cues.length) return [];
+    const maximum = Math.max(3, Math.min(40, Number(limit) || 24));
+    if (cues.length <= maximum) return cues;
+    const samples = [];
+    const first = Math.floor(cues.length * 0.05);
+    const last = Math.max(first, Math.floor(cues.length * 0.95) - 1);
+    for (let position = 0; position < maximum; position += 1) {
+      const index = Math.round(first + ((last - first) * position) / Math.max(1, maximum - 1));
+      if (cues[index] && samples.at(-1) !== cues[index]) samples.push(cues[index]);
+    }
+    return samples;
   }
 
   function normalizeSettings(value = {}) {
@@ -275,6 +297,7 @@
     installController,
     mutationsAffectVideo,
     normalizeSettings,
+    sampleTextTrack,
     trackChoices,
   });
 })(globalThis);

@@ -1,9 +1,15 @@
 {
   "manifest_version": 3,
   "name": "SubsAnywhere",
-  "version": "0.3.4",
-  "description": "Показывает две встроенные или добавленные SRT-дорожки с ручной синхронизацией.",
+  "version": "0.4.0",
+  "description": "Находит две дорожки субтитров, синхронизирует их и показывает одновременно.",
   "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage"],
+  "host_permissions": [
+    "https://subdl.com/*",
+    "https://api3.subdl.com/*",
+    "https://dl.subdl.com/*",
+    "https://api.deepseek.com/*"
+  ],
   "optional_host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js", "type": "module" },
   "action": {

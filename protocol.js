@@ -8,9 +8,15 @@ export const MESSAGE = Object.freeze({
   TRACK_ADD: 'dualCaptions.track.add',
   TRACK_REMOVE: 'dualCaptions.track.remove',
   TRACK_OFFSET: 'dualCaptions.track.offset',
+  TRACK_TIMING: 'dualCaptions.track.timing',
+  SUBTITLE_FIND: 'dualCaptions.subtitle.find',
+  AI_CONFIG_GET: 'dualCaptions.ai.get',
+  AI_CONFIG_PATCH: 'dualCaptions.ai.patch',
   CONTENT_FULL_STATE: 'dualCaptions.content.fullState',
   CONTENT_SETTINGS: 'dualCaptions.content.settings',
   CONTENT_TRACKS: 'dualCaptions.content.tracks',
+  CONTENT_SAMPLE_TRACK: 'dualCaptions.content.sampleTrack',
+  CONTENT_RESET: 'dualCaptions.content.reset',
 });
 
 export const ok = (data = {}) => ({ ok: true, data });

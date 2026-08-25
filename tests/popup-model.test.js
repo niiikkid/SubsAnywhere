@@ -33,14 +33,17 @@ test('loadPopupSnapshot reads state and players without issuing any write messag
     calls.push({ type, payload });
     if (type === MESSAGE.STATE_GET) return { state: { settings: {}, externalTracks: [] } };
     if (type === MESSAGE.PLAYER_GET) return { players };
+    if (type === MESSAGE.AI_CONFIG_GET) return { hasApiKey: true };
     throw new Error(`unexpected ${type}`);
   };
 
-  const snapshot = await loadPopupSnapshot(request, 42);
+  const snapshot = await loadPopupSnapshot(request, 42, 'https://example.test/video');
 
-  assert.deepEqual(calls.map((call) => call.type), [MESSAGE.STATE_GET, MESSAGE.PLAYER_GET]);
+  assert.deepEqual(calls.map((call) => call.type), [MESSAGE.STATE_GET, MESSAGE.PLAYER_GET, MESSAGE.AI_CONFIG_GET]);
+  assert.equal(calls[0].payload.pageKey, 'https://example.test/video');
   assert.equal(snapshot.players.length, 2);
   assert.equal(snapshot.state.settings.firstTrackId, '');
+  assert.equal(snapshot.hasApiKey, true);
 });
 
 test('serial popup task queue preserves every rapid offset adjustment in order', async () => {

@@ -1,10 +1,15 @@
 import {
   addExternalTrack,
+  applySubtitleSearchResult,
+  cloneRootState,
   cloneState,
-  migrateStoredState,
+  migrateStoredRoot,
+  pageStateFromRoot,
   patchSettings,
   removeExternalTrack,
+  setPageStateInRoot,
   updateExternalTrackOffset,
+  updateExternalTrackTiming,
 } from './state-core.js';
 
 export const STATE_KEY = 'dualCaptionsState';
@@ -12,7 +17,7 @@ const LEGACY_KEYS = ['dualCaptionsSettings', 'dualCaptionsExternalTracks'];
 
 export class StateStore {
   #storage;
-  #state;
+  #root;
   #loading;
   #queue = Promise.resolve();
 
@@ -20,48 +25,66 @@ export class StateStore {
     this.#storage = storage;
   }
 
-  async get() {
-    if (this.#state) return cloneState(this.#state);
+  async get(pageKey) {
+    await this.#ensureLoaded();
+    return cloneState(pageStateFromRoot(this.#root, pageKey));
+  }
+
+  async getRootForTests() {
+    await this.#ensureLoaded();
+    return cloneRootState(this.#root);
+  }
+
+  async #ensureLoaded() {
+    if (this.#root) return;
     if (!this.#loading) {
       this.#loading = this.#load().finally(() => { this.#loading = null; });
     }
     await this.#loading;
-    return cloneState(this.#state);
   }
 
   async #load() {
     const keys = [STATE_KEY, ...LEGACY_KEYS];
     const stored = await this.#storage.get(keys);
-    const next = migrateStoredState(stored);
-    const hasLegacyState = LEGACY_KEYS.some((key) => Object.hasOwn(stored, key));
-    if (!stored[STATE_KEY] && hasLegacyState) {
-      await this.#storage.set({ [STATE_KEY]: next });
-    }
-    this.#state = next;
+    const next = migrateStoredRoot(stored);
+    const hasAnyStoredState = keys.some((key) => Object.hasOwn(stored, key));
+    const alreadyScoped = Boolean(stored[STATE_KEY]?.pages);
+    if (hasAnyStoredState && !alreadyScoped) await this.#storage.set({ [STATE_KEY]: next });
+    this.#root = next;
   }
 
-  patchSettings(patch) {
-    return this.#mutate((state) => patchSettings(state, patch));
+  patchSettings(pageKey, patch) {
+    return this.#mutatePage(pageKey, (state) => patchSettings(state, patch));
   }
 
-  addExternalTrack(track) {
-    return this.#mutate((state) => addExternalTrack(state, track));
+  addExternalTrack(pageKey, track) {
+    return this.#mutatePage(pageKey, (state) => addExternalTrack(state, track));
   }
 
-  removeExternalTrack(id) {
-    return this.#mutate((state) => removeExternalTrack(state, id));
+  removeExternalTrack(pageKey, id) {
+    return this.#mutatePage(pageKey, (state) => removeExternalTrack(state, id));
   }
 
-  updateExternalTrackOffset(id, offsetSeconds) {
-    return this.#mutate((state) => updateExternalTrackOffset(state, id, offsetSeconds));
+  updateExternalTrackOffset(pageKey, id, offsetSeconds) {
+    return this.#mutatePage(pageKey, (state) => updateExternalTrackOffset(state, id, offsetSeconds));
   }
 
-  #mutate(updater) {
+  updateExternalTrackTiming(pageKey, id, timing) {
+    return this.#mutatePage(pageKey, (state) => updateExternalTrackTiming(state, id, timing));
+  }
+
+  applySubtitleSearchResult(pageKey, result) {
+    return this.#mutatePage(pageKey, (state) => applySubtitleSearchResult(state, result));
+  }
+
+  #mutatePage(pageKey, updater) {
     const operation = this.#queue.then(async () => {
-      const current = await this.get();
+      await this.#ensureLoaded();
+      const current = pageStateFromRoot(this.#root, pageKey);
       const next = updater(current);
-      await this.#storage.set({ [STATE_KEY]: next });
-      this.#state = next;
+      const nextRoot = setPageStateInRoot(this.#root, pageKey, next);
+      await this.#storage.set({ [STATE_KEY]: nextRoot });
+      this.#root = nextRoot;
       return cloneState(next);
     });
     this.#queue = operation.catch(() => undefined);

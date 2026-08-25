@@ -8,25 +8,39 @@ class FakeStore {
   constructor() {
     this.state = normalizeState({});
   }
-  async get() { return structuredClone(this.state); }
-  async patchSettings(patch) { this.state = patchState(this.state, patch); return this.get(); }
-  async addExternalTrack(track) { this.state.externalTracks.push(structuredClone(track)); return this.get(); }
-  async removeExternalTrack(id) { this.state.externalTracks = this.state.externalTracks.filter((track) => track.id !== id); return this.get(); }
-  async updateExternalTrackOffset(id, value) {
+  async get(_pageKey) { return structuredClone(this.state); }
+  async patchSettings(_pageKey, patch) { this.state = patchState(this.state, patch); return this.get(); }
+  async addExternalTrack(_pageKey, track) { this.state.externalTracks.push(structuredClone(track)); return this.get(); }
+  async removeExternalTrack(_pageKey, id) { this.state.externalTracks = this.state.externalTracks.filter((track) => track.id !== id); return this.get(); }
+  async updateExternalTrackOffset(_pageKey, id, value) {
     this.state.externalTracks = this.state.externalTracks.map((track) => track.id === id ? { ...track, offsetSeconds: value } : track);
+    return this.get();
+  }
+  async updateExternalTrackTiming(_pageKey, id, timing) {
+    this.state.externalTracks = this.state.externalTracks.map((track) => track.id === id ? { ...track, ...timing } : track);
+    return this.get();
+  }
+  async applySubtitleSearchResult(_pageKey, result) {
+    this.state.externalTracks.push(...structuredClone(result.tracks ?? []));
+    this.state = patchState(this.state, result.settingsPatch ?? {});
     return this.get();
   }
 }
 
 function makeChrome() {
   const sent = [];
-  return {
+  const api = {
     sent,
+    onSend: null,
     scripting: { executeScript: async () => [] },
     tabs: {
-      sendMessage: async (tabId, message, options) => { sent.push({ tabId, message, options }); },
+      sendMessage: async (tabId, message, options) => {
+        sent.push({ tabId, message, options });
+        return api.onSend ? api.onSend(tabId, message, options) : undefined;
+      },
     },
   };
+  return api;
 }
 
 test('stablePlayerKey ignores temporary query tokens but distinguishes video index', () => {
@@ -203,4 +217,71 @@ test('settings patch sends only lightweight settings to the selected player fram
   assert.equal(chrome.sent[0].message.type, MESSAGE.CONTENT_SETTINGS);
   assert.equal(chrome.sent[0].message.settings.fontSize, 31);
   assert.equal('externalTracks' in chrome.sent[0].message, false);
+});
+
+test('top-page navigation resets the old frame before a new page can reuse its subtitles', async () => {
+  const chrome = makeChrome();
+  const controller = new BackgroundController(chrome, new FakeStore());
+  await controller.handle({
+    type: MESSAGE.PLAYER_REPORT,
+    player: { title: 'Old', frameUrl: 'https://player.example/embed', videoIndex: 0, tracks: [] },
+  }, { tab: { id: 9, url: 'https://site.example/episode-1' }, frameId: 4 });
+  chrome.sent.length = 0;
+
+  await controller.handleTabNavigation(9, 'https://site.example/episode-2');
+
+  assert.equal(chrome.sent.length, 1);
+  assert.equal(chrome.sent[0].message.type, MESSAGE.CONTENT_RESET);
+  assert.deepEqual(controller.players(9), []);
+});
+
+test('subtitle find stores one atomic result and sends the completed tracks to the selected frame', async () => {
+  const chrome = makeChrome();
+  const store = new FakeStore();
+  const calls = [];
+  const subtitleFinder = {
+    async find(input) {
+      calls.push(input);
+      const samples = await input.getBuiltInSamples('builtin-en');
+      assert.equal(samples[0].text, 'Reference');
+      return {
+        tracks: [{
+          id: 'ru-auto', name: 'Russian', language: 'ru',
+          cues: [{ start: 1, end: 2, text: 'Привет' }], offsetSeconds: 0, timeScale: 1,
+        }],
+        settingsPatch: { firstTrackId: 'external:ru-auto', secondTrackId: 'builtin-en' },
+        summary: { russian: { found: true }, original: { found: true }, sync: [], notes: [] },
+      };
+    },
+  };
+  const controller = new BackgroundController(chrome, store, { subtitleFinder });
+  chrome.onSend = (_tabId, message) => message.type === MESSAGE.CONTENT_SAMPLE_TRACK
+    ? { ok: true, cues: [{ start: 1, end: 2, text: 'Reference' }] }
+    : { ok: true };
+  await controller.handle({
+    type: MESSAGE.PLAYER_REPORT,
+    player: {
+      title: 'Player', frameUrl: 'https://player.example/embed', videoIndex: 0,
+      tracks: [{ id: 'builtin-en', label: 'English', language: 'en' }],
+    },
+  }, { tab: { id: 5, url: 'https://site.example/movie' }, frameId: 7 });
+  const [player] = controller.players(5);
+  await controller.handle({
+    type: MESSAGE.PLAYER_SELECT, tabId: 5, pageKey: 'https://site.example/movie', frameId: 7, playerKey: player.key,
+  });
+  chrome.sent.length = 0;
+
+  const result = await controller.handle({
+    type: MESSAGE.SUBTITLE_FIND,
+    tabId: 5,
+    pageKey: 'https://site.example/movie',
+    media: { title: 'Movie' },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(result.data.state.settings.firstTrackId, 'external:ru-auto');
+  assert.equal(result.data.state.settings.secondTrackId, 'builtin-en');
+  assert.equal(result.data.state.externalTracks[0].id, 'ru-auto');
+  assert.equal(chrome.sent.at(-1).message.type, MESSAGE.CONTENT_FULL_STATE);
 });

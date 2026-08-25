@@ -8,6 +8,8 @@
     CONTENT_FULL_STATE: 'dualCaptions.content.fullState',
     CONTENT_SETTINGS: 'dualCaptions.content.settings',
     CONTENT_TRACKS: 'dualCaptions.content.tracks',
+    CONTENT_SAMPLE_TRACK: 'dualCaptions.content.sampleTrack',
+    CONTENT_RESET: 'dualCaptions.content.reset',
   });
   function createController() {
     const state = {
@@ -59,7 +61,9 @@
       if (!id) return '';
       if (id.startsWith('external:')) {
         const external = state.externalTracks.find((track) => `external:${track.id}` === id);
-        return external ? runtime.cueTextAt(external.cues, video.currentTime, external.offsetSeconds) : '';
+        return external
+          ? runtime.cueTextAt(external.cues, video.currentTime, external.offsetSeconds, external.timeScale)
+          : '';
       }
       return runtime.activeCueText(builtInTrackResolver.find(video.textTracks, id));
     }
@@ -112,12 +116,18 @@
     }
 
     function report(video, videoIndex) {
+      let sourceName = '';
+      try {
+        sourceName = decodeURIComponent(new URL(video.currentSrc || video.src || '', location.href).pathname.split('/').pop() || '');
+      } catch { /* source name stays empty */ }
       chrome.runtime.sendMessage({
         type: MESSAGE.PLAYER_REPORT,
         player: {
           title: document.title,
           frameUrl: location.href,
           videoIndex,
+          duration: Number.isFinite(video.duration) ? video.duration : null,
+          sourceName: sourceName.slice(0, 240),
           tracks: runtime.trackChoices(video.textTracks),
         },
       }).catch(() => undefined);
@@ -152,6 +162,30 @@
         state.externalTracks = Array.isArray(message.externalTracks) ? message.externalTracks : [];
         state.active = true;
         render();
+        return { ok: true };
+      }
+      if (message?.type === MESSAGE.CONTENT_SAMPLE_TRACK) {
+        const { video } = manager.current();
+        if (!video) return { ok: false, error: 'Плеер больше недоступен' };
+        const track = builtInTrackResolver.find(video.textTracks, message.trackId);
+        if (!track) return { ok: false, error: 'Встроенная дорожка больше недоступна' };
+        if (!originalTrackModes.has(track)) originalTrackModes.set(track, track.mode);
+        track.mode = 'hidden';
+        return {
+          ok: true,
+          cues: runtime.sampleTextTrack(track, message.limit ?? 24),
+          duration: Number.isFinite(video.duration) ? video.duration : null,
+        };
+      }
+      if (message?.type === MESSAGE.CONTENT_RESET) {
+        const { video } = manager.current();
+        restoreModes(video);
+        state.settings = runtime.normalizeSettings();
+        state.externalTracks = [];
+        state.active = false;
+        if (state.first) state.first.textContent = '';
+        if (state.second) state.second.textContent = '';
+        if (state.root) state.root.style.display = 'none';
         return { ok: true };
       }
       return undefined;

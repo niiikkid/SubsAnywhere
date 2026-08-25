@@ -58,7 +58,13 @@ class FakeChromeEvent {
 function fakeVideo(width = 800, height = 450) {
   const video = new FakeTarget();
   const track = Object.assign(new FakeTarget(), {
-    kind: 'subtitles', label: 'English', language: 'en', mode: 'disabled', activeCues: [{ text: 'Built in' }],
+    kind: 'subtitles', label: 'English', language: 'en', mode: 'disabled',
+    activeCues: [{ text: 'Built in' }],
+    cues: [
+      { startTime: 1, endTime: 2, text: 'Built in' },
+      { startTime: 3, endTime: 4, text: 'Another line' },
+      { startTime: 5, endTime: 6, text: 'Third line' },
+    ],
   });
   video.readyState = 1;
   video.clientWidth = width;
@@ -250,4 +256,40 @@ test('production mutation discovery detaches listeners from a replaced video', a
 
   assert.equal(first.listenerCount(), 0);
   assert.ok(second.listenerCount() > 0);
+});
+
+test('production returns only a bounded sample from a built-in track', async () => {
+  const harness = await makeHarness();
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  const selectedId = harness.context.DualCaptionsContentRuntime.trackChoices(harness.document.videos[0].textTracks)[0].id;
+  let response;
+
+  listener({ type: 'dualCaptions.content.sampleTrack', trackId: selectedId, limit: 3 }, {}, (value) => { response = value; });
+
+  assert.equal(response.ok, true);
+  assert.equal(response.cues.length, 3);
+  assert.equal(response.cues[0].text, 'Built in');
+});
+
+test('production reset clears page subtitles and restores native track mode', async () => {
+  const harness = await makeHarness();
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  const video = harness.document.videos[0];
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { firstTrackId: 'track-0', secondTrackId: '', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    externalTracks: [],
+  }, {}, () => {});
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  assert.equal(video.textTracks[0].mode, 'hidden');
+
+  listener({ type: 'dualCaptions.content.reset' }, {}, () => {});
+
+  assert.equal(video.textTracks[0].mode, 'disabled');
+  assert.equal(overlay.style.display, 'none');
+  assert.equal(overlay.children[0].textContent, '');
 });

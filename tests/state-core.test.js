@@ -5,10 +5,13 @@ import {
   SCHEMA_VERSION,
   addExternalTrack,
   buildTrackOptions,
+  migrateStoredRoot,
   migrateStoredState,
   normalizeState,
+  pageStateFromRoot,
   patchSettings,
   removeExternalTrack,
+  setPageStateInRoot,
   updateExternalTrackOffset,
 } from '../state-core.js';
 
@@ -28,7 +31,7 @@ test('migrateStoredState converts legacy keys without losing selections or files
   assert.equal(state.schemaVersion, SCHEMA_VERSION);
   assert.equal(state.settings.firstTrackId, 'track-1');
   assert.equal(state.settings.secondTrackId, 'external:abc');
-  assert.deepEqual(state.externalTracks, [legacyTrack]);
+  assert.deepEqual(state.externalTracks, [{ ...legacyTrack, language: '', timeScale: 1 }]);
 });
 
 test('normalizeState preserves a temporarily unavailable selected track id', () => {
@@ -146,4 +149,27 @@ test('updateExternalTrackOffset clamps offset and leaves other files untouched',
   const next = updateExternalTrackOffset(state, 'one', 9999);
   assert.equal(next.externalTracks[0].offsetSeconds, 3600);
   assert.equal(next.externalTracks[1].offsetSeconds, 2);
+});
+
+test('scoped root keeps two page states independent', () => {
+  let root = migrateStoredRoot({});
+  root = setPageStateInRoot(root, 'https://example.test/one', patchSettings(normalizeState({}), { firstTrackId: 'one' }));
+  root = setPageStateInRoot(root, 'https://example.test/two', patchSettings(normalizeState({}), { firstTrackId: 'two' }));
+
+  assert.equal(pageStateFromRoot(root, 'https://example.test/one').settings.firstTrackId, 'one');
+  assert.equal(pageStateFromRoot(root, 'https://example.test/two').settings.firstTrackId, 'two');
+  assert.equal(pageStateFromRoot(root, 'https://example.test/new').settings.firstTrackId, '');
+});
+
+test('legacy global state is retained as an orphan but not assigned to arbitrary pages', () => {
+  const root = migrateStoredRoot({
+    dualCaptionsState: {
+      schemaVersion: 1,
+      settings: { firstTrackId: 'wrong-episode' },
+      externalTracks: [],
+    },
+  });
+
+  assert.equal(root.legacyState.settings.firstTrackId, 'wrong-episode');
+  assert.equal(pageStateFromRoot(root, 'https://example.test/fresh').settings.firstTrackId, '');
 });

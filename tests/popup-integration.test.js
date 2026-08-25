@@ -27,7 +27,9 @@ function makeDocument() {
   const ids = [
     'controls', 'status', 'player', 'firstTrack', 'secondTrack', 'firstBottom', 'secondBottom',
     'fontSize', 'firstBottomValue', 'secondBottomValue', 'fontSizeValue', 'externalList',
-    'syncBox', 'syncTrack', 'offsetSeconds', 'activate', 'subtitleFile',
+    'syncBox', 'syncTrack', 'offsetSeconds', 'timeScalePercent', 'activate', 'subtitleFile',
+    'mediaTitle', 'mediaSeason', 'mediaEpisode', 'findSubtitles', 'deepseekKey', 'saveDeepseekKey',
+    'clearDeepseekKey', 'aiKeyState', 'aiModel', 'reasoningEffort',
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement()]));
   elements.controls.hidden = true;
@@ -49,7 +51,7 @@ test('production popup startup performs read-only hydration and never overwrites
   const messages = [];
   globalThis.document = document;
   globalThis.chrome = {
-    tabs: { query: async () => [{ id: 77 }] },
+    tabs: { query: async () => [{ id: 77, url: 'https://video.example/episode-1', title: 'Example S01E01' }] },
     runtime: {
       async sendMessage(message) {
         messages.push(structuredClone(message));
@@ -69,6 +71,7 @@ test('production popup startup performs read-only hydration and never overwrites
           };
         }
         if (message.type === 'dualCaptions.player.get') return { ok: true, data: { players: [] } };
+        if (message.type === 'dualCaptions.ai.get') return { ok: true, data: { hasApiKey: false } };
         throw new Error(`Unexpected startup write: ${message.type}`);
       },
     },
@@ -79,9 +82,11 @@ test('production popup startup performs read-only hydration and never overwrites
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.deepEqual(messages.map((message) => message.type).sort(), [
+    'dualCaptions.ai.get',
     'dualCaptions.player.get',
     'dualCaptions.state.get',
   ]);
+  assert.equal(messages.find((message) => message.type === 'dualCaptions.state.get').pageKey, 'https://video.example/episode-1');
   assert.equal(document.elements.controls.hidden, true);
   assert.equal(document.elements.status.textContent, 'Нажмите «Подключить к плееру» на странице с видео.');
 });

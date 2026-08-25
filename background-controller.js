@@ -1,3 +1,4 @@
+import { canonicalPageKey } from './page-context.js';
 import { MESSAGE, failure, ok } from './protocol.js';
 
 const CONTENT_SCRIPT_ID = 'dual-captions-player-discovery-v1';
@@ -82,14 +83,19 @@ export class BackgroundController {
   #chrome;
   #store;
   #registry;
+  #credentialStore;
+  #subtitleFinder;
   #discoveryTimeoutMs;
   #discoveryQuietMs;
   #contentRegistration;
+  #tabPageKeys = new Map();
 
   constructor(chromeApi, store, options = {}) {
     this.#chrome = chromeApi;
     this.#store = store;
     this.#registry = options.registry ?? new PlayerRegistry();
+    this.#credentialStore = options.credentialStore;
+    this.#subtitleFinder = options.subtitleFinder;
     this.#discoveryTimeoutMs = options.discoveryTimeoutMs ?? 1500;
     this.#discoveryQuietMs = options.discoveryQuietMs ?? 75;
   }
@@ -100,6 +106,12 @@ export class BackgroundController {
 
   removeTab(tabId) {
     this.#registry.removeTab(tabId);
+    this.#tabPageKeys.delete(tabId);
+  }
+
+  async handleTabNavigation(tabId, url) {
+    if (!Number.isInteger(tabId) || !url) return;
+    await this.#adoptPage(tabId, canonicalPageKey(url));
   }
 
   async handle(message, sender = {}) {
@@ -107,23 +119,44 @@ export class BackgroundController {
       switch (message?.type) {
         case MESSAGE.PLAYER_REPORT:
           if (!sender.tab?.id && sender.tab?.id !== 0) throw new Error('Player report has no tab');
-          return ok(await this.#reportPlayer(sender.tab.id, sender.frameId ?? 0, message.player));
+          return ok(await this.#reportPlayer(sender.tab.id, sender.frameId ?? 0, message.player, message, sender));
         case MESSAGE.PLAYER_GET:
-          return ok({ players: await this.#getPlayers(message.tabId) });
+          return ok({ players: await this.#getPlayers(message.tabId, this.#pageKey(message, sender)) });
         case MESSAGE.PLAYER_DISCOVER:
-          return ok({ players: await this.#discover(message.tabId) });
+          return ok({ players: await this.#discover(message.tabId, this.#pageKey(message, sender)) });
         case MESSAGE.STATE_GET:
-          return ok({ state: await this.#store.get() });
+          return ok({ state: await this.#store.get(this.#pageKey(message, sender)) });
         case MESSAGE.PLAYER_SELECT:
-          return ok(await this.#selectPlayer(message));
+          return ok(await this.#selectPlayer(message, this.#pageKey(message, sender)));
         case MESSAGE.STATE_PATCH:
-          return ok(await this.#updateSettings(message));
+          return ok(await this.#updateSettings(message, this.#pageKey(message, sender)));
         case MESSAGE.TRACK_ADD:
-          return ok(await this.#mutateTracks(message.tabId, () => this.#store.addExternalTrack(message.track)));
+          return ok(await this.#mutateTracks(message.tabId, this.#pageKey(message, sender), () => (
+            this.#store.addExternalTrack(this.#pageKey(message, sender), message.track)
+          )));
         case MESSAGE.TRACK_REMOVE:
-          return ok(await this.#mutateTracks(message.tabId, () => this.#store.removeExternalTrack(message.id)));
+          return ok(await this.#mutateTracks(message.tabId, this.#pageKey(message, sender), () => (
+            this.#store.removeExternalTrack(this.#pageKey(message, sender), message.id)
+          )));
         case MESSAGE.TRACK_OFFSET:
-          return ok(await this.#mutateTracks(message.tabId, () => this.#store.updateExternalTrackOffset(message.id, message.offsetSeconds)));
+          return ok(await this.#mutateTracks(message.tabId, this.#pageKey(message, sender), () => (
+            this.#store.updateExternalTrackOffset(this.#pageKey(message, sender), message.id, message.offsetSeconds)
+          )));
+        case MESSAGE.TRACK_TIMING:
+          return ok(await this.#mutateTracks(message.tabId, this.#pageKey(message, sender), () => (
+            this.#store.updateExternalTrackTiming(this.#pageKey(message, sender), message.id, {
+              offsetSeconds: message.offsetSeconds,
+              timeScale: message.timeScale,
+            })
+          )));
+        case MESSAGE.SUBTITLE_FIND:
+          return ok(await this.#findSubtitles(message, this.#pageKey(message, sender)));
+        case MESSAGE.AI_CONFIG_GET:
+          if (!this.#credentialStore) throw new Error('DeepSeek пока недоступен');
+          return ok(await this.#credentialStore.publicInfo());
+        case MESSAGE.AI_CONFIG_PATCH:
+          if (!this.#credentialStore) throw new Error('DeepSeek пока недоступен');
+          return ok(await this.#credentialStore.patch(message));
         default:
           throw new Error(`Unknown message: ${message?.type ?? 'empty'}`);
       }
@@ -132,8 +165,26 @@ export class BackgroundController {
     }
   }
 
-  async #discover(tabId) {
+  #pageKey(message, sender) {
+    const tabId = message?.tabId ?? sender?.tab?.id;
+    const raw = message?.pageKey || sender?.tab?.url || this.#tabPageKeys.get(tabId) || `https://local.invalid/tab/${tabId ?? 'unknown'}`;
+    return canonicalPageKey(raw);
+  }
+
+  async #adoptPage(tabId, pageKey) {
     if (!Number.isInteger(tabId)) throw new Error('Invalid tab id');
+    const previous = this.#tabPageKeys.get(tabId);
+    if (previous && previous !== pageKey) {
+      const oldPlayers = this.players(tabId);
+      await Promise.all(oldPlayers.map((player) => this.#send(tabId, player.frameId, { type: MESSAGE.CONTENT_RESET })));
+      this.#registry.clear(tabId);
+    }
+    this.#tabPageKeys.set(tabId, pageKey);
+  }
+
+  async #discover(tabId, pageKey) {
+    if (!Number.isInteger(tabId)) throw new Error('Invalid tab id');
+    await this.#adoptPage(tabId, pageKey);
     await this.#ensureContentRegistration();
     this.#registry.clear(tabId);
     await this.#chrome.scripting.executeScript({
@@ -167,18 +218,24 @@ export class BackgroundController {
     await this.#contentRegistration;
   }
 
-  async #getPlayers(tabId) {
+  async #getPlayers(tabId, pageKey) {
+    await this.#adoptPage(tabId, pageKey);
     const cached = this.players(tabId);
     try {
-      return await this.#discover(tabId);
+      return await this.#discover(tabId, pageKey);
     } catch {
       return cached;
     }
   }
 
-  async #reportPlayer(tabId, frameId, playerData) {
-    const player = this.#registry.report(tabId, frameId, playerData);
-    const state = await this.#store.get();
+  async #reportPlayer(tabId, frameId, playerData, message, sender) {
+    const pageKey = this.#pageKey(message, sender);
+    await this.#adoptPage(tabId, pageKey);
+    const player = this.#registry.report(tabId, frameId, {
+      ...playerData,
+      tabTitle: sender.tab?.title || playerData?.tabTitle || '',
+    });
+    const state = await this.#store.get(pageKey);
     const restored = player.key === state.settings.selectedPlayerKey
       ? await this.#send(tabId, frameId, {
         type: MESSAGE.CONTENT_FULL_STATE,
@@ -189,10 +246,11 @@ export class BackgroundController {
     return { player, restored };
   }
 
-  async #selectPlayer(message) {
+  async #selectPlayer(message, pageKey) {
+    await this.#adoptPage(message.tabId, pageKey);
     const player = this.players(message.tabId).find((item) => item.frameId === message.frameId && item.key === message.playerKey);
     if (!player) throw new Error('Выбранный плеер больше недоступен');
-    const state = await this.#store.patchSettings({ selectedPlayerKey: player.key });
+    const state = await this.#store.patchSettings(pageKey, { selectedPlayerKey: player.key });
     const delivered = await this.#send(message.tabId, player.frameId, {
       type: MESSAGE.CONTENT_FULL_STATE,
       settings: state.settings,
@@ -201,8 +259,9 @@ export class BackgroundController {
     return { state, delivered };
   }
 
-  async #updateSettings(message) {
-    const state = await this.#store.patchSettings(message.patch ?? {});
+  async #updateSettings(message, pageKey) {
+    await this.#adoptPage(message.tabId, pageKey);
+    const state = await this.#store.patchSettings(pageKey, message.patch ?? {});
     const delivered = await this.#sendToSelected(message.tabId, state, {
       type: MESSAGE.CONTENT_SETTINGS,
       settings: state.settings,
@@ -210,7 +269,8 @@ export class BackgroundController {
     return { state, delivered };
   }
 
-  async #mutateTracks(tabId, mutation) {
+  async #mutateTracks(tabId, pageKey, mutation) {
+    await this.#adoptPage(tabId, pageKey);
     const state = await mutation();
     const delivered = await this.#sendToSelected(tabId, state, {
       type: MESSAGE.CONTENT_TRACKS,
@@ -220,14 +280,52 @@ export class BackgroundController {
     return { state, delivered };
   }
 
+  async #findSubtitles(message, pageKey) {
+    if (!this.#subtitleFinder) throw new Error('Автопоиск пока недоступен');
+    await this.#adoptPage(message.tabId, pageKey);
+    const current = await this.#store.get(pageKey);
+    const player = this.players(message.tabId).find((item) => item.key === current.settings.selectedPlayerKey)
+      ?? this.players(message.tabId).find((item) => item.frameId === message.frameId)
+      ?? this.players(message.tabId)[0];
+    if (!player) throw new Error('Сначала подключитесь к плееру');
+    const result = await this.#subtitleFinder.find({
+      media: message.media ?? {},
+      player,
+      aiOptions: message.aiOptions ?? {
+        model: current.settings.aiModel,
+        reasoningEffort: current.settings.reasoningEffort,
+      },
+      getBuiltInSamples: async (trackId) => {
+        const response = await this.#request(message.tabId, player.frameId, {
+          type: MESSAGE.CONTENT_SAMPLE_TRACK,
+          trackId,
+          limit: 30,
+        });
+        if (!response?.ok) throw new Error(response?.error || 'Плеер не вернул строки субтитров');
+        return Array.isArray(response.cues) ? response.cues : [];
+      },
+    });
+    const state = await this.#store.applySubtitleSearchResult(pageKey, result);
+    const delivered = await this.#send(message.tabId, player.frameId, {
+      type: MESSAGE.CONTENT_FULL_STATE,
+      settings: state.settings,
+      externalTracks: state.externalTracks,
+    });
+    return { state, summary: result.summary, delivered };
+  }
+
   async #sendToSelected(tabId, state, payload) {
     const player = this.players(tabId).find((item) => item.key === state.settings.selectedPlayerKey);
     return player ? this.#send(tabId, player.frameId, payload) : false;
   }
 
+  async #request(tabId, frameId, payload) {
+    return this.#chrome.tabs.sendMessage(tabId, payload, { frameId });
+  }
+
   async #send(tabId, frameId, payload) {
     try {
-      await this.#chrome.tabs.sendMessage(tabId, payload, { frameId });
+      await this.#request(tabId, frameId, payload);
       return true;
     } catch {
       return false;

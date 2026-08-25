@@ -17,16 +17,60 @@
       <label>Плеер
         <select id="player"></select>
       </label>
-      <label>Субтитры 1
+
+      <section class="auto-box">
+        <h2>Автопоиск</h2>
+        <p class="hint">Сначала берём встроенные дорожки. Недостающие ищем на SubDL. Русские всегда сверху, оригинал — снизу.</p>
+        <label>Название фильма или сериала
+          <input id="mediaTitle" type="text" maxlength="300" autocomplete="off">
+        </label>
+        <div class="two-columns">
+          <label>Сезон
+            <input id="mediaSeason" type="number" min="0" max="100" step="1" placeholder="—">
+          </label>
+          <label>Серия
+            <input id="mediaEpisode" type="number" min="0" max="1000" step="1" placeholder="—">
+          </label>
+        </div>
+        <button id="findSubtitles" type="button" class="primary">Найти субтитры</button>
+
+        <details class="ai-settings">
+          <summary>DeepSeek и автосинхронизация</summary>
+          <p class="hint">DeepSeek помогает получить английское название для поиска и синхронизировать дорожки. Он не переводит субтитры. В AI отправляются только название и несколько коротких строк, а не весь файл.</p>
+          <label>API-ключ DeepSeek
+            <input id="deepseekKey" type="password" autocomplete="new-password" placeholder="Вставьте ключ">
+          </label>
+          <div class="button-row">
+            <button id="saveDeepseekKey" type="button">Сохранить ключ</button>
+            <button id="clearDeepseekKey" type="button" class="danger-text">Удалить ключ</button>
+          </div>
+          <p id="aiKeyState" class="hint"></p>
+          <label>Модель
+            <select id="aiModel">
+              <option value="deepseek-v4-flash">DeepSeek V4 Flash — экономно</option>
+              <option value="deepseek-v4-pro">DeepSeek V4 Pro — точнее</option>
+            </select>
+          </label>
+          <label>Глубина рассуждения
+            <select id="reasoningEffort">
+              <option value="low">Низкая</option>
+              <option value="high">Высокая</option>
+              <option value="max">Максимальная</option>
+            </select>
+          </label>
+        </details>
+      </section>
+
+      <label>Субтитры 1 — русские
         <select id="firstTrack"></select>
       </label>
-      <label>Положение субтитров 1 <output id="firstBottomValue"></output>
+      <label>Положение русских <output id="firstBottomValue"></output>
         <input id="firstBottom" type="range" min="0" max="95" value="14">
       </label>
-      <label>Субтитры 2
+      <label>Субтитры 2 — оригинал
         <select id="secondTrack"></select>
       </label>
-      <label>Положение субтитров 2 <output id="secondBottomValue"></output>
+      <label>Положение оригинала <output id="secondBottomValue"></output>
         <input id="secondBottom" type="range" min="0" max="95" value="5">
       </label>
       <label>Размер текста <output id="fontSizeValue"></output>
@@ -35,7 +79,7 @@
 
       <section class="import-box">
         <h2>Мои субтитры</h2>
-        <p class="hint">Добавьте готовый файл SRT. Он появится отдельной группой в списках выше.</p>
+        <p class="hint">Можно добавить готовый SRT вручную.</p>
         <label class="file-button">Добавить SRT
           <input id="subtitleFile" type="file" accept=".srt,application/x-subrip,text/plain">
         </label>
@@ -43,7 +87,7 @@
       </section>
 
       <section id="syncBox" class="sync-box" hidden>
-        <h2>Синхронизация</h2>
+        <h2>Ручная синхронизация</h2>
         <label>Файл
           <select id="syncTrack"></select>
         </label>
@@ -58,10 +102,13 @@
           <button type="button" data-shift="1">+1</button>
           <button type="button" data-shift="5">+5</button>
         </div>
-        <p class="hint"><b>Минус</b> — показать раньше. <b>Плюс</b> — показать позже.</p>
+        <label>Скорость дорожки, %
+          <input id="timeScalePercent" type="number" min="90" max="110" step="0.001" value="100">
+        </label>
+        <p class="hint"><b>Минус</b> — показать раньше. <b>Плюс</b> — позже. Скорость нужна, если расхождение постепенно растёт.</p>
       </section>
 
-      <p class="hint">Положение: 0% — у нижней границы видео, 95% — почти вверху. Настройки сохраняются.</p>
+      <p class="hint">Субтитры, выбор плеера и настройки сохраняются только для этой страницы. На другой странице всё начнётся с чистого состояния.</p>
     </section>
   </main>
   <script type="module" src="popup.js"></script>

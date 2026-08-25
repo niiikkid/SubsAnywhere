@@ -188,6 +188,24 @@ test('runtime external cue lookup keeps positive offset semantics', async () => 
   assert.equal(runtime.cueTextAt(cues, 12.5, 2), 'Later');
 });
 
+test('runtime applies AI speed correction without rewriting cue times', async () => {
+  const runtime = await loadRuntime();
+  const cues = [{ start: 10, end: 12, text: 'Scaled' }];
+
+  assert.equal(runtime.cueTextAt(cues, 20.5, 0, 2), 'Scaled');
+  assert.equal(runtime.cueTextAt(cues, 12, 0, 2), '');
+});
+
+test('runtime samples a native TextTrack without returning the whole file', async () => {
+  const runtime = await loadRuntime();
+  const cues = Array.from({ length: 100 }, (_, index) => ({ startTime: index, endTime: index + 0.5, text: `Line ${index}` }));
+  const samples = runtime.sampleTextTrack({ cues }, 12);
+
+  assert.equal(samples.length, 12);
+  assert.ok(samples[0].start > 0);
+  assert.ok(samples.at(-1).start < 100);
+});
+
 test('runtime indexed cue lookup preserves overlapping subtitles', async () => {
   const runtime = await loadRuntime();
   const cues = [
