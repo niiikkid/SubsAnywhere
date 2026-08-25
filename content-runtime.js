@@ -102,18 +102,21 @@
   }
 
   function createBuiltInTrackResolver() {
-    const rememberedIdentities = new Map();
+    const rememberedSelections = new Map();
     return {
       find(tracks, id) {
         if (!id) return null;
         const entries = builtInTrackEntries(tracks);
-        const exact = entries.find((entry) => entry.id === id || entry.legacyId === id);
-        if (exact) {
-          rememberedIdentities.set(id, exact.identity);
-          return exact.track;
+        const exactIndex = entries.findIndex((entry) => entry.id === id || entry.legacyId === id);
+        if (exactIndex >= 0) {
+          rememberedSelections.set(id, { identity: entries[exactIndex].identity, index: exactIndex });
+          return entries[exactIndex].track;
         }
-        const identity = rememberedIdentities.get(id);
-        return entries.find((entry) => entry.identity === identity)?.track ?? null;
+        const remembered = rememberedSelections.get(id);
+        if (!remembered) return null;
+        return entries.find((entry) => entry.identity === remembered.identity)?.track
+          ?? entries[remembered.index]?.track
+          ?? null;
       },
     };
   }

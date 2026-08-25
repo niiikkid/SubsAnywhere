@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SubsAnywhere",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Показывает две встроенные или добавленные SRT-дорожки с ручной синхронизацией.",
   "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage"],
   "optional_host_permissions": ["<all_urls>"],

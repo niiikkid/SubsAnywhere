@@ -237,6 +237,18 @@ test('runtime resolves both stable and legacy built-in track selections', async 
   assert.equal(runtime.findBuiltInTrack(tracks, 'track-1'), russian);
 });
 
+test('runtime keeps a selected built-in track when an audio switch replaces all track metadata', async () => {
+  const runtime = await loadRuntime();
+  const resolver = runtime.createBuiltInTrackResolver();
+  const original = { id: 'old-id', kind: 'subtitles', label: 'English', language: 'en' };
+  const selectedId = runtime.trackChoices([original])[0].id;
+
+  assert.equal(resolver.find([original], selectedId), original);
+
+  const recreated = { id: 'new-id', kind: 'subtitles', label: 'English CC', language: 'en-US' };
+  assert.equal(resolver.find([recreated], selectedId), recreated);
+});
+
 test('runtime normalizes settings at the content-script boundary', async () => {
   const runtime = await loadRuntime();
 
