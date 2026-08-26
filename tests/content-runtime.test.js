@@ -267,14 +267,31 @@ test('runtime keeps a selected built-in track when an audio switch replaces all 
   assert.equal(resolver.find([recreated], selectedId), recreated);
 });
 
+test('runtime prefers a persisted fallback over a legacy track index after player recreation', async () => {
+  const runtime = await loadRuntime();
+  const resolver = runtime.createBuiltInTrackResolver();
+  const first = { id: 'new-a', kind: 'subtitles', label: 'Changed A', language: 'xx' };
+  const second = { id: 'new-b', kind: 'subtitles', label: 'Changed B', language: 'yy' };
+
+  assert.equal(resolver.find([first, second], 'track-1', 'caption-0'), first);
+});
+
 test('runtime normalizes settings at the content-script boundary', async () => {
   const runtime = await loadRuntime();
 
   assert.deepEqual(
-    { ...runtime.normalizeSettings({ firstTrackId: 'saved', firstBottom: 200, fontSize: '31', selectedPlayerKey: 'player' }) },
+    { ...runtime.normalizeSettings({
+      firstTrackId: 'saved',
+      firstTrackFallbackId: 'caption-1',
+      firstBottom: 200,
+      fontSize: '31',
+      selectedPlayerKey: 'player',
+    }) },
     {
       firstTrackId: 'saved',
+      firstTrackFallbackId: 'caption-1',
       secondTrackId: '',
+      secondTrackFallbackId: '',
       firstBottom: 95,
       secondBottom: 5,
       fontSize: 31,

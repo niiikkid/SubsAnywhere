@@ -66,8 +66,13 @@ function drawPlayers() {
   if (selected) select.value = String(selected.frameId);
 }
 
-function drawTrackSelect(select, selectedId) {
-  const options = buildTrackOptions(currentPlayer()?.tracks ?? [], state.externalTracks, selectedId);
+function drawTrackSelect(select, selectedId, selectedFallbackId) {
+  const options = buildTrackOptions(
+    currentPlayer()?.tracks ?? [],
+    state.externalTracks,
+    selectedId,
+    selectedFallbackId,
+  );
   const groups = new Map();
   select.replaceChildren();
   for (const item of options) {
@@ -146,8 +151,8 @@ function drawMediaDraft() {
 
 function drawSettings() {
   const settings = state.settings;
-  drawTrackSelect($('firstTrack'), settings.firstTrackId);
-  drawTrackSelect($('secondTrack'), settings.secondTrackId);
+  drawTrackSelect($('firstTrack'), settings.firstTrackId, settings.firstTrackFallbackId);
+  drawTrackSelect($('secondTrack'), settings.secondTrackId, settings.secondTrackFallbackId);
   $('firstBottom').value = settings.firstBottom;
   $('secondBottom').value = settings.secondBottom;
   $('fontSize').value = settings.fontSize;

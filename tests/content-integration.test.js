@@ -183,6 +183,41 @@ test('production keeps a selected built-in track when the player recreates it du
   assert.equal(originalTrack.mode, 'disabled');
 });
 
+test('production restores a built-in track after an audio switch recreates the player context', async () => {
+  const harness = await makeHarness();
+  const originalTrack = harness.document.videos[0].textTracks[0];
+  originalTrack.id = 'subtitle-before-context-reload';
+  vm.runInContext(harness.runtimeSource, harness.context);
+  const selected = harness.context.DualCaptionsContentRuntime.trackChoices([originalTrack])[0];
+  const recreatedVideo = fakeVideo();
+  Object.assign(recreatedVideo.textTracks[0], {
+    id: 'subtitle-after-context-reload',
+    label: 'Original CC',
+    language: 'en-US',
+    activeCues: [{ text: 'After context reload' }],
+  });
+  harness.document.videos = [recreatedVideo];
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: {
+      firstTrackId: selected.id,
+      firstTrackFallbackId: selected.fallbackId,
+      secondTrackId: '',
+      secondTrackFallbackId: '',
+      firstBottom: 20,
+      secondBottom: 8,
+      fontSize: 24,
+    },
+    externalTracks: [],
+  }, {}, () => {});
+
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  assert.equal(overlay.children[0].textContent, 'After context reload');
+});
+
 test('production late built-in track report keeps the bound video reference', async () => {
   const harness = await makeHarness();
   vm.runInContext(harness.runtimeSource, harness.context);

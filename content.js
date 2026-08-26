@@ -57,7 +57,7 @@
       for (const track of video.textTracks) restoreTrackMode(track);
     }
 
-    function selectedText(id, video) {
+    function selectedText(id, fallbackId, video) {
       if (!id) return '';
       if (id.startsWith('external:')) {
         const external = state.externalTracks.find((track) => `external:${track.id}` === id);
@@ -65,7 +65,7 @@
           ? runtime.cueTextAt(external.cues, video.currentTime, external.offsetSeconds, external.timeScale)
           : '';
       }
-      return runtime.activeCueText(builtInTrackResolver.find(video.textTracks, id));
+      return runtime.activeCueText(builtInTrackResolver.find(video.textTracks, id, fallbackId));
     }
 
     function overlayHost(video) {
@@ -106,8 +106,16 @@
           track.mode = 'hidden';
         }
       }
-      state.first.textContent = selectedText(state.settings.firstTrackId, video);
-      state.second.textContent = selectedText(state.settings.secondTrackId, video);
+      state.first.textContent = selectedText(
+        state.settings.firstTrackId,
+        state.settings.firstTrackFallbackId,
+        video,
+      );
+      state.second.textContent = selectedText(
+        state.settings.secondTrackId,
+        state.settings.secondTrackFallbackId,
+        video,
+      );
       state.first.style.bottom = `${state.settings.firstBottom}%`;
       state.second.style.bottom = `${state.settings.secondBottom}%`;
       state.first.style.fontSize = `${state.settings.fontSize}px`;

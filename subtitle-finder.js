@@ -612,11 +612,13 @@ export class SubtitleFinder {
       notes.push('Встроенной опорной дорожки нет; синхронизация оставлена ручной');
     }
 
+    const firstBuiltIn = Boolean(russian && builtInIds.has(russian.id));
+    const secondBuiltIn = Boolean(original && builtInIds.has(original.id));
     const firstTrackId = russian
-      ? (builtInIds.has(russian.id) ? russian.id : `external:${russian.id}`)
+      ? (firstBuiltIn ? russian.id : `external:${russian.id}`)
       : '';
     const secondTrackId = original
-      ? (builtInIds.has(original.id) ? original.id : `external:${original.id}`)
+      ? (secondBuiltIn ? original.id : `external:${original.id}`)
       : '';
     if (!secondTrackId) throw new Error('Оригинальные субтитры не найдены');
 
@@ -624,7 +626,9 @@ export class SubtitleFinder {
       tracks: externalTracks,
       settingsPatch: {
         firstTrackId,
+        firstTrackFallbackId: firstBuiltIn ? russian.fallbackId || '' : '',
         secondTrackId,
+        secondTrackFallbackId: secondBuiltIn ? original.fallbackId || '' : '',
         mediaTitle: originalTitle,
         mediaSeason: Number(media.season) || null,
         mediaEpisode: Number(media.episode) || null,

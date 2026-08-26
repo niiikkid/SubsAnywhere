@@ -1,12 +1,14 @@
 import { DEEPSEEK_MODELS, REASONING_EFFORTS } from './ai-client.js';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const DEFAULT_STATE = Object.freeze({
   schemaVersion: SCHEMA_VERSION,
   settings: Object.freeze({
     firstTrackId: '',
+    firstTrackFallbackId: '',
     secondTrackId: '',
+    secondTrackFallbackId: '',
     firstBottom: 14,
     secondBottom: 5,
     fontSize: 22,
@@ -27,7 +29,9 @@ export const DEFAULT_ROOT_STATE = Object.freeze({
 
 const SETTING_KEYS = new Set([
   'firstTrackId',
+  'firstTrackFallbackId',
   'secondTrackId',
+  'secondTrackFallbackId',
   'firstBottom',
   'secondBottom',
   'fontSize',
@@ -82,7 +86,9 @@ export function normalizeState(value = {}) {
     settings: {
       ...settings,
       firstTrackId: typeof settings.firstTrackId === 'string' ? settings.firstTrackId : DEFAULT_STATE.settings.firstTrackId,
+      firstTrackFallbackId: typeof settings.firstTrackFallbackId === 'string' ? settings.firstTrackFallbackId : DEFAULT_STATE.settings.firstTrackFallbackId,
       secondTrackId: typeof settings.secondTrackId === 'string' ? settings.secondTrackId : DEFAULT_STATE.settings.secondTrackId,
+      secondTrackFallbackId: typeof settings.secondTrackFallbackId === 'string' ? settings.secondTrackFallbackId : DEFAULT_STATE.settings.secondTrackFallbackId,
       firstBottom: bounded(settings.firstBottom, 0, 95, DEFAULT_STATE.settings.firstBottom),
       secondBottom: bounded(settings.secondBottom, 0, 95, DEFAULT_STATE.settings.secondBottom),
       fontSize: bounded(settings.fontSize, 12, 48, DEFAULT_STATE.settings.fontSize),
@@ -166,6 +172,33 @@ export function patchSettings(state, patch = {}) {
   return normalizeState({ ...current, settings: nextSettings });
 }
 
+export function builtInTrackFallbackPatch(settings = {}, playerTracks = [], options = {}) {
+  const patch = {};
+  const tracks = Array.isArray(playerTracks) ? playerTracks : [];
+  for (const [trackKey, fallbackKey] of [
+    ['firstTrackId', 'firstTrackFallbackId'],
+    ['secondTrackId', 'secondTrackFallbackId'],
+  ]) {
+    const selectedId = typeof settings[trackKey] === 'string' ? settings[trackKey] : '';
+    if (!selectedId || selectedId.startsWith('external:')) {
+      if (settings[fallbackKey]) patch[fallbackKey] = '';
+      continue;
+    }
+    const stableTrack = tracks.find((track) => track?.id === selectedId);
+    const hasPersistedFallback = /^caption-\d+$/.test(String(settings[fallbackKey] ?? ''));
+    if (
+      !stableTrack
+      && /^track-\d+$/.test(selectedId)
+      && hasPersistedFallback
+      && !options.replaceLegacyFallback
+    ) continue;
+    const selectedTrack = stableTrack ?? tracks.find((track) => track?.legacyId === selectedId);
+    const fallbackId = typeof selectedTrack?.fallbackId === 'string' ? selectedTrack.fallbackId : '';
+    if (fallbackId && fallbackId !== settings[fallbackKey]) patch[fallbackKey] = fallbackId;
+  }
+  return patch;
+}
+
 export function addExternalTrack(state, track) {
   const current = normalizeState(state);
   if (current.externalTracks.some((existing) => existing.id === track?.id)) {
@@ -229,11 +262,23 @@ export function removeExternalTrack(state, id) {
   });
 }
 
-export function buildTrackOptions(playerTracks = [], externalTracks = [], selectedId = '') {
+export function buildTrackOptions(
+  playerTracks = [],
+  externalTracks = [],
+  selectedId = '',
+  selectedFallbackId = '',
+) {
   const options = [{ id: '', label: 'Не показывать', group: '' }];
+  const hasStableMatch = playerTracks.some((track) => track?.id === selectedId);
+  const useFallback = !hasStableMatch
+    && !selectedId.startsWith('external:')
+    && /^caption-\d+$/.test(selectedFallbackId);
   for (const track of playerTracks) {
+    const selected = track.id === selectedId
+      || (useFallback && track.fallbackId === selectedFallbackId)
+      || (!hasStableMatch && !useFallback && track.legacyId === selectedId);
     options.push({
-      id: track.id === selectedId || track.legacyId === selectedId ? selectedId : track.id,
+      id: selected ? selectedId : track.id,
       label: `${track.label}${track.language ? ` (${track.language})` : ''}`,
       group: 'Встроенные в плеер',
     });

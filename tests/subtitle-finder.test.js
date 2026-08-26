@@ -172,13 +172,14 @@ test('autofind keeps built-in original second and downloads optional Russian fir
     player: {
       sourceName: 'Game.of.Thrones.S01E01.1080p.BluRay.mkv',
       duration: 12,
-      tracks: [{ id: 'builtin-en', label: 'English', language: 'en' }],
+      tracks: [{ id: 'builtin-en', fallbackId: 'caption-0', label: 'English', language: 'en' }],
     },
     aiOptions: { model: 'deepseek-v4-flash', reasoningEffort: 'low' },
   });
 
   assert.equal(result.settingsPatch.firstTrackId.startsWith('external:subdl-ru-'), true);
   assert.equal(result.settingsPatch.secondTrackId, 'builtin-en');
+  assert.equal(result.settingsPatch.secondTrackFallbackId, 'caption-0');
   assert.equal(result.tracks.length, 1);
   assert.equal(result.tracks[0].language, 'ru');
   assert.equal(result.summary.original.kind, 'builtin');

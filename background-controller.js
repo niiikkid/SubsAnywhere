@@ -235,8 +235,9 @@ export class BackgroundController {
       ...playerData,
       tabTitle: sender.tab?.title || playerData?.tabTitle || '',
     });
-    const state = await this.#store.get(pageKey);
-    const restored = player.key === state.settings.selectedPlayerKey
+    const state = await this.#store.reconcileBuiltInTrackFallbacks(pageKey, player.key, player.tracks);
+    const selected = player.key === state.settings.selectedPlayerKey;
+    const restored = selected
       ? await this.#send(tabId, frameId, {
         type: MESSAGE.CONTENT_FULL_STATE,
         settings: state.settings,
@@ -250,7 +251,11 @@ export class BackgroundController {
     await this.#adoptPage(message.tabId, pageKey);
     const player = this.players(message.tabId).find((item) => item.frameId === message.frameId && item.key === message.playerKey);
     if (!player) throw new Error('Выбранный плеер больше недоступен');
-    const state = await this.#store.patchSettings(pageKey, { selectedPlayerKey: player.key });
+    const state = await this.#store.patchSettingsWithPlayerFallbacks(
+      pageKey,
+      { selectedPlayerKey: player.key },
+      [player],
+    );
     const delivered = await this.#send(message.tabId, player.frameId, {
       type: MESSAGE.CONTENT_FULL_STATE,
       settings: state.settings,
@@ -261,7 +266,11 @@ export class BackgroundController {
 
   async #updateSettings(message, pageKey) {
     await this.#adoptPage(message.tabId, pageKey);
-    const state = await this.#store.patchSettings(pageKey, message.patch ?? {});
+    const state = await this.#store.patchSettingsWithPlayerFallbacks(
+      pageKey,
+      message.patch ?? {},
+      this.players(message.tabId),
+    );
     const delivered = await this.#sendToSelected(message.tabId, state, {
       type: MESSAGE.CONTENT_SETTINGS,
       settings: state.settings,

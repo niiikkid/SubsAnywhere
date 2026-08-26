@@ -63,7 +63,7 @@
     return Array.from(tracks ?? [])
       .map((track, index) => ({ track, index }))
       .filter(({ track }) => isCaptionTrack(track))
-      .map(({ track, index }) => {
+      .map(({ track, index }, captionIndex) => {
         const nativeId = typeof track.id === 'string' ? track.id.trim() : '';
         const fingerprint = nativeId
           ? `id:${nativeId}`
@@ -77,6 +77,7 @@
           track,
           id: `builtin:${encodeURIComponent(fingerprint)}:${occurrence}`,
           legacyId: `track-${index}`,
+          fallbackId: `caption-${captionIndex}`,
           identity: `${identityFingerprint}:${identityOccurrence}`,
           label: track.label || track.language || `Субтитры ${occurrence + 1}`,
           language: track.language || '',
@@ -85,9 +86,10 @@
   }
 
   function trackChoices(tracks) {
-    return builtInTrackEntries(tracks).map(({ id, legacyId, label, language }) => ({
+    return builtInTrackEntries(tracks).map(({ id, legacyId, fallbackId, label, language }) => ({
       id,
       legacyId,
+      fallbackId,
       label,
       language,
     }));
@@ -105,19 +107,29 @@
   function createBuiltInTrackResolver() {
     const rememberedSelections = new Map();
     return {
-      find(tracks, id) {
+      find(tracks, id, fallbackId = '') {
         if (!id) return null;
         const entries = builtInTrackEntries(tracks);
-        const exactIndex = entries.findIndex((entry) => entry.id === id || entry.legacyId === id);
+        const exactIndex = entries.findIndex((entry) => entry.id === id);
         if (exactIndex >= 0) {
           rememberedSelections.set(id, { identity: entries[exactIndex].identity, index: exactIndex });
           return entries[exactIndex].track;
         }
         const remembered = rememberedSelections.get(id);
-        if (!remembered) return null;
-        return entries.find((entry) => entry.identity === remembered.identity)?.track
-          ?? entries[remembered.index]?.track
-          ?? null;
+        const rememberedTrack = remembered
+          ? entries.find((entry) => entry.identity === remembered.identity)?.track
+            ?? entries[remembered.index]?.track
+          : null;
+        if (rememberedTrack) return rememberedTrack;
+        const fallback = /^caption-(\d+)$/.exec(String(fallbackId));
+        const fallbackTrack = fallback ? entries[Number(fallback[1])]?.track ?? null : null;
+        if (fallbackTrack) return fallbackTrack;
+        const legacyIndex = entries.findIndex((entry) => entry.legacyId === id);
+        if (legacyIndex >= 0) {
+          rememberedSelections.set(id, { identity: entries[legacyIndex].identity, index: legacyIndex });
+          return entries[legacyIndex].track;
+        }
+        return null;
       },
     };
   }
@@ -161,7 +173,9 @@
     };
     return {
       firstTrackId: typeof value.firstTrackId === 'string' ? value.firstTrackId : '',
+      firstTrackFallbackId: typeof value.firstTrackFallbackId === 'string' ? value.firstTrackFallbackId : '',
       secondTrackId: typeof value.secondTrackId === 'string' ? value.secondTrackId : '',
+      secondTrackFallbackId: typeof value.secondTrackFallbackId === 'string' ? value.secondTrackFallbackId : '',
       firstBottom: bounded(value.firstBottom, 0, 95, 14),
       secondBottom: bounded(value.secondBottom, 0, 95, 5),
       fontSize: bounded(value.fontSize, 12, 48, 22),

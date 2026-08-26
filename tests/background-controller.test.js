@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BackgroundController, PlayerRegistry, stablePlayerKey } from '../background-controller.js';
 import { MESSAGE } from '../protocol.js';
-import { normalizeState, patchSettings as patchState } from '../state-core.js';
+import { builtInTrackFallbackPatch, normalizeState, patchSettings as patchState } from '../state-core.js';
 
 class FakeStore {
   constructor() {
@@ -10,6 +10,25 @@ class FakeStore {
   }
   async get(_pageKey) { return structuredClone(this.state); }
   async patchSettings(_pageKey, patch) { this.state = patchState(this.state, patch); return this.get(); }
+  async patchSettingsWithPlayerFallbacks(_pageKey, patch, players = []) {
+    const previous = this.state.settings;
+    this.state = patchState(this.state, patch);
+    const player = players.find((item) => item.key === this.state.settings.selectedPlayerKey);
+    const replaceLegacyFallback = [
+      ['selectedPlayerKey', previous.selectedPlayerKey],
+      ['firstTrackId', previous.firstTrackId],
+      ['secondTrackId', previous.secondTrackId],
+    ].some(([key, value]) => Object.hasOwn(patch, key) && patch[key] !== value);
+    this.state = patchState(this.state, builtInTrackFallbackPatch(
+      this.state.settings,
+      player?.tracks ?? [],
+      { replaceLegacyFallback },
+    ));
+    return this.get();
+  }
+  async reconcileBuiltInTrackFallbacks(pageKey, playerKey, playerTracks) {
+    return this.patchSettingsWithPlayerFallbacks(pageKey, {}, [{ key: playerKey, tracks: playerTracks }]);
+  }
   async addExternalTrack(_pageKey, track) { this.state.externalTracks.push(structuredClone(track)); return this.get(); }
   async removeExternalTrack(_pageKey, id) { this.state.externalTracks = this.state.externalTracks.filter((track) => track.id !== id); return this.get(); }
   async updateExternalTrackOffset(_pageKey, id, value) {
@@ -134,6 +153,33 @@ test('a selected player report restores persisted state after service-worker res
   assert.equal(chrome.sent[0].message.externalTracks[0].id, 'mine');
 });
 
+test('a selected player report persists the built-in recovery position before an audio switch', async () => {
+  const chrome = makeChrome();
+  const store = new FakeStore();
+  const frameUrl = 'https://player.example/embed?id=episode-7';
+  store.state = normalizeState({
+    settings: {
+      firstTrackId: 'builtin-en',
+      selectedPlayerKey: stablePlayerKey(frameUrl, 0),
+    },
+  });
+  const controller = new BackgroundController(chrome, store);
+
+  const result = await controller.handle({
+    type: MESSAGE.PLAYER_REPORT,
+    player: {
+      title: 'Player',
+      frameUrl,
+      videoIndex: 0,
+      tracks: [{ id: 'builtin-en', legacyId: 'track-0', fallbackId: 'caption-0', label: 'English' }],
+    },
+  }, { tab: { id: 4 }, frameId: 9, url: frameUrl });
+
+  assert.equal(result.ok, true);
+  assert.equal(store.state.settings.firstTrackFallbackId, 'caption-0');
+  assert.equal(chrome.sent[0].message.settings.firstTrackFallbackId, 'caption-0');
+});
+
 test('player get rebuilds an empty cache so popup reopen recovers automatically', async () => {
   const chrome = makeChrome();
   const store = new FakeStore();
@@ -217,6 +263,135 @@ test('settings patch sends only lightweight settings to the selected player fram
   assert.equal(chrome.sent[0].message.type, MESSAGE.CONTENT_SETTINGS);
   assert.equal(chrome.sent[0].message.settings.fontSize, 31);
   assert.equal('externalTracks' in chrome.sent[0].message, false);
+});
+
+test('selecting a built-in track persists its recovery position immediately', async () => {
+  const chrome = makeChrome();
+  const store = new FakeStore();
+  const controller = new BackgroundController(chrome, store);
+  await controller.handle({
+    type: MESSAGE.PLAYER_REPORT,
+    player: {
+      title: 'Player',
+      frameUrl: 'https://player.example/embed',
+      videoIndex: 0,
+      tracks: [{ id: 'builtin-en', legacyId: 'track-0', fallbackId: 'caption-0', label: 'English' }],
+    },
+  }, { tab: { id: 3 }, frameId: 8, url: 'https://player.example/embed' });
+  const [player] = controller.players(3);
+  await controller.handle({ type: MESSAGE.PLAYER_SELECT, tabId: 3, frameId: 8, playerKey: player.key }, {});
+  chrome.sent.length = 0;
+
+  const result = await controller.handle({
+    type: MESSAGE.STATE_PATCH,
+    tabId: 3,
+    patch: { firstTrackId: 'builtin-en' },
+  }, {});
+
+  assert.equal(result.ok, true);
+  assert.equal(store.state.settings.firstTrackFallbackId, 'caption-0');
+  assert.equal(chrome.sent[0].message.settings.firstTrackFallbackId, 'caption-0');
+});
+
+test('selecting a player backfills recovery positions for existing built-in selections', async () => {
+  const chrome = makeChrome();
+  const store = new FakeStore();
+  store.state = normalizeState({ settings: { firstTrackId: 'builtin-en' } });
+  const controller = new BackgroundController(chrome, store);
+  await controller.handle({
+    type: MESSAGE.PLAYER_REPORT,
+    player: {
+      title: 'Player',
+      frameUrl: 'https://player.example/embed',
+      videoIndex: 0,
+      tracks: [{ id: 'builtin-en', fallbackId: 'caption-0', label: 'English' }],
+    },
+  }, { tab: { id: 3 }, frameId: 8, url: 'https://player.example/embed' });
+  const [player] = controller.players(3);
+  chrome.sent.length = 0;
+
+  const result = await controller.handle({
+    type: MESSAGE.PLAYER_SELECT,
+    tabId: 3,
+    frameId: 8,
+    playerKey: player.key,
+  }, {});
+
+  assert.equal(result.ok, true);
+  assert.equal(store.state.settings.firstTrackFallbackId, 'caption-0');
+  assert.equal(chrome.sent[0].message.settings.firstTrackFallbackId, 'caption-0');
+});
+
+test('explicit player selection replaces a legacy fallback inherited from another player', async () => {
+  const chrome = makeChrome();
+  const store = new FakeStore();
+  store.state = normalizeState({
+    settings: {
+      firstTrackId: 'track-1',
+      firstTrackFallbackId: 'caption-0',
+    },
+  });
+  const controller = new BackgroundController(chrome, store);
+  await controller.handle({
+    type: MESSAGE.PLAYER_REPORT,
+    player: {
+      title: 'Second player',
+      frameUrl: 'https://player.example/second',
+      videoIndex: 0,
+      tracks: [
+        { id: 'builtin-a', legacyId: 'track-0', fallbackId: 'caption-0' },
+        { id: 'builtin-b', legacyId: 'track-1', fallbackId: 'caption-1' },
+      ],
+    },
+  }, { tab: { id: 3 }, frameId: 9, url: 'https://player.example/second' });
+  const [player] = controller.players(3);
+
+  const result = await controller.handle({
+    type: MESSAGE.PLAYER_SELECT,
+    tabId: 3,
+    frameId: 9,
+    playerKey: player.key,
+  }, {});
+
+  assert.equal(result.ok, true);
+  assert.equal(store.state.settings.firstTrackFallbackId, 'caption-1');
+});
+
+test('reselecting the same player preserves a legacy fallback after context recreation', async () => {
+  const chrome = makeChrome();
+  const store = new FakeStore();
+  const frameUrl = 'https://player.example/embed';
+  const playerKey = stablePlayerKey(frameUrl, 0);
+  store.state = normalizeState({
+    settings: {
+      selectedPlayerKey: playerKey,
+      firstTrackId: 'track-1',
+      firstTrackFallbackId: 'caption-0',
+    },
+  });
+  const controller = new BackgroundController(chrome, store);
+  await controller.handle({
+    type: MESSAGE.PLAYER_REPORT,
+    player: {
+      title: 'Recreated player',
+      frameUrl,
+      videoIndex: 0,
+      tracks: [
+        { id: 'new-a', legacyId: 'track-0', fallbackId: 'caption-0' },
+        { id: 'new-b', legacyId: 'track-1', fallbackId: 'caption-1' },
+      ],
+    },
+  }, { tab: { id: 3 }, frameId: 9, url: frameUrl });
+
+  const result = await controller.handle({
+    type: MESSAGE.PLAYER_SELECT,
+    tabId: 3,
+    frameId: 9,
+    playerKey,
+  }, {});
+
+  assert.equal(result.ok, true);
+  assert.equal(store.state.settings.firstTrackFallbackId, 'caption-0');
 });
 
 test('top-page navigation resets the old frame before a new page can reuse its subtitles', async () => {

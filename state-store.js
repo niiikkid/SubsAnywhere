@@ -1,6 +1,7 @@
 import {
   addExternalTrack,
   applySubtitleSearchResult,
+  builtInTrackFallbackPatch,
   cloneRootState,
   cloneState,
   migrateStoredRoot,
@@ -57,6 +58,24 @@ export class StateStore {
     return this.#mutatePage(pageKey, (state) => patchSettings(state, patch));
   }
 
+  patchSettingsWithPlayerFallbacks(pageKey, patch, players = []) {
+    return this.#mutatePage(pageKey, (state) => {
+      const next = patchSettings(state, patch);
+      const selectedPlayer = players.find((player) => player?.key === next.settings.selectedPlayerKey);
+      const replaceLegacyFallback = [
+        ['selectedPlayerKey', state.settings.selectedPlayerKey],
+        ['firstTrackId', state.settings.firstTrackId],
+        ['secondTrackId', state.settings.secondTrackId],
+      ].some(([key, previous]) => Object.hasOwn(patch, key) && patch[key] !== previous);
+      const fallbackPatch = builtInTrackFallbackPatch(
+        next.settings,
+        selectedPlayer?.tracks ?? [],
+        { replaceLegacyFallback },
+      );
+      return Object.keys(fallbackPatch).length ? patchSettings(next, fallbackPatch) : next;
+    });
+  }
+
   addExternalTrack(pageKey, track) {
     return this.#mutatePage(pageKey, (state) => addExternalTrack(state, track));
   }
@@ -77,11 +96,20 @@ export class StateStore {
     return this.#mutatePage(pageKey, (state) => applySubtitleSearchResult(state, result));
   }
 
+  reconcileBuiltInTrackFallbacks(pageKey, playerKey, playerTracks) {
+    return this.#mutatePage(pageKey, (state) => {
+      if (state.settings.selectedPlayerKey !== playerKey) return null;
+      const fallbackPatch = builtInTrackFallbackPatch(state.settings, playerTracks);
+      return Object.keys(fallbackPatch).length ? patchSettings(state, fallbackPatch) : null;
+    });
+  }
+
   #mutatePage(pageKey, updater) {
     const operation = this.#queue.then(async () => {
       await this.#ensureLoaded();
       const current = pageStateFromRoot(this.#root, pageKey);
       const next = updater(current);
+      if (next === null) return cloneState(current);
       const nextRoot = setPageStateInRoot(this.#root, pageKey, next);
       await this.#storage.set({ [STATE_KEY]: nextRoot });
       this.#root = nextRoot;

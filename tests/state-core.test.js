@@ -4,6 +4,7 @@ import {
   DEFAULT_STATE,
   SCHEMA_VERSION,
   addExternalTrack,
+  builtInTrackFallbackPatch,
   buildTrackOptions,
   migrateStoredRoot,
   migrateStoredState,
@@ -42,6 +43,33 @@ test('normalizeState preserves a temporarily unavailable selected track id', () 
   });
 
   assert.equal(state.settings.firstTrackId, 'track-not-loaded-yet');
+});
+
+test('built-in selections persist a recovery position before the player context is replaced', () => {
+  const patch = builtInTrackFallbackPatch(
+    { firstTrackId: 'builtin-en', secondTrackId: 'external:ru' },
+    [
+      { id: 'builtin-ru', fallbackId: 'caption-0' },
+      { id: 'builtin-en', fallbackId: 'caption-1' },
+    ],
+  );
+
+  assert.deepEqual(patch, { firstTrackFallbackId: 'caption-1' });
+});
+
+test('a legacy track index cannot overwrite an existing recovery position after recreation', () => {
+  const patch = builtInTrackFallbackPatch(
+    {
+      firstTrackId: 'track-1',
+      firstTrackFallbackId: 'caption-0',
+    },
+    [
+      { id: 'new-a', legacyId: 'track-0', fallbackId: 'caption-0' },
+      { id: 'new-b', legacyId: 'track-1', fallbackId: 'caption-1' },
+    ],
+  );
+
+  assert.deepEqual(patch, {});
 });
 
 test('patchSettings ignores undefined UI values instead of clearing stored state', () => {
@@ -125,6 +153,22 @@ test('buildTrackOptions recognizes a legacy index alias without clearing the sel
     { id: '', label: 'Не показывать', group: '' },
     { id: 'track-1', label: 'English (en)', group: 'Встроенные в плеер' },
   ]);
+});
+
+test('buildTrackOptions displays the persisted fallback instead of a conflicting legacy alias', () => {
+  const options = buildTrackOptions(
+    [
+      { id: 'new-a', legacyId: 'track-0', fallbackId: 'caption-0', label: 'Changed A', language: 'xx' },
+      { id: 'new-b', legacyId: 'track-1', fallbackId: 'caption-1', label: 'Changed B', language: 'yy' },
+    ],
+    [],
+    'track-1',
+    'caption-0',
+  );
+
+  assert.equal(options.find((option) => option.label.startsWith('Changed A')).id, 'track-1');
+  assert.equal(options.find((option) => option.label.startsWith('Changed B')).id, 'new-b');
+  assert.equal(options.some((option) => option.unavailable), false);
 });
 
 test('addExternalTrack rejects duplicate ids instead of replacing user data', () => {

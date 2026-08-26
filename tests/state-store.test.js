@@ -56,6 +56,31 @@ test('StateStore serializes concurrent settings patches so the last page value w
   assert.equal(storage.data[STATE_KEY].pages[PAGE_A].settings.fontSize, 36);
 });
 
+test('StateStore does not let a stale player report overwrite a newer subtitle selection fallback', async () => {
+  const storage = new MemoryStorage({}, [0, 30, 0]);
+  const store = new StateStore(storage);
+  await store.patchSettings(PAGE_A, {
+    selectedPlayerKey: 'player-key',
+    firstTrackId: 'old-track',
+    firstTrackFallbackId: 'caption-1',
+  });
+
+  const autofind = store.applySubtitleSearchResult(PAGE_A, {
+    settingsPatch: {
+      firstTrackId: 'new-track',
+      firstTrackFallbackId: 'caption-0',
+    },
+  });
+  const staleReport = store.reconcileBuiltInTrackFallbacks(PAGE_A, 'player-key', [
+    { id: 'old-track', fallbackId: 'caption-1' },
+  ]);
+  await Promise.all([autofind, staleReport]);
+
+  const state = await store.get(PAGE_A);
+  assert.equal(state.settings.firstTrackId, 'new-track');
+  assert.equal(state.settings.firstTrackFallbackId, 'caption-0');
+});
+
 test('StateStore isolates selections, files, offsets, and styles by exact page', async () => {
   const storage = new MemoryStorage({});
   const store = new StateStore(storage);
@@ -93,6 +118,17 @@ test('StateStore reading empty storage returns defaults without writing them', a
   await store.get(PAGE_A);
   await store.get(PAGE_A);
   await store.get(PAGE_B);
+
+  assert.equal(storage.writes.length, 0);
+});
+
+test('StateStore ignores fallback reports for an unselected player without writing defaults', async () => {
+  const storage = new MemoryStorage({});
+  const store = new StateStore(storage);
+
+  await store.reconcileBuiltInTrackFallbacks(PAGE_A, 'unselected-player', [
+    { id: 'builtin-en', fallbackId: 'caption-0' },
+  ]);
 
   assert.equal(storage.writes.length, 0);
 });
