@@ -1,15 +1,10 @@
 {
   "manifest_version": 3,
   "name": "SubsAnywhere",
-  "version": "0.5.0",
-  "description": "Находит две дорожки субтитров, синхронизирует их и показывает одновременно.",
+  "version": "0.6.0",
+  "description": "Показывает оригинальные субтитры и переводит слова и выражения по клику через DeepSeek.",
   "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage"],
-  "host_permissions": [
-    "https://subdl.com/*",
-    "https://api3.subdl.com/*",
-    "https://dl.subdl.com/*",
-    "https://api.deepseek.com/*"
-  ],
+  "host_permissions": ["https://api.deepseek.com/*"],
   "optional_host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js", "type": "module" },
   "action": {

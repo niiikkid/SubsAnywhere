@@ -101,6 +101,7 @@ async function makeHarness() {
   });
   document.documentElement.isConnected = true;
   const reports = [];
+  const scheduled = [];
   const onMessage = new FakeChromeEvent();
   const observers = [];
   class FakeMutationObserver {
@@ -111,7 +112,7 @@ async function makeHarness() {
   const sandbox = new FakeTarget();
   Object.assign(sandbox, {
     console,
-    setTimeout,
+    setTimeout(callback) { scheduled.push(callback); return scheduled.length; },
     clearTimeout,
     URL,
     document,
@@ -126,7 +127,7 @@ async function makeHarness() {
   });
   sandbox.window = sandbox;
   const context = vm.createContext(sandbox);
-  return { context, runtimeSource, contentSource, document, reports, onMessage, observers };
+  return { context, runtimeSource, contentSource, document, reports, onMessage, observers, scheduled };
 }
 
 test('production bootstrap re-reports after reinjection without duplicate controller listeners', async () => {
@@ -143,7 +144,7 @@ test('production bootstrap re-reports after reinjection without duplicate contro
   assert.equal(harness.document.videos[0].listenerCount(), firstListenerCount);
 });
 
-test('production content message renders built-in and imported tracks safely', async () => {
+test('production content message renders only the selected original track safely', async () => {
   const harness = await makeHarness();
   vm.runInContext(harness.runtimeSource, harness.context);
   vm.runInContext(harness.contentSource, harness.context);
@@ -151,18 +152,16 @@ test('production content message renders built-in and imported tracks safely', a
   listener({
     type: 'dualCaptions.content.fullState',
     settings: {
-      firstTrackId: 'track-0', secondTrackId: 'external:mine',
-      firstBottom: 20, secondBottom: 8, fontSize: 24, selectedPlayerKey: '',
+      secondTrackId: 'external:mine', secondBottom: 8, fontSize: 24, selectedPlayerKey: '',
     },
     externalTracks: [{ id: 'mine', name: 'Mine', offsetSeconds: 0, cues: [{ start: 1, end: 2, text: '<b>Imported</b>' }] }],
   }, {}, () => {});
 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
   assert.ok(overlay);
-  assert.equal(overlay.children[0].textContent, 'Built in');
-  assert.equal(overlay.children[1].children.map((child) => child.textContent).join(''), 'Imported');
-  assert.equal(overlay.children[0].style.bottom, '20%');
-  assert.equal(overlay.children[1].style.bottom, '8%');
+  assert.equal(overlay.children.length, 1);
+  assert.equal(overlay.children[0].children.map((child) => child.textContent).join(''), 'Imported');
+  assert.equal(overlay.children[0].style.bottom, '8%');
 });
 
 test('production turns prepared English phrases into toggled translation tooltips', async () => {
@@ -182,7 +181,7 @@ test('production turns prepared English phrases into toggled translation tooltip
 
   listener({
     type: 'dualCaptions.content.fullState',
-    settings: { firstTrackId: '', secondTrackId: 'track-0', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    settings: { secondTrackId: 'track-0', secondBottom: 8, fontSize: 24 },
     externalTracks: [],
   }, {}, () => {});
   await Promise.resolve();
@@ -190,13 +189,13 @@ test('production turns prepared English phrases into toggled translation tooltip
   await Promise.resolve();
 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
-  const phrase = overlay.children[1].children[0];
+  const phrase = overlay.children[0].children[0];
   assert.equal(phrase.textContent, 'Built');
   phrase.dispatch('click', { stopPropagation() {} });
   assert.equal(overlay.children.at(-1).children[1].textContent, 'Обычно: строить');
 
   phrase.dispatch('click', { stopPropagation() {} });
-  assert.equal(overlay.children.length, 2);
+  assert.equal(overlay.children.length, 1);
 });
 
 test('production makes the original caption clickable while its translation is loading', async () => {
@@ -211,12 +210,12 @@ test('production makes the original caption clickable while its translation is l
   const listener = [...harness.onMessage.listeners][0];
   listener({
     type: 'dualCaptions.content.fullState',
-    settings: { firstTrackId: '', secondTrackId: 'track-0', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    settings: { secondTrackId: 'track-0', secondBottom: 8, fontSize: 24 },
     externalTracks: [],
   }, {}, () => {});
 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
-  const token = overlay.children[1].children[0];
+  const token = overlay.children[0].children[0];
   assert.equal(token.textContent, 'Built');
   token.dispatch('click', { stopPropagation() {} });
   assert.equal(overlay.children.at(-1).children[1].textContent, 'Обычно: Перевод готовится…');
@@ -234,7 +233,7 @@ test('production keeps original caption tokens clickable when AI returns no phra
   const listener = [...harness.onMessage.listeners][0];
   listener({
     type: 'dualCaptions.content.fullState',
-    settings: { firstTrackId: '', secondTrackId: 'track-0', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    settings: { secondTrackId: 'track-0', secondBottom: 8, fontSize: 24 },
     externalTracks: [],
   }, {}, () => {});
   await Promise.resolve();
@@ -242,7 +241,7 @@ test('production keeps original caption tokens clickable when AI returns no phra
   await Promise.resolve();
 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
-  const token = overlay.children[1].children[0];
+  const token = overlay.children[0].children[0];
   assert.equal(token.textContent, 'Built');
   assert.equal(token.listeners.get('click')?.size, 1);
 });
@@ -258,12 +257,43 @@ test('production always prepares the selected original second track for translat
 
   listener({
     type: 'dualCaptions.content.fullState',
-    settings: { firstTrackId: '', secondTrackId: 'track-0', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    settings: { secondTrackId: 'track-0', secondBottom: 8, fontSize: 24 },
     externalTracks: [],
   }, {}, () => {});
   await Promise.resolve();
 
   assert.equal(harness.reports.some((message) => message.type === 'dualCaptions.caption.translate'), true);
+});
+
+test('production prepares the next three original captions before they appear', async () => {
+  const harness = await makeHarness();
+  harness.document.videos[0].textTracks[0].activeCues = [{ text: 'Current line' }];
+  harness.document.videos[0].textTracks[0].cues = [
+    { startTime: 1, endTime: 2, text: 'Current line' },
+    { startTime: 5, endTime: 6, text: 'First next' },
+    { startTime: 10, endTime: 11, text: 'Second next' },
+    { startTime: 15, endTime: 16, text: 'Third next' },
+  ];
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'track-0', secondBottom: 8, fontSize: 24 },
+    externalTracks: [],
+  }, {}, () => {});
+  for (let index = 0; index < 3; index += 1) {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    harness.scheduled.shift()?.();
+  }
+
+  assert.deepEqual(
+    harness.reports.filter((message) => message.type === 'dualCaptions.caption.translate').map((message) => message.text),
+    ['Current line', 'First next', 'Second next', 'Third next'],
+  );
 });
 
 test('production recognizes English metadata used by Russian players', async () => {
@@ -277,7 +307,7 @@ test('production recognizes English metadata used by Russian players', async () 
 
   listener({
     type: 'dualCaptions.content.fullState',
-    settings: { firstTrackId: '', secondTrackId: 'track-0', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    settings: { secondTrackId: 'track-0', secondBottom: 8, fontSize: 24 },
     externalTracks: [],
   }, {}, () => {});
   await Promise.resolve();
@@ -296,7 +326,7 @@ test('production keeps a selected built-in track when the player recreates it du
   const selectedId = harness.context.DualCaptionsContentRuntime.trackChoices(video.textTracks)[0].id;
   listener({
     type: 'dualCaptions.content.fullState',
-    settings: { firstTrackId: selectedId, secondTrackId: '', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    settings: { secondTrackId: selectedId, secondBottom: 8, fontSize: 24 },
     externalTracks: [],
   }, {}, () => {});
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
@@ -309,7 +339,7 @@ test('production keeps a selected built-in track when the player recreates it du
   video.textTracks.dispatch('removetrack', { track: originalTrack });
   video.textTracks.dispatch('addtrack', { track: recreatedTrack });
 
-  assert.equal(overlay.children[0].textContent, 'After switch');
+  assert.equal(overlay.children[0].children.map((child) => child.textContent).join(''), 'After switch');
   assert.equal(originalTrack.mode, 'disabled');
 });
 
@@ -333,11 +363,8 @@ test('production restores a built-in track after an audio switch recreates the p
   listener({
     type: 'dualCaptions.content.fullState',
     settings: {
-      firstTrackId: selected.id,
-      firstTrackFallbackId: selected.fallbackId,
-      secondTrackId: '',
-      secondTrackFallbackId: '',
-      firstBottom: 20,
+      secondTrackId: selected.id,
+      secondTrackFallbackId: selected.fallbackId,
       secondBottom: 8,
       fontSize: 24,
     },
@@ -345,7 +372,7 @@ test('production restores a built-in track after an audio switch recreates the p
   }, {}, () => {});
 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
-  assert.equal(overlay.children[0].textContent, 'After context reload');
+  assert.equal(overlay.children[0].children.map((child) => child.textContent).join(''), 'After context reload');
 });
 
 test('production late built-in track report keeps the bound video reference', async () => {
@@ -367,7 +394,7 @@ test('production overlay moves inside a fullscreen player container and returns 
   const listener = [...harness.onMessage.listeners][0];
   listener({
     type: 'dualCaptions.content.fullState',
-    settings: { firstTrackId: 'track-0', secondTrackId: '', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    settings: { secondTrackId: 'track-0', secondBottom: 8, fontSize: 24 },
     externalTracks: [],
   }, {}, () => {});
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
@@ -390,7 +417,7 @@ test('production overlay text changes do not trigger a discovery-report loop', a
   const listener = [...harness.onMessage.listeners][0];
   listener({
     type: 'dualCaptions.content.fullState',
-    settings: { firstTrackId: 'track-0', secondTrackId: '', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    settings: { secondTrackId: 'track-0', secondBottom: 8, fontSize: 24 },
     externalTracks: [],
   }, {}, () => {});
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
@@ -423,20 +450,6 @@ test('production mutation discovery detaches listeners from a replaced video', a
   assert.ok(second.listenerCount() > 0);
 });
 
-test('production returns only a bounded sample from a built-in track', async () => {
-  const harness = await makeHarness();
-  vm.runInContext(harness.runtimeSource, harness.context);
-  vm.runInContext(harness.contentSource, harness.context);
-  const listener = [...harness.onMessage.listeners][0];
-  const selectedId = harness.context.DualCaptionsContentRuntime.trackChoices(harness.document.videos[0].textTracks)[0].id;
-  let response;
-
-  listener({ type: 'dualCaptions.content.sampleTrack', trackId: selectedId, limit: 3 }, {}, (value) => { response = value; });
-
-  assert.equal(response.ok, true);
-  assert.equal(response.cues.length, 3);
-  assert.equal(response.cues[0].text, 'Built in');
-});
 
 test('production reset clears page subtitles and restores native track mode', async () => {
   const harness = await makeHarness();
@@ -446,7 +459,7 @@ test('production reset clears page subtitles and restores native track mode', as
   const video = harness.document.videos[0];
   listener({
     type: 'dualCaptions.content.fullState',
-    settings: { firstTrackId: 'track-0', secondTrackId: '', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    settings: { secondTrackId: 'track-0', secondBottom: 8, fontSize: 24 },
     externalTracks: [],
   }, {}, () => {});
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');

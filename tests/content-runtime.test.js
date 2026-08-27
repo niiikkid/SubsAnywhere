@@ -209,15 +209,6 @@ test('runtime applies AI speed correction without rewriting cue times', async ()
   assert.equal(runtime.cueTextAt(cues, 12, 0, 2), '');
 });
 
-test('runtime samples a native TextTrack without returning the whole file', async () => {
-  const runtime = await loadRuntime();
-  const cues = Array.from({ length: 100 }, (_, index) => ({ startTime: index, endTime: index + 0.5, text: `Line ${index}` }));
-  const samples = runtime.sampleTextTrack({ cues }, 12);
-
-  assert.equal(samples.length, 12);
-  assert.ok(samples[0].start > 0);
-  assert.ok(samples.at(-1).start < 100);
-});
 
 test('runtime indexed cue lookup preserves overlapping subtitles', async () => {
   const runtime = await loadRuntime();
@@ -228,6 +219,23 @@ test('runtime indexed cue lookup preserves overlapping subtitles', async () => {
 
   assert.equal(runtime.cueTextAt(cues, 2.5), 'Long cue\nShort cue');
   assert.equal(runtime.cueTextAt(cues, 8), 'Long cue');
+});
+
+test('runtime returns the next three unique subtitle lines within a 30-second lookahead', async () => {
+  const runtime = await loadRuntime();
+  const cues = [
+    { startTime: 8, endTime: 10, text: 'Current line' },
+    { startTime: 12, endTime: 14, text: '<i>First next</i>' },
+    { startTime: 18, endTime: 20, text: 'Second next' },
+    { startTime: 25, endTime: 27, text: 'Second next' },
+    { startTime: 31, endTime: 33, text: 'Third next' },
+    { startTime: 45, endTime: 47, text: 'Too far away' },
+  ];
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(runtime.upcomingCueTexts(cues, 9, { seconds: 30, limit: 3 }))),
+    ['First next', 'Second next', 'Third next'],
+  );
 });
 
 test('runtime reuses an indexed cue lookup instead of rescanning a large SRT', async () => {
@@ -294,19 +302,16 @@ test('runtime normalizes settings at the content-script boundary', async () => {
 
   assert.deepEqual(
     { ...runtime.normalizeSettings({
-      firstTrackId: 'saved',
-      firstTrackFallbackId: 'caption-1',
-      firstBottom: 200,
+      secondTrackId: 'saved',
+      secondTrackFallbackId: 'caption-1',
+      secondBottom: 200,
       fontSize: '31',
       selectedPlayerKey: 'player',
     }) },
     {
-      firstTrackId: 'saved',
-      firstTrackFallbackId: 'caption-1',
-      secondTrackId: '',
-      secondTrackFallbackId: '',
-      firstBottom: 95,
-      secondBottom: 5,
+      secondTrackId: 'saved',
+      secondTrackFallbackId: 'caption-1',
+      secondBottom: 95,
       fontSize: 31,
       selectedPlayerKey: 'player',
     },

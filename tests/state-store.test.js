@@ -27,7 +27,7 @@ class MemoryStorage {
 
 test('StateStore preserves legacy data for recovery but never leaks it into a new page', async () => {
   const storage = new MemoryStorage({
-    dualCaptionsSettings: { firstTrackId: 'track-1', fontSize: 28 },
+    dualCaptionsSettings: { secondTrackId: 'track-1', fontSize: 28 },
     dualCaptionsExternalTracks: [{ id: 'old', name: 'Old', cues: [{ start: 0, end: 1, text: 'Old' }] }],
   });
   const store = new StateStore(storage);
@@ -35,9 +35,9 @@ test('StateStore preserves legacy data for recovery but never leaks it into a ne
   const state = await store.get(PAGE_A);
   const root = await store.getRootForTests();
 
-  assert.equal(state.settings.firstTrackId, '');
+  assert.equal(state.settings.secondTrackId, '');
   assert.equal(state.externalTracks.length, 0);
-  assert.equal(root.legacyState.settings.firstTrackId, 'track-1');
+  assert.equal(root.legacyState.settings.secondTrackId, 'track-1');
   assert.equal(root.legacyState.externalTracks[0].id, 'old');
   assert.equal(storage.writes.length, 1);
 });
@@ -56,30 +56,6 @@ test('StateStore serializes concurrent settings patches so the last page value w
   assert.equal(storage.data[STATE_KEY].pages[PAGE_A].settings.fontSize, 36);
 });
 
-test('StateStore does not let a stale player report overwrite a newer subtitle selection fallback', async () => {
-  const storage = new MemoryStorage({}, [0, 30, 0]);
-  const store = new StateStore(storage);
-  await store.patchSettings(PAGE_A, {
-    selectedPlayerKey: 'player-key',
-    firstTrackId: 'old-track',
-    firstTrackFallbackId: 'caption-1',
-  });
-
-  const autofind = store.applySubtitleSearchResult(PAGE_A, {
-    settingsPatch: {
-      firstTrackId: 'new-track',
-      firstTrackFallbackId: 'caption-0',
-    },
-  });
-  const staleReport = store.reconcileBuiltInTrackFallbacks(PAGE_A, 'player-key', [
-    { id: 'old-track', fallbackId: 'caption-1' },
-  ]);
-  await Promise.all([autofind, staleReport]);
-
-  const state = await store.get(PAGE_A);
-  assert.equal(state.settings.firstTrackId, 'new-track');
-  assert.equal(state.settings.firstTrackFallbackId, 'caption-0');
-});
 
 test('StateStore isolates selections, files, offsets, and styles by exact page', async () => {
   const storage = new MemoryStorage({});
@@ -87,15 +63,15 @@ test('StateStore isolates selections, files, offsets, and styles by exact page',
   const track = { id: 'one', name: 'Episode one', cues: [{ start: 0, end: 1, text: 'Hi' }] };
 
   await store.addExternalTrack(PAGE_A, track);
-  await store.patchSettings(PAGE_A, { firstTrackId: 'external:one', firstBottom: 31 });
+  await store.patchSettings(PAGE_A, { secondTrackId: 'external:one', secondBottom: 31 });
   const first = await store.get(PAGE_A);
   const second = await store.get(PAGE_B);
 
-  assert.equal(first.settings.firstTrackId, 'external:one');
-  assert.equal(first.settings.firstBottom, 31);
+  assert.equal(first.settings.secondTrackId, 'external:one');
+  assert.equal(first.settings.secondBottom, 31);
   assert.equal(first.externalTracks.length, 1);
-  assert.equal(second.settings.firstTrackId, '');
-  assert.equal(second.settings.firstBottom, 14);
+  assert.equal(second.settings.secondTrackId, '');
+  assert.equal(second.settings.secondBottom, 5);
   assert.equal(second.externalTracks.length, 0);
 });
 
@@ -104,11 +80,11 @@ test('StateStore keeps the last value after a rapid burst of slider updates', as
   const store = new StateStore(storage);
   await store.get(PAGE_A);
 
-  await Promise.all(Array.from({ length: 100 }, (_, index) => store.patchSettings(PAGE_A, { firstBottom: index })));
+  await Promise.all(Array.from({ length: 100 }, (_, index) => store.patchSettings(PAGE_A, { secondBottom: index })));
 
   const state = await store.get(PAGE_A);
-  assert.equal(state.settings.firstBottom, 95);
-  assert.equal(storage.data[STATE_KEY].pages[PAGE_A].settings.firstBottom, 95);
+  assert.equal(state.settings.secondBottom, 95);
+  assert.equal(storage.data[STATE_KEY].pages[PAGE_A].settings.secondBottom, 95);
 });
 
 test('StateStore reading empty storage returns defaults without writing them', async () => {

@@ -69,6 +69,29 @@
       .join('\n');
   }
 
+  function upcomingCueTexts(cues, videoTime, options = {}) {
+    const now = Number(videoTime);
+    const seconds = Number(options.seconds);
+    const limit = Number(options.limit);
+    if (!Number.isFinite(now) || !Number.isFinite(seconds) || seconds <= 0 || !Number.isInteger(limit) || limit <= 0) return [];
+    const latestStart = now + seconds;
+    const unique = new Set();
+    return Array.from(cues ?? [])
+      .map((cue) => ({
+        start: Number(cue?.startTime ?? cue?.start),
+        text: cleanSubtitleText(cue?.text),
+      }))
+      .filter((cue) => Number.isFinite(cue.start) && cue.start > now && cue.start <= latestStart && cue.text)
+      .sort((left, right) => left.start - right.start)
+      .filter((cue) => {
+        if (unique.has(cue.text)) return false;
+        unique.add(cue.text);
+        return true;
+      })
+      .slice(0, limit)
+      .map((cue) => cue.text);
+  }
+
   function isCaptionTrack(track) {
     return track?.kind === 'subtitles' || track?.kind === 'captions';
   }
@@ -161,26 +184,6 @@
     return lines.join('\n');
   }
 
-  function sampleTextTrack(track, limit = 24) {
-    const cues = Array.from(track?.cues ?? [])
-      .map((cue) => ({
-        start: Number(cue.startTime ?? cue.start),
-        end: Number(cue.endTime ?? cue.end),
-        text: cleanSubtitleText(cue.text),
-      }))
-      .filter((cue) => Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.end > cue.start && cue.text);
-    if (!cues.length) return [];
-    const maximum = Math.max(3, Math.min(40, Number(limit) || 24));
-    if (cues.length <= maximum) return cues;
-    const samples = [];
-    const first = Math.floor(cues.length * 0.05);
-    const last = Math.max(first, Math.floor(cues.length * 0.95) - 1);
-    for (let position = 0; position < maximum; position += 1) {
-      const index = Math.round(first + ((last - first) * position) / Math.max(1, maximum - 1));
-      if (cues[index] && samples.at(-1) !== cues[index]) samples.push(cues[index]);
-    }
-    return samples;
-  }
 
   function normalizeSettings(value = {}) {
     const bounded = (number, low, high, fallback) => {
@@ -188,11 +191,8 @@
       return Number.isFinite(parsed) ? Math.min(high, Math.max(low, parsed)) : fallback;
     };
     return {
-      firstTrackId: typeof value.firstTrackId === 'string' ? value.firstTrackId : '',
-      firstTrackFallbackId: typeof value.firstTrackFallbackId === 'string' ? value.firstTrackFallbackId : '',
       secondTrackId: typeof value.secondTrackId === 'string' ? value.secondTrackId : '',
       secondTrackFallbackId: typeof value.secondTrackFallbackId === 'string' ? value.secondTrackFallbackId : '',
-      firstBottom: bounded(value.firstBottom, 0, 95, 14),
       secondBottom: bounded(value.secondBottom, 0, 95, 5),
       fontSize: bounded(value.fontSize, 12, 48, 22),
       selectedPlayerKey: typeof value.selectedPlayerKey === 'string' ? value.selectedPlayerKey : '',
@@ -328,7 +328,9 @@
     installController,
     mutationsAffectVideo,
     normalizeSettings,
-    sampleTextTrack,
+
+    upcomingCueTexts,
+
     trackChoices,
   });
 })(globalThis);

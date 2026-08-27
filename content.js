@@ -8,7 +8,7 @@
     CONTENT_FULL_STATE: 'dualCaptions.content.fullState',
     CONTENT_SETTINGS: 'dualCaptions.content.settings',
     CONTENT_TRACKS: 'dualCaptions.content.tracks',
-    CONTENT_SAMPLE_TRACK: 'dualCaptions.content.sampleTrack',
+
     CONTENT_RESET: 'dualCaptions.content.reset',
   });
   function createController() {
@@ -17,7 +17,6 @@
       settings: runtime.normalizeSettings(),
       externalTracks: [],
       root: null,
-      first: null,
       second: null,
       tooltip: null,
       tooltipItem: null,
@@ -30,10 +29,13 @@
     const translationCache = new Map();
     const maxCachedTranslations = 80;
     const maxTranslationRequests = 120;
+    const maxQueuedTranslations = 3;
     let translationRequests = 0;
     let translationInFlight = false;
-    let queuedTranslation = '';
+    const queuedTranslations = [];
+    const queuedTranslationSet = new Set();
     let lastTranslationAt = 0;
+    let translationDispatchScheduled = false;
 
 
 
@@ -50,8 +52,7 @@
         root.append(element);
         return element;
       };
-      state.first = makeLayer('dual-captions-first');
-      state.second = makeLayer('dual-captions-second');
+      state.second = makeLayer('subs-anywhere-original');
       state.second.style.pointerEvents = 'auto';
       document.documentElement.append(root);
       state.root = root;
@@ -123,31 +124,60 @@
       while (translationCache.size > maxCachedTranslations) translationCache.delete(translationCache.keys().next().value);
     }
 
-    function requestTranslation(text) {
-      if (translationCache.has(text) || queuedTranslation === text || translationRequests >= maxTranslationRequests) return;
-      queuedTranslation = text;
-      if (translationInFlight) return;
+    function requestTranslation(text, priority = false) {
+      if (!text || translationCache.has(text) || queuedTranslationSet.has(text) || translationRequests >= maxTranslationRequests) return;
+      if (queuedTranslations.length >= maxQueuedTranslations) {
+        if (!priority) return;
+        const displaced = queuedTranslations.pop();
+        if (displaced) queuedTranslationSet.delete(displaced);
+      }
+      if (priority) queuedTranslations.unshift(text);
+      else queuedTranslations.push(text);
+      queuedTranslationSet.add(text);
+      pumpTranslations();
+    }
+
+    function pumpTranslations() {
+      if (translationInFlight || translationDispatchScheduled || !queuedTranslations.length || translationRequests >= maxTranslationRequests) return;
       const run = () => {
-        const nextText = queuedTranslation;
-        queuedTranslation = '';
+        translationDispatchScheduled = false;
+        if (translationInFlight) return;
+        const nextText = queuedTranslations.shift();
+        if (nextText) queuedTranslationSet.delete(nextText);
         if (!nextText || translationRequests >= maxTranslationRequests) return;
         translationInFlight = true;
         translationRequests += 1;
         lastTranslationAt = Date.now();
         chrome.runtime.sendMessage({ type: 'dualCaptions.caption.translate', text: nextText })
-          .then((response) => rememberTranslation(nextText, Array.isArray(response?.data?.items) ? response.data.items : []))
-          .catch(() => rememberTranslation(nextText, []))
+          .then((response) => {
+            if (response?.ok === true && Array.isArray(response?.data?.items)) rememberTranslation(nextText, response.data.items);
+          })
+          .catch(() => undefined)
           .finally(() => {
             translationInFlight = false;
             render();
-            const queued = queuedTranslation;
-            queuedTranslation = '';
-            if (queued) requestTranslation(queued);
+            pumpTranslations();
           });
       };
       const delay = Math.max(0, 750 - (Date.now() - lastTranslationAt));
-      if (delay) setTimeout(run, delay);
+      if (delay) {
+        translationDispatchScheduled = true;
+        setTimeout(run, delay);
+      }
       else run();
+    }
+
+    function futureCaptionTexts(id, fallbackId, video) {
+      if (!id) return [];
+      if (id.startsWith('external:')) {
+        const external = state.externalTracks.find((track) => `external:${track.id}` === id);
+        if (!external) return [];
+        const scale = Number(external.timeScale) > 0 ? Number(external.timeScale) : 1;
+        const sourceTime = (video.currentTime - Number(external.offsetSeconds || 0)) / scale;
+        return runtime.upcomingCueTexts(external.cues, sourceTime, { seconds: 30 / scale, limit: 3 });
+      }
+      const track = builtInTrackResolver.find(video.textTracks, id, fallbackId);
+      return runtime.upcomingCueTexts(track?.cues, video.currentTime, { seconds: 30, limit: 3 });
     }
 
     function renderInteractiveCaption(text, isEnglish) {
@@ -167,7 +197,7 @@
       }
       if (!items || !items.length) {
         renderPendingCaption(text);
-        if (!items) requestTranslation(text);
+        if (!items) requestTranslation(text, true);
         return;
       }
       for (const segment of runtime.captionSegments(text, items)) {
@@ -249,20 +279,16 @@
           track.mode = 'hidden';
         }
       }
-      state.first.textContent = selectedText(
-        state.settings.firstTrackId,
-        state.settings.firstTrackFallbackId,
-        video,
-      );
       const secondText = selectedText(
         state.settings.secondTrackId,
         state.settings.secondTrackFallbackId,
         video,
       );
       renderInteractiveCaption(secondText, true);
-      state.first.style.bottom = `${state.settings.firstBottom}%`;
+      for (const text of futureCaptionTexts(state.settings.secondTrackId, state.settings.secondTrackFallbackId, video)) {
+        requestTranslation(text);
+      }
       state.second.style.bottom = `${state.settings.secondBottom}%`;
-      state.first.style.fontSize = `${state.settings.fontSize}px`;
       state.second.style.fontSize = `${state.settings.fontSize}px`;
       positionOverlay();
     }
@@ -316,19 +342,7 @@
         render();
         return { ok: true };
       }
-      if (message?.type === MESSAGE.CONTENT_SAMPLE_TRACK) {
-        const { video } = manager.current();
-        if (!video) return { ok: false, error: 'Плеер больше недоступен' };
-        const track = builtInTrackResolver.find(video.textTracks, message.trackId);
-        if (!track) return { ok: false, error: 'Встроенная дорожка больше недоступна' };
-        if (!originalTrackModes.has(track)) originalTrackModes.set(track, track.mode);
-        track.mode = 'hidden';
-        return {
-          ok: true,
-          cues: runtime.sampleTextTrack(track, message.limit ?? 24),
-          duration: Number.isFinite(video.duration) ? video.duration : null,
-        };
-      }
+
       if (message?.type === MESSAGE.CONTENT_RESET) {
         const { video } = manager.current();
         restoreModes(video);
@@ -337,7 +351,6 @@
         state.active = false;
         state.renderedCaptionKey = '';
         state.renderedCaptionItems = null;
-        if (state.first) state.first.textContent = '';
         if (state.second) state.second.textContent = '';
         dismissTooltip();
         if (state.root) state.root.style.display = 'none';

@@ -16,7 +16,7 @@ import {
   updateExternalTrackOffset,
 } from '../state-core.js';
 
-test('migrateStoredState converts legacy keys without losing selections or files', () => {
+test('migrateStoredState keeps the original selection and drops the removed first track', () => {
   const legacyTrack = { id: 'abc', name: 'English', cues: [{ start: 1, end: 2, text: 'Hi' }], offsetSeconds: 1.5 };
   const state = migrateStoredState({
     dualCaptionsSettings: {
@@ -30,38 +30,52 @@ test('migrateStoredState converts legacy keys without losing selections or files
   });
 
   assert.equal(state.schemaVersion, SCHEMA_VERSION);
-  assert.equal(state.settings.firstTrackId, 'track-1');
+  assert.equal(state.settings.firstTrackId, undefined);
   assert.equal(state.settings.secondTrackId, 'external:abc');
   assert.deepEqual(state.externalTracks, [{ ...legacyTrack, language: '', timeScale: 1 }]);
+});
+
+test('migrateStoredState promotes a lone legacy first track to the original selection', () => {
+  const state = migrateStoredState({
+    dualCaptionsSettings: {
+      firstTrackId: 'external:legacy-original',
+      firstTrackFallbackId: 'caption-2',
+      firstBottom: 22,
+    },
+  });
+
+  assert.equal(state.settings.secondTrackId, 'external:legacy-original');
+  assert.equal(state.settings.secondTrackFallbackId, 'caption-2');
+  assert.equal(state.settings.secondBottom, 22);
 });
 
 test('normalizeState preserves a temporarily unavailable selected track id', () => {
   const state = normalizeState({
     schemaVersion: SCHEMA_VERSION,
-    settings: { ...DEFAULT_STATE.settings, firstTrackId: 'track-not-loaded-yet' },
+    settings: { ...DEFAULT_STATE.settings, secondTrackId: 'track-not-loaded-yet' },
     externalTracks: [],
   });
 
-  assert.equal(state.settings.firstTrackId, 'track-not-loaded-yet');
+  assert.equal(state.settings.secondTrackId, 'track-not-loaded-yet');
 });
 
 test('built-in selections persist a recovery position before the player context is replaced', () => {
   const patch = builtInTrackFallbackPatch(
-    { firstTrackId: 'builtin-en', secondTrackId: 'external:ru' },
+    { secondTrackId: 'builtin-en' },
     [
       { id: 'builtin-ru', fallbackId: 'caption-0' },
       { id: 'builtin-en', fallbackId: 'caption-1' },
     ],
   );
 
-  assert.deepEqual(patch, { firstTrackFallbackId: 'caption-1' });
+  assert.deepEqual(patch, { secondTrackFallbackId: 'caption-1' });
 });
 
 test('a legacy track index cannot overwrite an existing recovery position after recreation', () => {
   const patch = builtInTrackFallbackPatch(
     {
-      firstTrackId: 'track-1',
-      firstTrackFallbackId: 'caption-0',
+      secondTrackId: 'track-1',
+      secondTrackFallbackId: 'caption-0',
     },
     [
       { id: 'new-a', legacyId: 'track-0', fallbackId: 'caption-0' },
@@ -75,12 +89,12 @@ test('a legacy track index cannot overwrite an existing recovery position after 
 test('patchSettings ignores undefined UI values instead of clearing stored state', () => {
   const state = normalizeState({
     ...DEFAULT_STATE,
-    settings: { ...DEFAULT_STATE.settings, firstTrackId: 'track-1', fontSize: 24 },
+    settings: { ...DEFAULT_STATE.settings, secondTrackId: 'track-1', fontSize: 24 },
   });
 
-  const next = patchSettings(state, { firstTrackId: undefined, fontSize: 30, unknown: 'ignored' });
+  const next = patchSettings(state, { secondTrackId: undefined, fontSize: 30, unknown: 'ignored' });
 
-  assert.equal(next.settings.firstTrackId, 'track-1');
+  assert.equal(next.settings.secondTrackId, 'track-1');
   assert.equal(next.settings.fontSize, 30);
   assert.equal(next.settings.unknown, undefined);
 });
@@ -114,7 +128,7 @@ test('migrateStoredState refuses a newer schema instead of destroying it', () =>
 test('removeExternalTrack clears only selections that explicitly reference the removed file', () => {
   const state = normalizeState({
     ...DEFAULT_STATE,
-    settings: { ...DEFAULT_STATE.settings, firstTrackId: 'track-0', secondTrackId: 'external:gone' },
+    settings: { ...DEFAULT_STATE.settings, secondTrackId: 'external:gone' },
     externalTracks: [
       { id: 'gone', name: 'Gone', cues: [{ start: 0, end: 1, text: 'A' }], offsetSeconds: 0 },
       { id: 'keep', name: 'Keep', cues: [{ start: 0, end: 1, text: 'B' }], offsetSeconds: 0 },
@@ -123,7 +137,6 @@ test('removeExternalTrack clears only selections that explicitly reference the r
 
   const next = removeExternalTrack(state, 'gone');
 
-  assert.equal(next.settings.firstTrackId, 'track-0');
   assert.equal(next.settings.secondTrackId, '');
   assert.deepEqual(next.externalTracks.map((track) => track.id), ['keep']);
 });
@@ -197,23 +210,23 @@ test('updateExternalTrackOffset clamps offset and leaves other files untouched',
 
 test('scoped root keeps two page states independent', () => {
   let root = migrateStoredRoot({});
-  root = setPageStateInRoot(root, 'https://example.test/one', patchSettings(normalizeState({}), { firstTrackId: 'one' }));
-  root = setPageStateInRoot(root, 'https://example.test/two', patchSettings(normalizeState({}), { firstTrackId: 'two' }));
+  root = setPageStateInRoot(root, 'https://example.test/one', patchSettings(normalizeState({}), { secondTrackId: 'one' }));
+  root = setPageStateInRoot(root, 'https://example.test/two', patchSettings(normalizeState({}), { secondTrackId: 'two' }));
 
-  assert.equal(pageStateFromRoot(root, 'https://example.test/one').settings.firstTrackId, 'one');
-  assert.equal(pageStateFromRoot(root, 'https://example.test/two').settings.firstTrackId, 'two');
-  assert.equal(pageStateFromRoot(root, 'https://example.test/new').settings.firstTrackId, '');
+  assert.equal(pageStateFromRoot(root, 'https://example.test/one').settings.secondTrackId, 'one');
+  assert.equal(pageStateFromRoot(root, 'https://example.test/two').settings.secondTrackId, 'two');
+  assert.equal(pageStateFromRoot(root, 'https://example.test/new').settings.secondTrackId, '');
 });
 
 test('legacy global state is retained as an orphan but not assigned to arbitrary pages', () => {
   const root = migrateStoredRoot({
     dualCaptionsState: {
       schemaVersion: 1,
-      settings: { firstTrackId: 'wrong-episode' },
+      settings: { secondTrackId: 'wrong-episode' },
       externalTracks: [],
     },
   });
 
-  assert.equal(root.legacyState.settings.firstTrackId, 'wrong-episode');
-  assert.equal(pageStateFromRoot(root, 'https://example.test/fresh').settings.firstTrackId, '');
+  assert.equal(root.legacyState.settings.secondTrackId, 'wrong-episode');
+  assert.equal(pageStateFromRoot(root, 'https://example.test/fresh').settings.secondTrackId, '');
 });

@@ -85,7 +85,6 @@ export class BackgroundController {
   #registry;
   #credentialStore;
   #deepSeek;
-  #subtitleFinder;
   #discoveryTimeoutMs;
   #discoveryQuietMs;
   #contentRegistration;
@@ -97,7 +96,6 @@ export class BackgroundController {
     this.#registry = options.registry ?? new PlayerRegistry();
     this.#credentialStore = options.credentialStore;
     this.#deepSeek = options.deepSeek;
-    this.#subtitleFinder = options.subtitleFinder;
     this.#discoveryTimeoutMs = options.discoveryTimeoutMs ?? 1500;
     this.#discoveryQuietMs = options.discoveryQuietMs ?? 75;
   }
@@ -151,8 +149,7 @@ export class BackgroundController {
               timeScale: message.timeScale,
             })
           )));
-        case MESSAGE.SUBTITLE_FIND:
-          return ok(await this.#findSubtitles(message, this.#pageKey(message, sender)));
+
         case MESSAGE.AI_CONFIG_GET:
           if (!this.#credentialStore) throw new Error('DeepSeek пока недоступен');
           return ok(await this.#credentialStore.publicInfo());
@@ -293,39 +290,6 @@ export class BackgroundController {
     return { state, delivered };
   }
 
-  async #findSubtitles(message, pageKey) {
-    if (!this.#subtitleFinder) throw new Error('Автопоиск пока недоступен');
-    await this.#adoptPage(message.tabId, pageKey);
-    const current = await this.#store.get(pageKey);
-    const player = this.players(message.tabId).find((item) => item.key === current.settings.selectedPlayerKey)
-      ?? this.players(message.tabId).find((item) => item.frameId === message.frameId)
-      ?? this.players(message.tabId)[0];
-    if (!player) throw new Error('Сначала подключитесь к плееру');
-    const result = await this.#subtitleFinder.find({
-      media: message.media ?? {},
-      player,
-      aiOptions: message.aiOptions ?? {
-        model: current.settings.aiModel,
-        reasoningEffort: current.settings.reasoningEffort,
-      },
-      getBuiltInSamples: async (trackId) => {
-        const response = await this.#request(message.tabId, player.frameId, {
-          type: MESSAGE.CONTENT_SAMPLE_TRACK,
-          trackId,
-          limit: 30,
-        });
-        if (!response?.ok) throw new Error(response?.error || 'Плеер не вернул строки субтитров');
-        return Array.isArray(response.cues) ? response.cues : [];
-      },
-    });
-    const state = await this.#store.applySubtitleSearchResult(pageKey, result);
-    const delivered = await this.#send(message.tabId, player.frameId, {
-      type: MESSAGE.CONTENT_FULL_STATE,
-      settings: state.settings,
-      externalTracks: state.externalTracks,
-    });
-    return { state, summary: result.summary, delivered };
-  }
 
   async #translateCaption(message) {
     if (!this.#deepSeek) throw new Error('DeepSeek пока недоступен');

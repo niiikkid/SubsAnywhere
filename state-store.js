@@ -1,6 +1,5 @@
 import {
   addExternalTrack,
-  applySubtitleSearchResult,
   builtInTrackFallbackPatch,
   cloneRootState,
   cloneState,
@@ -64,7 +63,6 @@ export class StateStore {
       const selectedPlayer = players.find((player) => player?.key === next.settings.selectedPlayerKey);
       const replaceLegacyFallback = [
         ['selectedPlayerKey', state.settings.selectedPlayerKey],
-        ['firstTrackId', state.settings.firstTrackId],
         ['secondTrackId', state.settings.secondTrackId],
       ].some(([key, previous]) => Object.hasOwn(patch, key) && patch[key] !== previous);
       const fallbackPatch = builtInTrackFallbackPatch(
@@ -92,9 +90,6 @@ export class StateStore {
     return this.#mutatePage(pageKey, (state) => updateExternalTrackTiming(state, id, timing));
   }
 
-  applySubtitleSearchResult(pageKey, result) {
-    return this.#mutatePage(pageKey, (state) => applySubtitleSearchResult(state, result));
-  }
 
   reconcileBuiltInTrackFallbacks(pageKey, playerKey, playerTracks) {
     return this.#mutatePage(pageKey, (state) => {

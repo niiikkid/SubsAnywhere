@@ -1,23 +1,13 @@
-import { DEEPSEEK_MODELS, REASONING_EFFORTS } from './ai-client.js';
-
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const DEFAULT_STATE = Object.freeze({
   schemaVersion: SCHEMA_VERSION,
   settings: Object.freeze({
-    firstTrackId: '',
-    firstTrackFallbackId: '',
     secondTrackId: '',
     secondTrackFallbackId: '',
-    firstBottom: 14,
     secondBottom: 5,
     fontSize: 22,
     selectedPlayerKey: '',
-    mediaTitle: '',
-    mediaSeason: null,
-    mediaEpisode: null,
-    aiModel: DEEPSEEK_MODELS[0],
-    reasoningEffort: REASONING_EFFORTS[0],
   }),
   externalTracks: Object.freeze([]),
 });
@@ -28,19 +18,11 @@ export const DEFAULT_ROOT_STATE = Object.freeze({
 });
 
 const SETTING_KEYS = new Set([
-  'firstTrackId',
-  'firstTrackFallbackId',
   'secondTrackId',
   'secondTrackFallbackId',
-  'firstBottom',
   'secondBottom',
   'fontSize',
   'selectedPlayerKey',
-  'mediaTitle',
-  'mediaSeason',
-  'mediaEpisode',
-  'aiModel',
-  'reasoningEffort',
 ]);
 
 const clone = (value) => structuredClone(value);
@@ -50,11 +32,6 @@ function bounded(value, minimum, maximum, fallback) {
   return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
 }
 
-function nullableInteger(value, minimum, maximum) {
-  if (value === '' || value === null || value === undefined) return null;
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : null;
-}
 
 function normalizeTrack(track) {
   if (!track || typeof track.id !== 'string' || !track.id || !Array.isArray(track.cues)) return null;
@@ -76,28 +53,42 @@ export function normalizeState(value = {}) {
   const settings = source.settings && typeof source.settings === 'object' && !Array.isArray(source.settings)
     ? source.settings
     : {};
+  const {
+    firstTrackId,
+    firstTrackFallbackId,
+    firstBottom,
+    mediaTitle: _mediaTitle,
+    mediaSeason: _mediaSeason,
+    mediaEpisode: _mediaEpisode,
+    aiModel: _aiModel,
+    reasoningEffort: _reasoningEffort,
+    ...retainedSettings
+  } = settings;
   const tracks = Array.isArray(source.externalTracks)
     ? source.externalTracks.map(normalizeTrack).filter(Boolean)
     : [];
+  const hasOriginalSelection = typeof settings.secondTrackId === 'string' && settings.secondTrackId;
+  const usingLegacyFirst = !hasOriginalSelection && typeof firstTrackId === 'string' && firstTrackId;
+  const selectedTrackId = hasOriginalSelection
+    ? settings.secondTrackId
+    : (usingLegacyFirst ? firstTrackId : DEFAULT_STATE.settings.secondTrackId);
+  const selectedFallbackId = hasOriginalSelection
+    ? settings.secondTrackFallbackId
+    : (usingLegacyFirst && typeof firstTrackFallbackId === 'string' ? firstTrackFallbackId : DEFAULT_STATE.settings.secondTrackFallbackId);
+  const selectedBottom = hasOriginalSelection || !usingLegacyFirst
+    ? settings.secondBottom
+    : firstBottom;
 
   return {
     ...source,
     schemaVersion: SCHEMA_VERSION,
     settings: {
-      ...settings,
-      firstTrackId: typeof settings.firstTrackId === 'string' ? settings.firstTrackId : DEFAULT_STATE.settings.firstTrackId,
-      firstTrackFallbackId: typeof settings.firstTrackFallbackId === 'string' ? settings.firstTrackFallbackId : DEFAULT_STATE.settings.firstTrackFallbackId,
-      secondTrackId: typeof settings.secondTrackId === 'string' ? settings.secondTrackId : DEFAULT_STATE.settings.secondTrackId,
-      secondTrackFallbackId: typeof settings.secondTrackFallbackId === 'string' ? settings.secondTrackFallbackId : DEFAULT_STATE.settings.secondTrackFallbackId,
-      firstBottom: bounded(settings.firstBottom, 0, 95, DEFAULT_STATE.settings.firstBottom),
-      secondBottom: bounded(settings.secondBottom, 0, 95, DEFAULT_STATE.settings.secondBottom),
+      ...retainedSettings,
+      secondTrackId: selectedTrackId,
+      secondTrackFallbackId: selectedFallbackId,
+      secondBottom: bounded(selectedBottom, 0, 95, DEFAULT_STATE.settings.secondBottom),
       fontSize: bounded(settings.fontSize, 12, 48, DEFAULT_STATE.settings.fontSize),
       selectedPlayerKey: typeof settings.selectedPlayerKey === 'string' ? settings.selectedPlayerKey : DEFAULT_STATE.settings.selectedPlayerKey,
-      mediaTitle: typeof settings.mediaTitle === 'string' ? settings.mediaTitle.trim().slice(0, 300) : DEFAULT_STATE.settings.mediaTitle,
-      mediaSeason: nullableInteger(settings.mediaSeason, 0, 100),
-      mediaEpisode: nullableInteger(settings.mediaEpisode, 0, 1000),
-      aiModel: DEEPSEEK_MODELS.includes(settings.aiModel) ? settings.aiModel : DEFAULT_STATE.settings.aiModel,
-      reasoningEffort: REASONING_EFFORTS.includes(settings.reasoningEffort) ? settings.reasoningEffort : DEFAULT_STATE.settings.reasoningEffort,
     },
     externalTracks: tracks,
   };
@@ -175,10 +166,7 @@ export function patchSettings(state, patch = {}) {
 export function builtInTrackFallbackPatch(settings = {}, playerTracks = [], options = {}) {
   const patch = {};
   const tracks = Array.isArray(playerTracks) ? playerTracks : [];
-  for (const [trackKey, fallbackKey] of [
-    ['firstTrackId', 'firstTrackFallbackId'],
-    ['secondTrackId', 'secondTrackFallbackId'],
-  ]) {
+  for (const [trackKey, fallbackKey] of [['secondTrackId', 'secondTrackFallbackId']]) {
     const selectedId = typeof settings[trackKey] === 'string' ? settings[trackKey] : '';
     if (!selectedId || selectedId.startsWith('external:')) {
       if (settings[fallbackKey]) patch[fallbackKey] = '';
@@ -209,24 +197,6 @@ export function addExternalTrack(state, track) {
   return normalizeState({ ...current, externalTracks: [...current.externalTracks, normalized] });
 }
 
-export function applySubtitleSearchResult(state, result = {}) {
-  let current = normalizeState(state);
-  for (const rawTrack of Array.isArray(result.tracks) ? result.tracks : []) {
-    const track = normalizeTrack(rawTrack);
-    if (!track || !track.cues.length) continue;
-    const index = current.externalTracks.findIndex((existing) => existing.id === track.id);
-    if (index < 0) {
-      current = normalizeState({ ...current, externalTracks: [...current.externalTracks, track] });
-      continue;
-    }
-    if (current.externalTracks[index]?.source?.provider === 'subdl-web') {
-      const externalTracks = [...current.externalTracks];
-      externalTracks[index] = track;
-      current = normalizeState({ ...current, externalTracks });
-    }
-  }
-  return patchSettings(current, result.settingsPatch ?? {});
-}
 
 export function updateExternalTrackTiming(state, id, timing = {}) {
   const current = normalizeState(state);
@@ -255,7 +225,6 @@ export function removeExternalTrack(state, id) {
     ...current,
     settings: {
       ...current.settings,
-      firstTrackId: current.settings.firstTrackId === externalId ? '' : current.settings.firstTrackId,
       secondTrackId: current.settings.secondTrackId === externalId ? '' : current.settings.secondTrackId,
     },
     externalTracks: current.externalTracks.filter((track) => track.id !== id),

@@ -4,6 +4,6 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "check": "node --check ai-client.js && node --check caption-core.js && node --check page-context.js && node --check subtitle-finder.js && node --check state-core.js && node --check state-store.js && node --check protocol.js && node --check background-controller.js && node --check background.js && node --check content-runtime.js && node --check content.js && node --check popup-model.js && node --check popup.js"
+    "check": "node --check ai-client.js && node --check caption-core.js && node --check page-context.js && node --check state-core.js && node --check state-store.js && node --check protocol.js && node --check background-controller.js && node --check background.js && node --check content-runtime.js && node --check content.js && node --check popup-model.js && node --check popup.js"
   }
 }

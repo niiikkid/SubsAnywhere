@@ -68,24 +68,3 @@ export async function loadPopupSnapshot(request, tabId, pageKey) {
     hasApiKey: Boolean(aiData.hasApiKey),
   };
 }
-
-export function formatFindSummary(summary = {}) {
-  const describe = (role, missing) => {
-    if (!role?.found) return missing;
-    return `${role.kind === 'builtin' ? 'встроенные' : 'SubDL'} — ${role.name}`;
-  };
-  const lines = [
-    `Оригинал: ${describe(summary.original, 'не найден')}.`,
-    `Русские: ${describe(summary.russian, 'не найдены')}.`,
-  ];
-  if (Array.isArray(summary.sync) && summary.sync.length) {
-    const synced = summary.sync.map((item) => {
-      const scale = Math.round(Number(item.timeScale || 1) * 100_000) / 1000;
-      const offset = Number(item.offsetSeconds || 0);
-      return `${item.language}: ${offset >= 0 ? '+' : ''}${offset} с, ${scale}%`;
-    });
-    lines.push(`Синхронизация: ${synced.join('; ')}.`);
-  }
-  if (Array.isArray(summary.notes) && summary.notes.length) lines.push(summary.notes.join(' '));
-  return lines.join(' ');
-}

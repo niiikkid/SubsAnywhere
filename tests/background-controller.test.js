@@ -16,7 +16,6 @@ class FakeStore {
     const player = players.find((item) => item.key === this.state.settings.selectedPlayerKey);
     const replaceLegacyFallback = [
       ['selectedPlayerKey', previous.selectedPlayerKey],
-      ['firstTrackId', previous.firstTrackId],
       ['secondTrackId', previous.secondTrackId],
     ].some(([key, value]) => Object.hasOwn(patch, key) && patch[key] !== value);
     this.state = patchState(this.state, builtInTrackFallbackPatch(
@@ -39,11 +38,7 @@ class FakeStore {
     this.state.externalTracks = this.state.externalTracks.map((track) => track.id === id ? { ...track, ...timing } : track);
     return this.get();
   }
-  async applySubtitleSearchResult(_pageKey, result) {
-    this.state.externalTracks.push(...structuredClone(result.tracks ?? []));
-    this.state = patchState(this.state, result.settingsPatch ?? {});
-    return this.get();
-  }
+
 }
 
 function makeChrome() {
@@ -125,9 +120,7 @@ test('a selected player report restores persisted state after service-worker res
   const frameUrl = 'https://player.example/embed?id=episode-7&token=fresh';
   store.state = normalizeState({
     settings: {
-      firstTrackId: 'track-0',
       secondTrackId: 'external:mine',
-      firstBottom: 21,
       secondBottom: 8,
       fontSize: 27,
       selectedPlayerKey: stablePlayerKey(frameUrl, 0),
@@ -159,7 +152,7 @@ test('a selected player report persists the built-in recovery position before an
   const frameUrl = 'https://player.example/embed?id=episode-7';
   store.state = normalizeState({
     settings: {
-      firstTrackId: 'builtin-en',
+      secondTrackId: 'builtin-en',
       selectedPlayerKey: stablePlayerKey(frameUrl, 0),
     },
   });
@@ -176,8 +169,8 @@ test('a selected player report persists the built-in recovery position before an
   }, { tab: { id: 4 }, frameId: 9, url: frameUrl });
 
   assert.equal(result.ok, true);
-  assert.equal(store.state.settings.firstTrackFallbackId, 'caption-0');
-  assert.equal(chrome.sent[0].message.settings.firstTrackFallbackId, 'caption-0');
+  assert.equal(store.state.settings.secondTrackFallbackId, 'caption-0');
+  assert.equal(chrome.sent[0].message.settings.secondTrackFallbackId, 'caption-0');
 });
 
 test('player get rebuilds an empty cache so popup reopen recovers automatically', async () => {
@@ -309,18 +302,18 @@ test('selecting a built-in track persists its recovery position immediately', as
   const result = await controller.handle({
     type: MESSAGE.STATE_PATCH,
     tabId: 3,
-    patch: { firstTrackId: 'builtin-en' },
+    patch: { secondTrackId: 'builtin-en' },
   }, {});
 
   assert.equal(result.ok, true);
-  assert.equal(store.state.settings.firstTrackFallbackId, 'caption-0');
-  assert.equal(chrome.sent[0].message.settings.firstTrackFallbackId, 'caption-0');
+  assert.equal(store.state.settings.secondTrackFallbackId, 'caption-0');
+  assert.equal(chrome.sent[0].message.settings.secondTrackFallbackId, 'caption-0');
 });
 
 test('selecting a player backfills recovery positions for existing built-in selections', async () => {
   const chrome = makeChrome();
   const store = new FakeStore();
-  store.state = normalizeState({ settings: { firstTrackId: 'builtin-en' } });
+  store.state = normalizeState({ settings: { secondTrackId: 'builtin-en' } });
   const controller = new BackgroundController(chrome, store);
   await controller.handle({
     type: MESSAGE.PLAYER_REPORT,
@@ -342,8 +335,8 @@ test('selecting a player backfills recovery positions for existing built-in sele
   }, {});
 
   assert.equal(result.ok, true);
-  assert.equal(store.state.settings.firstTrackFallbackId, 'caption-0');
-  assert.equal(chrome.sent[0].message.settings.firstTrackFallbackId, 'caption-0');
+  assert.equal(store.state.settings.secondTrackFallbackId, 'caption-0');
+  assert.equal(chrome.sent[0].message.settings.secondTrackFallbackId, 'caption-0');
 });
 
 test('explicit player selection replaces a legacy fallback inherited from another player', async () => {
@@ -351,8 +344,8 @@ test('explicit player selection replaces a legacy fallback inherited from anothe
   const store = new FakeStore();
   store.state = normalizeState({
     settings: {
-      firstTrackId: 'track-1',
-      firstTrackFallbackId: 'caption-0',
+      secondTrackId: 'track-1',
+      secondTrackFallbackId: 'caption-0',
     },
   });
   const controller = new BackgroundController(chrome, store);
@@ -378,7 +371,7 @@ test('explicit player selection replaces a legacy fallback inherited from anothe
   }, {});
 
   assert.equal(result.ok, true);
-  assert.equal(store.state.settings.firstTrackFallbackId, 'caption-1');
+  assert.equal(store.state.settings.secondTrackFallbackId, 'caption-1');
 });
 
 test('reselecting the same player preserves a legacy fallback after context recreation', async () => {
@@ -389,8 +382,8 @@ test('reselecting the same player preserves a legacy fallback after context recr
   store.state = normalizeState({
     settings: {
       selectedPlayerKey: playerKey,
-      firstTrackId: 'track-1',
-      firstTrackFallbackId: 'caption-0',
+      secondTrackId: 'track-1',
+      secondTrackFallbackId: 'caption-0',
     },
   });
   const controller = new BackgroundController(chrome, store);
@@ -415,7 +408,7 @@ test('reselecting the same player preserves a legacy fallback after context recr
   }, {});
 
   assert.equal(result.ok, true);
-  assert.equal(store.state.settings.firstTrackFallbackId, 'caption-0');
+  assert.equal(store.state.settings.secondTrackFallbackId, 'caption-0');
 });
 
 test('top-page navigation resets the old frame before a new page can reuse its subtitles', async () => {
@@ -432,55 +425,4 @@ test('top-page navigation resets the old frame before a new page can reuse its s
   assert.equal(chrome.sent.length, 1);
   assert.equal(chrome.sent[0].message.type, MESSAGE.CONTENT_RESET);
   assert.deepEqual(controller.players(9), []);
-});
-
-test('subtitle find stores one atomic result and sends the completed tracks to the selected frame', async () => {
-  const chrome = makeChrome();
-  const store = new FakeStore();
-  const calls = [];
-  const subtitleFinder = {
-    async find(input) {
-      calls.push(input);
-      const samples = await input.getBuiltInSamples('builtin-en');
-      assert.equal(samples[0].text, 'Reference');
-      return {
-        tracks: [{
-          id: 'ru-auto', name: 'Russian', language: 'ru',
-          cues: [{ start: 1, end: 2, text: 'Привет' }], offsetSeconds: 0, timeScale: 1,
-        }],
-        settingsPatch: { firstTrackId: 'external:ru-auto', secondTrackId: 'builtin-en' },
-        summary: { russian: { found: true }, original: { found: true }, sync: [], notes: [] },
-      };
-    },
-  };
-  const controller = new BackgroundController(chrome, store, { subtitleFinder });
-  chrome.onSend = (_tabId, message) => message.type === MESSAGE.CONTENT_SAMPLE_TRACK
-    ? { ok: true, cues: [{ start: 1, end: 2, text: 'Reference' }] }
-    : { ok: true };
-  await controller.handle({
-    type: MESSAGE.PLAYER_REPORT,
-    player: {
-      title: 'Player', frameUrl: 'https://player.example/embed', videoIndex: 0,
-      tracks: [{ id: 'builtin-en', label: 'English', language: 'en' }],
-    },
-  }, { tab: { id: 5, url: 'https://site.example/movie' }, frameId: 7 });
-  const [player] = controller.players(5);
-  await controller.handle({
-    type: MESSAGE.PLAYER_SELECT, tabId: 5, pageKey: 'https://site.example/movie', frameId: 7, playerKey: player.key,
-  });
-  chrome.sent.length = 0;
-
-  const result = await controller.handle({
-    type: MESSAGE.SUBTITLE_FIND,
-    tabId: 5,
-    pageKey: 'https://site.example/movie',
-    media: { title: 'Movie' },
-  });
-
-  assert.equal(result.ok, true);
-  assert.equal(calls.length, 1);
-  assert.equal(result.data.state.settings.firstTrackId, 'external:ru-auto');
-  assert.equal(result.data.state.settings.secondTrackId, 'builtin-en');
-  assert.equal(result.data.state.externalTracks[0].id, 'ru-auto');
-  assert.equal(chrome.sent.at(-1).message.type, MESSAGE.CONTENT_FULL_STATE);
 });

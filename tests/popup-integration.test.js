@@ -25,11 +25,10 @@ class FakeElement {
 
 function makeDocument() {
   const ids = [
-    'controls', 'status', 'player', 'firstTrack', 'secondTrack', 'firstBottom', 'secondBottom',
-    'fontSize', 'firstBottomValue', 'secondBottomValue', 'fontSizeValue', 'externalList',
+    'controls', 'status', 'player', 'originalTrack', 'originalBottom',
+    'fontSize', 'originalBottomValue', 'fontSizeValue', 'externalList',
     'syncBox', 'syncTrack', 'offsetSeconds', 'timeScalePercent', 'activate', 'subtitleFile',
-    'mediaTitle', 'mediaSeason', 'mediaEpisode', 'findSubtitles', 'deepseekKey', 'saveDeepseekKey',
-    'clearDeepseekKey', 'aiKeyState', 'aiModel', 'reasoningEffort',
+    'deepseekKey', 'saveDeepseekKey', 'clearDeepseekKey', 'aiKeyState',
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement()]));
   elements.controls.hidden = true;

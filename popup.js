@@ -1,11 +1,10 @@
 import { parseSrt } from './caption-core.js';
-import { canonicalPageKey, inferMediaDescriptor } from './page-context.js';
+import { canonicalPageKey } from './page-context.js';
 import {
   choosePlayer,
   createDebouncedPatchCommit,
   createSerialTaskQueue,
   decodeSubtitleBuffer,
-  formatFindSummary,
   loadPopupSnapshot,
 } from './popup-model.js';
 import { MESSAGE } from './protocol.js';
@@ -16,13 +15,11 @@ const controls = $('controls');
 const status = $('status');
 let tabId;
 let pageKey = '';
-let activeTab = null;
 let players = [];
 let state = normalizeState({});
 let selectedFrameId;
 let syncTrackId = '';
 let hasApiKey = false;
-let mediaDraftInitialized = false;
 const enqueueOffsetTask = createSerialTaskQueue();
 const settingsCommit = createDebouncedPatchCommit(
   (patch) => request(MESSAGE.STATE_PATCH, { tabId, pageKey, patch }),
@@ -104,9 +101,7 @@ function drawExternalList() {
     text.textContent = track.name;
     const meta = document.createElement('span');
     meta.className = 'external-meta';
-    const details = [track.language || '', `${track.cues.length} строк`];
-    if (track.sync?.method) details.push('AI ✓');
-    meta.textContent = details.filter(Boolean).join(' · ');
+    meta.textContent = `${track.cues.length} строк`;
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'delete';
@@ -125,8 +120,7 @@ function drawSync() {
     return;
   }
   const select = $('syncTrack');
-  const validSelection = state.externalTracks.some((track) => track.id === syncTrackId);
-  if (!validSelection) syncTrackId = state.externalTracks[0].id;
+  if (!state.externalTracks.some((track) => track.id === syncTrackId)) syncTrackId = state.externalTracks[0].id;
   select.replaceChildren();
   for (const track of state.externalTracks) option(select, track.id, track.name);
   select.value = syncTrackId;
@@ -134,37 +128,16 @@ function drawSync() {
   $('timeScalePercent').value = Math.round((selectedExternalTrack()?.timeScale ?? 1) * 100_000) / 1000;
 }
 
-function drawMediaDraft() {
-  if (mediaDraftInitialized) return;
-  const player = currentPlayer();
-  const inferred = inferMediaDescriptor({
-    title: activeTab?.title || player?.tabTitle || '',
-    url: activeTab?.url || pageKey,
-    playerTitle: player?.title || '',
-    sourceName: player?.sourceName || '',
-  });
-  $('mediaTitle').value = state.settings.mediaTitle || inferred.title;
-  $('mediaSeason').value = state.settings.mediaSeason ?? inferred.season ?? '';
-  $('mediaEpisode').value = state.settings.mediaEpisode ?? inferred.episode ?? '';
-  mediaDraftInitialized = true;
-}
-
 function drawSettings() {
   const settings = state.settings;
-  drawTrackSelect($('firstTrack'), settings.firstTrackId, settings.firstTrackFallbackId);
-  drawTrackSelect($('secondTrack'), settings.secondTrackId, settings.secondTrackFallbackId);
-  $('firstBottom').value = settings.firstBottom;
-  $('secondBottom').value = settings.secondBottom;
+  drawTrackSelect($('originalTrack'), settings.secondTrackId, settings.secondTrackFallbackId);
+  $('originalBottom').value = settings.secondBottom;
   $('fontSize').value = settings.fontSize;
-  $('firstBottomValue').value = `${settings.firstBottom}%`;
-  $('secondBottomValue').value = `${settings.secondBottom}%`;
+  $('originalBottomValue').value = `${settings.secondBottom}%`;
   $('fontSizeValue').value = `${settings.fontSize}px`;
-  $('aiModel').value = settings.aiModel;
-  $('reasoningEffort').value = settings.reasoningEffort;
   $('aiKeyState').textContent = hasApiKey
-    ? 'Ключ сохранён внутри расширения.'
-    : 'Ключ не сохранён. Поиск работает, но AI-синхронизация будет ручной.';
-  drawMediaDraft();
+    ? 'Ключ сохранён. Перевод по клику включён.'
+    : 'Ключ не сохранён. Перевод по клику недоступен.';
 }
 
 function render() {
@@ -187,14 +160,12 @@ async function selectPlayer(player) {
     playerKey: player.key,
   });
   state = normalizeState(data.state);
-  mediaDraftInitialized = false;
   render();
 }
 
 function updateLocalSetting(key, value) {
   state = patchSettings(state, { [key]: value });
-  if (key === 'firstBottom') $('firstBottomValue').value = `${state.settings.firstBottom}%`;
-  if (key === 'secondBottom') $('secondBottomValue').value = `${state.settings.secondBottom}%`;
+  if (key === 'secondBottom') $('originalBottomValue').value = `${state.settings.secondBottom}%`;
   if (key === 'fontSize') $('fontSizeValue').value = `${state.settings.fontSize}px`;
   return state.settings[key];
 }
@@ -210,19 +181,16 @@ function previewSetting(key, value) {
   settingsCommit.schedule({ [key]: normalized });
 }
 
-async function readSubtitleFile(file) {
-  return decodeSubtitleBuffer(await file.arrayBuffer());
-}
-
 async function importFile(file) {
   if (!file) return;
   await settingsCommit.flush();
   if (file.size > 5 * 1024 * 1024) throw new Error('Файл слишком большой. Максимум — 5 МБ.');
-  const cues = parseSrt(await readSubtitleFile(file));
+  const text = decodeSubtitleBuffer(await file.arrayBuffer());
+  const cues = parseSrt(text);
   if (!cues.length) throw new Error('Не удалось найти строки SRT. Проверьте формат файла.');
   const track = {
     id: crypto.randomUUID(),
-    name: file.name.replace(/\.srt$/i, '') || 'Мои субтитры',
+    name: file.name.replace(/\.srt$/i, '') || 'Оригинальные субтитры',
     language: '',
     cues,
     offsetSeconds: 0,
@@ -232,9 +200,7 @@ async function importFile(file) {
   state = normalizeState(data.state);
   syncTrackId = track.id;
   render();
-  const externalId = `external:${track.id}`;
-  if (!state.settings.secondTrackId) await persistSetting('secondTrackId', externalId);
-  else if (!state.settings.firstTrackId) await persistSetting('firstTrackId', externalId);
+  if (!state.settings.secondTrackId) await persistSetting('secondTrackId', `external:${track.id}`);
   render();
   setStatus(`Добавлен файл «${track.name}»: ${cues.length} строк.`);
   $('subtitleFile').value = '';
@@ -275,7 +241,6 @@ async function activate() {
       render();
       throw new Error('Плеер не найден. Запустите видео и попробуйте ещё раз.');
     }
-    mediaDraftInitialized = false;
     render();
     await selectPlayer(currentPlayer());
     setStatus(`Подключено. Найдено плееров: ${players.length}.`);
@@ -294,63 +259,9 @@ async function saveDeepseekKey(clear = false) {
   setStatus(clear ? 'API-ключ DeepSeek удалён.' : 'API-ключ DeepSeek сохранён.');
 }
 
-function numberOrNull(input) {
-  return input.value === '' ? null : Number(input.value);
-}
-
-async function findSubtitles() {
-  const button = $('findSubtitles');
-  button.disabled = true;
-  setStatus('Проверяю встроенные дорожки и ищу недостающие субтитры…');
-  try {
-    await settingsCommit.flush();
-    if ($('deepseekKey').value.trim()) await saveDeepseekKey(false);
-    const aiOptions = {
-      model: $('aiModel').value,
-      reasoningEffort: $('reasoningEffort').value,
-    };
-    const media = {
-      title: $('mediaTitle').value.trim(),
-      season: numberOrNull($('mediaSeason')),
-      episode: numberOrNull($('mediaEpisode')),
-    };
-    if (!media.title) throw new Error('Введите название фильма или сериала.');
-    const persisted = await request(MESSAGE.STATE_PATCH, {
-      tabId,
-      pageKey,
-      patch: {
-        mediaTitle: media.title,
-        mediaSeason: media.season,
-        mediaEpisode: media.episode,
-        aiModel: aiOptions.model,
-        reasoningEffort: aiOptions.reasoningEffort,
-      },
-    });
-    state = normalizeState(persisted.state);
-    const data = await request(MESSAGE.SUBTITLE_FIND, {
-      tabId,
-      pageKey,
-      frameId: selectedFrameId,
-      media,
-      aiOptions,
-    });
-    state = normalizeState(data.state);
-    syncTrackId = data.summary?.sync?.[0]?.language
-      ? state.externalTracks.find((track) => track.language === data.summary.sync[0].language)?.id || syncTrackId
-      : syncTrackId;
-    $('mediaTitle').value = data.summary?.title || media.title;
-    mediaDraftInitialized = true;
-    render();
-    setStatus(`Готово. ${formatFindSummary(data.summary)}`);
-  } finally {
-    button.disabled = false;
-  }
-}
-
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!Number.isInteger(tab?.id)) throw new Error('Не удалось определить активную вкладку.');
-  activeTab = tab;
   tabId = tab.id;
   pageKey = canonicalPageKey(tab.url || `https://local.invalid/tab/${tab.id}`);
   const snapshot = await loadPopupSnapshot(request, tabId, pageKey);
@@ -363,7 +274,6 @@ async function init() {
 }
 
 $('activate').addEventListener('click', () => activate().catch((error) => setStatus(error.message, true)));
-$('findSubtitles').addEventListener('click', () => findSubtitles().catch((error) => setStatus(error.message, true)));
 $('saveDeepseekKey').addEventListener('click', () => saveDeepseekKey(false).catch((error) => setStatus(error.message, true)));
 $('clearDeepseekKey').addEventListener('click', () => saveDeepseekKey(true).catch((error) => setStatus(error.message, true)));
 $('subtitleFile').addEventListener('change', (event) => importFile(event.target.files?.[0]).catch((error) => setStatus(error.message, true)));
@@ -371,17 +281,10 @@ $('player').addEventListener('change', () => {
   const player = players.find((item) => item.frameId === Number($('player').value));
   selectPlayer(player).catch((error) => setStatus(error.message, true));
 });
-$('firstTrack').addEventListener('change', () => persistSetting('firstTrackId', $('firstTrack').value));
-$('secondTrack').addEventListener('change', () => persistSetting('secondTrackId', $('secondTrack').value));
-$('aiModel').addEventListener('change', () => persistSetting('aiModel', $('aiModel').value));
-$('reasoningEffort').addEventListener('change', () => persistSetting('reasoningEffort', $('reasoningEffort').value));
-$('mediaTitle').addEventListener('change', () => persistSetting('mediaTitle', $('mediaTitle').value.trim()));
-$('mediaSeason').addEventListener('change', () => persistSetting('mediaSeason', numberOrNull($('mediaSeason'))));
-$('mediaEpisode').addEventListener('change', () => persistSetting('mediaEpisode', numberOrNull($('mediaEpisode'))));
-$('firstBottom').addEventListener('input', () => previewSetting('firstBottom', Number($('firstBottom').value)));
-$('secondBottom').addEventListener('input', () => previewSetting('secondBottom', Number($('secondBottom').value)));
+$('originalTrack').addEventListener('change', () => persistSetting('secondTrackId', $('originalTrack').value));
+$('originalBottom').addEventListener('input', () => previewSetting('secondBottom', Number($('originalBottom').value)));
 $('fontSize').addEventListener('input', () => previewSetting('fontSize', Number($('fontSize').value)));
-for (const id of ['firstBottom', 'secondBottom', 'fontSize']) {
+for (const id of ['originalBottom', 'fontSize']) {
   $(id).addEventListener('change', () => {
     settingsCommit.flush().catch((error) => setStatus(`Не удалось сохранить настройку: ${error.message}`, true));
   });
