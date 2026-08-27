@@ -8,6 +8,7 @@
     CONTENT_FULL_STATE: 'dualCaptions.content.fullState',
     CONTENT_SETTINGS: 'dualCaptions.content.settings',
     CONTENT_TRACKS: 'dualCaptions.content.tracks',
+    TRACK_CACHE_BUILTIN: 'dualCaptions.track.cacheBuiltin',
 
     CONTENT_RESET: 'dualCaptions.content.reset',
   });
@@ -25,12 +26,12 @@
     };
     const builtInTrackResolver = runtime.createBuiltInTrackResolver();
     const originalTrackModes = new Map();
+    const cachedBuiltInSelections = new Set();
+    const cachingBuiltInSelections = new Set();
     const cleanup = [];
     const translationCache = new Map();
     const maxCachedTranslations = 80;
-    const maxTranslationRequests = 120;
     const maxQueuedTranslations = 3;
-    let translationRequests = 0;
     let translationInFlight = false;
     const queuedTranslations = [];
     const queuedTranslationSet = new Set();
@@ -125,7 +126,7 @@
     }
 
     function requestTranslation(text, priority = false) {
-      if (!text || translationCache.has(text) || queuedTranslationSet.has(text) || translationRequests >= maxTranslationRequests) return;
+      if (!text || translationCache.has(text) || queuedTranslationSet.has(text)) return;
       if (queuedTranslations.length >= maxQueuedTranslations) {
         if (!priority) return;
         const displaced = queuedTranslations.pop();
@@ -138,15 +139,14 @@
     }
 
     function pumpTranslations() {
-      if (translationInFlight || translationDispatchScheduled || !queuedTranslations.length || translationRequests >= maxTranslationRequests) return;
+      if (translationInFlight || translationDispatchScheduled || !queuedTranslations.length) return;
       const run = () => {
         translationDispatchScheduled = false;
         if (translationInFlight) return;
         const nextText = queuedTranslations.shift();
         if (nextText) queuedTranslationSet.delete(nextText);
-        if (!nextText || translationRequests >= maxTranslationRequests) return;
+        if (!nextText) return;
         translationInFlight = true;
-        translationRequests += 1;
         lastTranslationAt = Date.now();
         chrome.runtime.sendMessage({ type: 'dualCaptions.caption.translate', text: nextText })
           .then((response) => {
@@ -177,7 +177,59 @@
         return runtime.upcomingCueTexts(external.cues, sourceTime, { seconds: 30 / scale, limit: 3 });
       }
       const track = builtInTrackResolver.find(video.textTracks, id, fallbackId);
+      if (!track && state.settings.secondTrackCacheSource === `${state.settings.selectedPlayerKey}\u0000${id}`) {
+        const cached = state.externalTracks.find((item) => item.id === state.settings.secondTrackCacheId && item.sourceType === 'builtin-cache');
+        if (cached) return runtime.upcomingCueTexts(cached.cues, video.currentTime, { seconds: 30, limit: 3 });
+      }
       return runtime.upcomingCueTexts(track?.cues, video.currentTime, { seconds: 30, limit: 3 });
+    }
+
+    function cacheSelectedBuiltInTrack(id, fallbackId, video) {
+      const selectionKey = `${state.settings.selectedPlayerKey}\u0000${id}`;
+      if (!id || id.startsWith('external:') || cachedBuiltInSelections.has(selectionKey) || cachingBuiltInSelections.has(selectionKey)) return;
+      if (state.settings.secondTrackCacheSource === selectionKey && state.settings.secondTrackCacheId) return;
+      const track = builtInTrackResolver.find(video.textTracks, id, fallbackId);
+      const cueCount = Number(track?.cues?.length);
+      if (!Number.isInteger(cueCount) || !cueCount || cueCount > 5_000) return;
+      const cues = [];
+      const encoder = new TextEncoder();
+      let serializedBytes = 2;
+      for (let index = 0; index < cueCount; index += 1) {
+        const cue = track.cues[index];
+        if (String(cue?.text ?? '').length > 1_200) return;
+        const normalized = {
+          start: Number(cue?.startTime ?? cue?.start),
+          end: Number(cue?.endTime ?? cue?.end),
+          text: runtime.cleanSubtitleText(cue?.text),
+        };
+        if (!Number.isFinite(normalized.start) || !Number.isFinite(normalized.end) || normalized.end <= normalized.start || !normalized.text) continue;
+        serializedBytes += encoder.encode(JSON.stringify(normalized)).byteLength + (cues.length ? 1 : 0);
+        if (serializedBytes > 5 * 1024 * 1024) return;
+        cues.push(normalized);
+      }
+      if (!cues.length || !globalThis.crypto?.randomUUID) return;
+      cachingBuiltInSelections.add(selectionKey);
+      const snapshotId = `builtin-cache-${globalThis.crypto.randomUUID()}`;
+      chrome.runtime.sendMessage({
+        type: MESSAGE.TRACK_CACHE_BUILTIN,
+        sourceKey: selectionKey,
+        track: {
+          id: snapshotId,
+          sourceType: 'builtin-cache',
+          name: 'Сохранённые встроенные субтитры',
+          cues,
+          offsetSeconds: 0,
+          timeScale: 1,
+        },
+      }).then((response) => {
+        if (response?.ok === true) cachedBuiltInSelections.add(selectionKey);
+        else throw new Error('Built-in subtitle cache was rejected');
+      }).catch(() => {
+        const retries = (state.builtInCacheRetries?.get(selectionKey) ?? 0) + 1;
+        state.builtInCacheRetries ??= new Map();
+        state.builtInCacheRetries.set(selectionKey, retries);
+        if (retries < 3) setTimeout(() => cacheSelectedBuiltInTrack(id, fallbackId, video), 1_000);
+      }).finally(() => cachingBuiltInSelections.delete(selectionKey));
     }
 
     function renderInteractiveCaption(text, isEnglish) {
@@ -238,7 +290,11 @@
           ? runtime.cueTextAt(external.cues, video.currentTime, external.offsetSeconds, external.timeScale)
           : '';
       }
-      return runtime.activeCueText(builtInTrackResolver.find(video.textTracks, id, fallbackId));
+      const native = builtInTrackResolver.find(video.textTracks, id, fallbackId);
+      if (native) return runtime.activeCueText(native);
+      if (state.settings.secondTrackCacheSource !== `${state.settings.selectedPlayerKey}\u0000${id}`) return '';
+      const cached = state.externalTracks.find((track) => track.id === state.settings.secondTrackCacheId && track.sourceType === 'builtin-cache');
+      return cached ? runtime.cueTextAt(cached.cues, video.currentTime, cached.offsetSeconds, cached.timeScale) : '';
     }
 
     function overlayHost(video) {
@@ -284,6 +340,7 @@
         state.settings.secondTrackFallbackId,
         video,
       );
+      cacheSelectedBuiltInTrack(state.settings.secondTrackId, state.settings.secondTrackFallbackId, video);
       renderInteractiveCaption(secondText, true);
       for (const text of futureCaptionTexts(state.settings.secondTrackId, state.settings.secondTrackFallbackId, video)) {
         requestTranslation(text);

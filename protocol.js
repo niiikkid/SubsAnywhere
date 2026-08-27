@@ -6,6 +6,7 @@ export const MESSAGE = Object.freeze({
   STATE_GET: 'dualCaptions.state.get',
   STATE_PATCH: 'dualCaptions.state.patch',
   TRACK_ADD: 'dualCaptions.track.add',
+  TRACK_CACHE_BUILTIN: 'dualCaptions.track.cacheBuiltin',
   TRACK_REMOVE: 'dualCaptions.track.remove',
   TRACK_OFFSET: 'dualCaptions.track.offset',
   TRACK_TIMING: 'dualCaptions.track.timing',

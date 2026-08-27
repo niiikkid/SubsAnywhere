@@ -114,6 +114,8 @@ async function makeHarness() {
     console,
     setTimeout(callback) { scheduled.push(callback); return scheduled.length; },
     clearTimeout,
+    crypto: { randomUUID: () => 'fixture-cache-uuid' },
+    TextEncoder,
     URL,
     document,
     location: { href: 'https://player.example/embed?token=temporary' },
@@ -263,6 +265,49 @@ test('production always prepares the selected original second track for translat
   await Promise.resolve();
 
   assert.equal(harness.reports.some((message) => message.type === 'dualCaptions.caption.translate'), true);
+});
+
+test('production saves selected built-in subtitle cues before an audio switch can remove them', async () => {
+  const harness = await makeHarness();
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'track-0', secondBottom: 8, fontSize: 24 },
+    externalTracks: [],
+  }, {}, () => {});
+  await Promise.resolve();
+
+  const snapshot = harness.reports.find((message) => message.type === 'dualCaptions.track.cacheBuiltin');
+  assert.ok(snapshot);
+  assert.equal(snapshot.track.cues[0].text, 'Built in');
+  assert.equal(snapshot.track.cues[1].start, 3);
+});
+
+test('production uses the saved fallback only after the native track disappears', async () => {
+  const harness = await makeHarness();
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  const settings = {
+    secondTrackId: 'track-0', secondBottom: 8, fontSize: 24,
+    secondTrackCacheId: 'builtin-cache-fixture-cache-uuid',
+    secondTrackCacheSource: '\u0000track-0',
+  };
+  const cached = [{ id: 'builtin-cache-fixture-cache-uuid', sourceType: 'builtin-cache', name: 'Saved', offsetSeconds: 0, timeScale: 1, cues: [{ start: 1, end: 2, text: 'Saved fallback' }] }];
+
+  listener({ type: 'dualCaptions.content.fullState', settings, externalTracks: cached }, {}, () => {});
+  let overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  assert.equal(overlay.children[0].children.map((child) => child.textContent).join(''), 'Built in');
+
+  harness.document.videos[0].textTracks[0] = undefined;
+  harness.document.videos[0].textTracks.length = 0;
+  harness.document.videos[0].textTracks[Symbol.iterator] = function* noTracks() {};
+  listener({ type: 'dualCaptions.content.tracks', settings, externalTracks: cached }, {}, () => {});
+  overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  assert.equal(overlay.children[0].children.map((child) => child.textContent).join(''), 'Saved fallback');
 });
 
 test('production prepares the next three original captions before they appear', async () => {

@@ -311,6 +311,8 @@ test('runtime normalizes settings at the content-script boundary', async () => {
     {
       secondTrackId: 'saved',
       secondTrackFallbackId: 'caption-1',
+      secondTrackCacheId: '',
+      secondTrackCacheSource: '',
       secondBottom: 95,
       fontSize: 31,
       selectedPlayerKey: 'player',

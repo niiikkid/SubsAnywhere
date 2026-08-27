@@ -1,6 +1,7 @@
 import {
   addExternalTrack,
   builtInTrackFallbackPatch,
+  cacheBuiltInTrack,
   cloneRootState,
   cloneState,
   migrateStoredRoot,
@@ -76,6 +77,10 @@ export class StateStore {
 
   addExternalTrack(pageKey, track) {
     return this.#mutatePage(pageKey, (state) => addExternalTrack(state, track));
+  }
+
+  cacheBuiltInTrack(pageKey, track, sourceKey) {
+    return this.#mutatePage(pageKey, (state) => cacheBuiltInTrack(state, track, sourceKey));
   }
 
   removeExternalTrack(pageKey, id) {

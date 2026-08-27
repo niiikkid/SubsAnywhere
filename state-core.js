@@ -5,6 +5,8 @@ export const DEFAULT_STATE = Object.freeze({
   settings: Object.freeze({
     secondTrackId: '',
     secondTrackFallbackId: '',
+    secondTrackCacheId: '',
+    secondTrackCacheSource: '',
     secondBottom: 5,
     fontSize: 22,
     selectedPlayerKey: '',
@@ -20,10 +22,19 @@ export const DEFAULT_ROOT_STATE = Object.freeze({
 const SETTING_KEYS = new Set([
   'secondTrackId',
   'secondTrackFallbackId',
+  'secondTrackCacheId',
+  'secondTrackCacheSource',
   'secondBottom',
   'fontSize',
   'selectedPlayerKey',
 ]);
+const MAX_BUILT_IN_CACHE_CUES = 5_000;
+const MAX_BUILT_IN_CUE_CHARS = 1_200;
+const MAX_BUILT_IN_CACHE_BYTES = 5 * 1024 * 1024;
+
+export function isBuiltInCacheTrack(track) {
+  return track?.sourceType === 'builtin-cache';
+}
 
 const clone = (value) => structuredClone(value);
 
@@ -86,6 +97,8 @@ export function normalizeState(value = {}) {
       ...retainedSettings,
       secondTrackId: selectedTrackId,
       secondTrackFallbackId: selectedFallbackId,
+      secondTrackCacheId: typeof settings.secondTrackCacheId === 'string' ? settings.secondTrackCacheId : '',
+      secondTrackCacheSource: typeof settings.secondTrackCacheSource === 'string' ? settings.secondTrackCacheSource : '',
       secondBottom: bounded(selectedBottom, 0, 95, DEFAULT_STATE.settings.secondBottom),
       fontSize: bounded(settings.fontSize, 12, 48, DEFAULT_STATE.settings.fontSize),
       selectedPlayerKey: typeof settings.selectedPlayerKey === 'string' ? settings.selectedPlayerKey : DEFAULT_STATE.settings.selectedPlayerKey,
@@ -195,6 +208,48 @@ export function addExternalTrack(state, track) {
   const normalized = normalizeTrack(track);
   if (!normalized || !normalized.cues.length) throw new Error('External track is invalid');
   return normalizeState({ ...current, externalTracks: [...current.externalTracks, normalized] });
+}
+
+export function cacheBuiltInTrack(state, track, sourceKey) {
+  const current = normalizeState(state);
+  if (!track || typeof track.id !== 'string' || !track.id.startsWith('builtin-cache-') || track.sourceType !== 'builtin-cache' || !Array.isArray(track.cues)) {
+    throw new Error('Built-in subtitle cache is invalid');
+  }
+  if (track.cues.length > MAX_BUILT_IN_CACHE_CUES) {
+    throw new Error('Built-in subtitle cache is too large');
+  }
+  const safeCues = [];
+  const encoder = new TextEncoder();
+  let serializedBytes = 2;
+  for (const cue of track.cues) {
+    const start = Number(cue?.start);
+    const end = Number(cue?.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || typeof cue?.text !== 'string' || !cue.text) continue;
+    if (cue.text.length > MAX_BUILT_IN_CUE_CHARS) throw new Error('Built-in subtitle cache is too large');
+    const safeCue = { start, end, text: cue.text };
+    serializedBytes += encoder.encode(JSON.stringify(safeCue)).byteLength + (safeCues.length ? 1 : 0);
+    if (serializedBytes > MAX_BUILT_IN_CACHE_BYTES) throw new Error('Built-in subtitle cache is too large');
+    safeCues.push(safeCue);
+  }
+  const normalized = normalizeTrack({ ...track, cues: safeCues });
+  if (!normalized?.cues.length) {
+    throw new Error('Built-in subtitle cache is too large');
+  }
+  if (typeof sourceKey !== 'string' || !sourceKey || sourceKey.length > 4096) {
+    throw new Error('Built-in subtitle cache source is invalid');
+  }
+  return normalizeState({
+    ...current,
+    settings: {
+      ...current.settings,
+      secondTrackCacheId: normalized.id,
+      secondTrackCacheSource: sourceKey,
+    },
+    externalTracks: [
+      ...current.externalTracks.filter((existing) => !isBuiltInCacheTrack(existing)),
+      normalized,
+    ],
+  });
 }
 
 

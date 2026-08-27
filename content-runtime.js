@@ -193,6 +193,8 @@
     return {
       secondTrackId: typeof value.secondTrackId === 'string' ? value.secondTrackId : '',
       secondTrackFallbackId: typeof value.secondTrackFallbackId === 'string' ? value.secondTrackFallbackId : '',
+      secondTrackCacheId: typeof value.secondTrackCacheId === 'string' ? value.secondTrackCacheId : '',
+      secondTrackCacheSource: typeof value.secondTrackCacheSource === 'string' ? value.secondTrackCacheSource : '',
       secondBottom: bounded(value.secondBottom, 0, 95, 5),
       fontSize: bounded(value.fontSize, 12, 48, 22),
       selectedPlayerKey: typeof value.selectedPlayerKey === 'string' ? value.selectedPlayerKey : '',

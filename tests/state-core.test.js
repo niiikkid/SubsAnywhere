@@ -6,6 +6,7 @@ import {
   addExternalTrack,
   builtInTrackFallbackPatch,
   buildTrackOptions,
+  cacheBuiltInTrack,
   migrateStoredRoot,
   migrateStoredState,
   normalizeState,
@@ -139,6 +140,36 @@ test('removeExternalTrack clears only selections that explicitly reference the r
 
   assert.equal(next.settings.secondTrackId, '');
   assert.deepEqual(next.externalTracks.map((track) => track.id), ['keep']);
+});
+
+test('cacheBuiltInTrack stores a built-in fallback without replacing the native selection', () => {
+  const cached = cacheBuiltInTrack(normalizeState({ settings: { secondTrackId: 'track-0' } }), {
+    id: 'builtin-cache-main',
+    sourceType: 'builtin-cache',
+    name: 'Сохранённые встроенные субтитры',
+    cues: [{ start: 1, end: 2, text: 'Saved line' }],
+    offsetSeconds: 0,
+    timeScale: 1,
+  }, 'player-1\u0000track-0');
+
+  assert.equal(cached.settings.secondTrackId, 'track-0');
+  assert.equal(cached.settings.secondTrackCacheId, 'builtin-cache-main');
+  assert.equal(cached.settings.secondTrackCacheSource, 'player-1\u0000track-0');
+  assert.equal(cached.externalTracks[0].cues[0].text, 'Saved line');
+});
+
+test('cacheBuiltInTrack rejects an oversized native subtitle snapshot', () => {
+  assert.throws(
+    () => cacheBuiltInTrack(normalizeState({}), {
+      id: 'builtin-cache-oversized',
+      sourceType: 'builtin-cache',
+      name: 'Сохранённые встроенные субтитры',
+      cues: [{ start: 1, end: 2, text: 'x'.repeat(1_201) }],
+      offsetSeconds: 0,
+      timeScale: 1,
+    }),
+    /too large/i,
+  );
 });
 
 test('buildTrackOptions keeps a missing selection visible without treating it as available', () => {

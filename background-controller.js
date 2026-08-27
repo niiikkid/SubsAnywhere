@@ -134,6 +134,8 @@ export class BackgroundController {
           return ok(await this.#mutateTracks(message.tabId, this.#pageKey(message, sender), () => (
             this.#store.addExternalTrack(this.#pageKey(message, sender), message.track)
           )));
+        case MESSAGE.TRACK_CACHE_BUILTIN:
+          return ok(await this.#cacheBuiltInTrack(message, sender));
         case MESSAGE.TRACK_REMOVE:
           return ok(await this.#mutateTracks(message.tabId, this.#pageKey(message, sender), () => (
             this.#store.removeExternalTrack(this.#pageKey(message, sender), message.id)
@@ -288,6 +290,23 @@ export class BackgroundController {
       externalTracks: state.externalTracks,
     });
     return { state, delivered };
+  }
+
+  async #cacheBuiltInTrack(message, sender) {
+    const tabId = message.tabId ?? sender?.tab?.id;
+    const pageKey = this.#pageKey(message, sender);
+    if (!Number.isInteger(tabId)) throw new Error('Invalid tab id');
+    const state = await this.#store.get(pageKey);
+    const selected = this.players(tabId).find((player) => (
+      player.key === state.settings.selectedPlayerKey && player.frameId === sender?.frameId
+    ));
+    const expectedSource = `${state.settings.selectedPlayerKey}\u0000${state.settings.secondTrackId}`;
+    if (!selected || !state.settings.secondTrackId || state.settings.secondTrackId.startsWith('external:') || message.sourceKey !== expectedSource) {
+      throw new Error('Built-in subtitle cache is stale');
+    }
+    return this.#mutateTracks(tabId, pageKey, () => (
+      this.#store.cacheBuiltInTrack(pageKey, message.track, message.sourceKey)
+    ));
   }
 
 
