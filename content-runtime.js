@@ -8,6 +8,22 @@
       .trim();
   }
 
+  function captionSegments(text, items = []) {
+    const source = String(text ?? '');
+    const segments = [];
+    let cursor = 0;
+    for (const item of Array.isArray(items) ? items : []) {
+      const start = Number(item?.start);
+      const end = Number(item?.end);
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < cursor || end <= start || end > source.length) continue;
+      if (start > cursor) segments.push({ text: source.slice(cursor, start), item: null });
+      segments.push({ text: source.slice(start, end), item });
+      cursor = end;
+    }
+    if (cursor < source.length) segments.push({ text: source.slice(cursor), item: null });
+    return segments;
+  }
+
   function cueTextAt(cues, videoTime, offsetSeconds = 0, timeScale = 1) {
     const scale = Number(timeScale);
     const sourceTime = (Number(videoTime) - Number(offsetSeconds || 0)) / (Number.isFinite(scale) && scale > 0 ? scale : 1);
@@ -302,6 +318,7 @@
   root.DualCaptionsContentRuntime = Object.freeze({
     activeCueText,
     bindVideoEvents,
+    captionSegments,
     chooseVideo,
     cleanSubtitleText,
     createBuiltInTrackResolver,

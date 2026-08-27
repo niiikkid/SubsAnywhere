@@ -4,6 +4,7 @@ import {
   AiCredentialStore,
   DeepSeekClient,
   estimateAffineSync,
+  normalizeCaptionTranslation,
   sampleCueList,
 } from '../ai-client.js';
 
@@ -77,4 +78,65 @@ test('DeepSeek request uses selected model and reasoning effort with JSON mode',
   assert.equal(result.englishSearchTitle, 'The Test');
   assert.deepEqual(result.alternateSearchTitles, ['Test Movie']);
   assert.equal(result.originalLanguage, 'en');
+});
+
+test('caption translation keeps only ordered phrase spans from the displayed subtitle', () => {
+  const result = normalizeCaptionTranslation('I gave up at last.', {
+    items: [
+      { text: 'gave up', dictionary: 'сдаваться', context: 'сдался' },
+      { text: 'at last', dictionary: 'наконец', context: 'наконец-то' },
+      { text: 'invented phrase', dictionary: 'x', context: 'x' },
+      { text: 'I', dictionary: 'я', context: 'я' },
+    ],
+  });
+
+  assert.deepEqual(result, [
+    { start: 0, end: 1, text: 'I', dictionary: 'я', context: 'я' },
+    { start: 2, end: 9, text: 'gave up', dictionary: 'сдаваться', context: 'сдался' },
+    { start: 10, end: 17, text: 'at last', dictionary: 'наконец', context: 'наконец-то' },
+  ]);
+});
+
+test('caption translation never matches a word inside another word and handles repeats', () => {
+  const result = normalizeCaptionTranslation('The he said he.', {
+    items: [{ text: 'he', dictionary: 'он', context: 'он' }],
+  });
+
+  assert.deepEqual(result, [
+    { start: 4, end: 6, text: 'he', dictionary: 'он', context: 'он' },
+    { start: 12, end: 14, text: 'he', dictionary: 'он', context: 'он' },
+  ]);
+});
+
+test('caption translation accepts concise common response field names from AI', () => {
+  const result = normalizeCaptionTranslation('I gave up.', {
+    phrases: [{ phrase: 'gave up', translation: 'сдаться', contextTranslation: 'сдался' }],
+  });
+
+  assert.deepEqual(result, [{
+    start: 2, end: 9, text: 'gave up', dictionary: 'сдаться', context: 'сдался',
+  }]);
+});
+
+test('DeepSeek prepares concise click translations for one caption only', async () => {
+  const storage = new MemoryStorage();
+  const credentials = new AiCredentialStore(storage);
+  await credentials.patch({ apiKey: 'secret-key' });
+  let request;
+  const client = new DeepSeekClient(async (_url, options) => {
+    request = JSON.parse(options.body);
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '{"items":[{"text":"gave up","dictionary":"сдаваться","context":"сдался"}]}' } }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }, credentials);
+
+  const result = await client.translateCaption('I gave up.', { model: 'deepseek-v4-flash', reasoningEffort: 'low' });
+
+  assert.deepEqual(result, [{ start: 2, end: 9, text: 'gave up', dictionary: 'сдаваться', context: 'сдался' }]);
+  assert.equal(request.max_tokens, 400);
+  assert.deepEqual(request.thinking, { type: 'disabled' });
+  assert.equal('reasoning_effort' in request, false);
+  assert.match(request.messages[0].content, /phrases/i);
+  assert.match(request.messages[0].content, /2-3 short Russian variants/i);
+  assert.match(request.messages[1].content, /I gave up\./);
 });

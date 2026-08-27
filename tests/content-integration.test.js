@@ -40,6 +40,15 @@ class FakeElement extends FakeTarget {
       this.children.push(child);
     }
   }
+  replaceChildren(...children) {
+    for (const child of this.children) {
+      child.parentElement = null;
+      child.isConnected = false;
+    }
+    this.children = [];
+    this.append(...children);
+  }
+  getBoundingClientRect() { return { left: 10, top: 20, width: 800, height: 450 }; }
   remove() {
     if (this.parentElement) {
       this.parentElement.children = this.parentElement.children.filter((item) => item !== this);
@@ -87,6 +96,7 @@ async function makeHarness() {
     videos: [fakeVideo()],
     documentElement: new FakeElement('html'),
     createElement: (tag) => new FakeElement(tag),
+    createTextNode: (text) => Object.assign(new FakeElement('#text'), { textContent: text }),
     querySelectorAll(selector) { return selector === 'video' ? this.videos : []; },
   });
   document.documentElement.isConnected = true;
@@ -150,9 +160,129 @@ test('production content message renders built-in and imported tracks safely', a
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
   assert.ok(overlay);
   assert.equal(overlay.children[0].textContent, 'Built in');
-  assert.equal(overlay.children[1].textContent, 'Imported');
+  assert.equal(overlay.children[1].children.map((child) => child.textContent).join(''), 'Imported');
   assert.equal(overlay.children[0].style.bottom, '20%');
   assert.equal(overlay.children[1].style.bottom, '8%');
+});
+
+test('production turns prepared English phrases into toggled translation tooltips', async () => {
+  const harness = await makeHarness();
+  harness.context.chrome.runtime.sendMessage = (message) => {
+    if (message.type === 'dualCaptions.caption.translate') {
+      return Promise.resolve({ ok: true, data: {
+        items: [{ start: 0, end: 5, text: 'Built', dictionary: 'строить', context: 'встроенный' }],
+      } });
+    }
+    harness.reports.push(structuredClone(message));
+    return Promise.resolve({ ok: true });
+  };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { firstTrackId: '', secondTrackId: 'track-0', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    externalTracks: [],
+  }, {}, () => {});
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  const phrase = overlay.children[1].children[0];
+  assert.equal(phrase.textContent, 'Built');
+  phrase.dispatch('click', { stopPropagation() {} });
+  assert.equal(overlay.children.at(-1).children[1].textContent, 'Обычно: строить');
+
+  phrase.dispatch('click', { stopPropagation() {} });
+  assert.equal(overlay.children.length, 2);
+});
+
+test('production makes the original caption clickable while its translation is loading', async () => {
+  const harness = await makeHarness();
+  harness.context.chrome.runtime.sendMessage = (message) => {
+    if (message.type === 'dualCaptions.caption.translate') return new Promise(() => {});
+    harness.reports.push(structuredClone(message));
+    return Promise.resolve({ ok: true });
+  };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { firstTrackId: '', secondTrackId: 'track-0', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    externalTracks: [],
+  }, {}, () => {});
+
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  const token = overlay.children[1].children[0];
+  assert.equal(token.textContent, 'Built');
+  token.dispatch('click', { stopPropagation() {} });
+  assert.equal(overlay.children.at(-1).children[1].textContent, 'Обычно: Перевод готовится…');
+});
+
+test('production keeps original caption tokens clickable when AI returns no phrases', async () => {
+  const harness = await makeHarness();
+  harness.context.chrome.runtime.sendMessage = (message) => {
+    if (message.type === 'dualCaptions.caption.translate') return Promise.resolve({ ok: true, data: { items: [] } });
+    harness.reports.push(structuredClone(message));
+    return Promise.resolve({ ok: true });
+  };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { firstTrackId: '', secondTrackId: 'track-0', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    externalTracks: [],
+  }, {}, () => {});
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  const token = overlay.children[1].children[0];
+  assert.equal(token.textContent, 'Built');
+  assert.equal(token.listeners.get('click')?.size, 1);
+});
+
+test('production always prepares the selected original second track for translation', async () => {
+  const harness = await makeHarness();
+  Object.assign(harness.document.videos[0].textTracks[0], {
+    label: 'Русский', language: 'ru', activeCues: [{ text: 'A name appears' }],
+  });
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { firstTrackId: '', secondTrackId: 'track-0', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    externalTracks: [],
+  }, {}, () => {});
+  await Promise.resolve();
+
+  assert.equal(harness.reports.some((message) => message.type === 'dualCaptions.caption.translate'), true);
+});
+
+test('production recognizes English metadata used by Russian players', async () => {
+  const harness = await makeHarness();
+  Object.assign(harness.document.videos[0].textTracks[0], {
+    label: 'Английский', language: 'eng', activeCues: [{ text: 'A name appears' }],
+  });
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { firstTrackId: '', secondTrackId: 'track-0', firstBottom: 20, secondBottom: 8, fontSize: 24 },
+    externalTracks: [],
+  }, {}, () => {});
+  await Promise.resolve();
+
+  assert.equal(harness.reports.some((message) => message.type === 'dualCaptions.caption.translate'), true);
 });
 
 test('production keeps a selected built-in track when the player recreates it during an audio switch', async () => {

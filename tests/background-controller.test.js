@@ -265,6 +265,30 @@ test('settings patch sends only lightweight settings to the selected player fram
   assert.equal('externalTracks' in chrome.sent[0].message, false);
 });
 
+test('caption translation sends only the current short caption to DeepSeek', async () => {
+  const calls = [];
+  const deepSeek = {
+    async translateCaption(text, options) {
+      calls.push({ text, options });
+      return [{ start: 0, end: 4, text: 'Wait', dictionary: 'ждать', context: 'подожди' }];
+    },
+  };
+  const controller = new BackgroundController(makeChrome(), new FakeStore(), { deepSeek });
+
+  const result = await controller.handle({
+    type: 'dualCaptions.caption.translate',
+    text: 'Wait for me.',
+    aiOptions: { model: 'deepseek-v4-flash', reasoningEffort: 'low' },
+  }, { tab: { id: 3 } });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.data.items, [{ start: 0, end: 4, text: 'Wait', dictionary: 'ждать', context: 'подожди' }]);
+  assert.deepEqual(calls, [{
+    text: 'Wait for me.',
+    options: { model: 'deepseek-v4-flash', reasoningEffort: 'low' },
+  }]);
+});
+
 test('selecting a built-in track persists its recovery position immediately', async () => {
   const chrome = makeChrome();
   const store = new FakeStore();

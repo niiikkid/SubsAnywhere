@@ -84,6 +84,7 @@ export class BackgroundController {
   #store;
   #registry;
   #credentialStore;
+  #deepSeek;
   #subtitleFinder;
   #discoveryTimeoutMs;
   #discoveryQuietMs;
@@ -95,6 +96,7 @@ export class BackgroundController {
     this.#store = store;
     this.#registry = options.registry ?? new PlayerRegistry();
     this.#credentialStore = options.credentialStore;
+    this.#deepSeek = options.deepSeek;
     this.#subtitleFinder = options.subtitleFinder;
     this.#discoveryTimeoutMs = options.discoveryTimeoutMs ?? 1500;
     this.#discoveryQuietMs = options.discoveryQuietMs ?? 75;
@@ -157,6 +159,8 @@ export class BackgroundController {
         case MESSAGE.AI_CONFIG_PATCH:
           if (!this.#credentialStore) throw new Error('DeepSeek пока недоступен');
           return ok(await this.#credentialStore.patch(message));
+        case MESSAGE.CAPTION_TRANSLATE:
+          return ok(await this.#translateCaption(message));
         default:
           throw new Error(`Unknown message: ${message?.type ?? 'empty'}`);
       }
@@ -321,6 +325,15 @@ export class BackgroundController {
       externalTracks: state.externalTracks,
     });
     return { state, summary: result.summary, delivered };
+  }
+
+  async #translateCaption(message) {
+    if (!this.#deepSeek) throw new Error('DeepSeek пока недоступен');
+    const text = typeof message?.text === 'string' ? message.text.trim().slice(0, 500) : '';
+    if (!text) return { items: [] };
+    return {
+      items: await this.#deepSeek.translateCaption(text, message.aiOptions),
+    };
   }
 
   async #sendToSelected(tabId, state, payload) {

@@ -181,6 +181,19 @@ test('runtime sanitizes subtitle markup before it reaches textContent', async ()
   assert.equal(runtime.cleanSubtitleText('<i>Hello</i><br>world'), 'Hello\nworld');
 });
 
+test('runtime splits a caption into plain text and clickable phrase segments', async () => {
+  const runtime = await loadRuntime();
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(runtime.captionSegments('I gave up.', [{ start: 2, end: 9, text: 'gave up', dictionary: 'сдаваться', context: 'сдался' }]))),
+    [
+      { text: 'I ', item: null },
+      { text: 'gave up', item: { start: 2, end: 9, text: 'gave up', dictionary: 'сдаваться', context: 'сдался' } },
+      { text: '.', item: null },
+    ],
+  );
+});
+
 test('runtime external cue lookup keeps positive offset semantics', async () => {
   const runtime = await loadRuntime();
   const cues = [{ start: 10, end: 12, text: '<b>Later</b>' }];

@@ -8,7 +8,7 @@ const store = new StateStore(storage);
 const credentialStore = new AiCredentialStore(storage);
 const deepSeek = new DeepSeekClient(globalThis.fetch.bind(globalThis), credentialStore);
 const subtitleFinder = new SubtitleFinder(globalThis.fetch.bind(globalThis), deepSeek);
-const controller = new BackgroundController(chrome, store, { credentialStore, subtitleFinder });
+const controller = new BackgroundController(chrome, store, { credentialStore, deepSeek, subtitleFinder });
 
 storage.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => undefined);
 

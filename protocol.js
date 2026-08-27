@@ -12,6 +12,7 @@ export const MESSAGE = Object.freeze({
   SUBTITLE_FIND: 'dualCaptions.subtitle.find',
   AI_CONFIG_GET: 'dualCaptions.ai.get',
   AI_CONFIG_PATCH: 'dualCaptions.ai.patch',
+  CAPTION_TRANSLATE: 'dualCaptions.caption.translate',
   CONTENT_FULL_STATE: 'dualCaptions.content.fullState',
   CONTENT_SETTINGS: 'dualCaptions.content.settings',
   CONTENT_TRACKS: 'dualCaptions.content.tracks',
