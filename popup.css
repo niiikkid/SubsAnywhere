@@ -11,6 +11,7 @@ output { float: right; color: #a7c7ff; font-weight: 500; }
 button { border: 1px solid #414652; border-radius: 6px; padding: 7px 9px; background: #292c34; color: #fff; font: inherit; cursor: pointer; }
 button:disabled { opacity: 0.55; cursor: wait; }
 .primary { width: 100%; border: 0; padding: 9px; background: #5d8dff; color: white; font-weight: 700; }
+.restart-search { width: 100%; margin-top: 8px; }
 .hint { font-size: 12px; }
 h2 { margin: 0 0 8px; font-size: 14px; }
 .auto-box, .import-box, .sync-box { margin: 16px 0; padding: 12px; border: 1px solid #343740; border-radius: 8px; background: #202228; }

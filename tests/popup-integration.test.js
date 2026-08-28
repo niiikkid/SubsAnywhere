@@ -27,7 +27,7 @@ function makeDocument() {
   const ids = [
     'controls', 'status', 'player', 'originalTrack', 'originalBottom',
     'fontSize', 'originalBottomValue', 'fontSizeValue', 'externalList',
-    'syncBox', 'syncTrack', 'offsetSeconds', 'timeScalePercent', 'activate', 'subtitleFile',
+    'syncBox', 'syncTrack', 'offsetSeconds', 'timeScalePercent', 'activate', 'restartSearch', 'subtitleFile',
     'deepseekKey', 'deepseekModel', 'saveDeepseekKey', 'clearDeepseekKey', 'aiKeyState',
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement()]));
@@ -88,6 +88,42 @@ test('production popup startup performs read-only hydration and never overwrites
   assert.equal(messages.find((message) => message.type === 'dualCaptions.state.get').pageKey, 'https://video.example/episode-1');
   assert.equal(document.elements.controls.hidden, true);
   assert.equal(document.elements.status.textContent, 'Нажмите «Подключить к плееру» на странице с видео.');
+});
+
+test('restart search repeats player discovery and restores the selected player', async () => {
+  const document = makeDocument();
+  const messages = [];
+  const player = { frameId: 12, key: 'player-12', title: 'Reloaded player', tracks: [] };
+  globalThis.document = document;
+  globalThis.chrome = {
+    tabs: { query: async () => [{ id: 77, url: 'https://video.example/episode-1' }] },
+    runtime: {
+      async sendMessage(message) {
+        messages.push(structuredClone(message));
+        if (message.type === 'dualCaptions.state.get') return { ok: true, data: { state: {} } };
+        if (message.type === 'dualCaptions.player.get') return { ok: true, data: { players: [player] } };
+        if (message.type === 'dualCaptions.ai.get') return { ok: true, data: { hasApiKey: false } };
+        if (message.type === 'dualCaptions.player.discover') return { ok: true, data: { players: [player] } };
+        if (message.type === 'dualCaptions.player.select') return { ok: true, data: { state: {} } };
+        throw new Error(`Unexpected message: ${message.type}`);
+      },
+    },
+    permissions: { request: async () => true },
+  };
+
+  await import(`../popup.js?restart-search-test=${Date.now()}`);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  messages.length = 0;
+
+  assert.equal(document.elements.restartSearch.hidden, false);
+  document.elements.restartSearch.listeners.get('click')();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(messages.map((message) => message.type), [
+    'dualCaptions.player.discover',
+    'dualCaptions.player.select',
+  ]);
+  assert.equal(document.elements.status.textContent, 'Поиск субтитров перезапущен. Найдено плееров: 1.');
 });
 
 test('saving a key immediately after choosing Pro keeps the chosen model', async () => {

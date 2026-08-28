@@ -144,6 +144,7 @@ function drawSettings() {
 
 function render() {
   controls.hidden = players.length === 0;
+  $('restartSearch').hidden = players.length === 0;
   drawPlayers();
   if (!players.length) return;
   drawSettings();
@@ -231,9 +232,10 @@ async function setTiming(trackId, { offsetSeconds, timeScale }) {
   render();
 }
 
-async function activate() {
+async function activate(restart = false) {
   $('activate').disabled = true;
-  setStatus('Подключаюсь к странице и плееру…');
+  $('restartSearch').disabled = true;
+  setStatus(restart ? 'Перезапускаю поиск субтитров…' : 'Подключаюсь к странице и плееру…');
   try {
     const granted = await chrome.permissions.request({ origins: ['<all_urls>'] });
     if (!granted) throw new Error('Без доступа к iframe расширение не сможет увидеть плеер.');
@@ -245,9 +247,12 @@ async function activate() {
     }
     render();
     await selectPlayer(currentPlayer());
-    setStatus(`Подключено. Найдено плееров: ${players.length}.`);
+    setStatus(restart
+      ? `Поиск субтитров перезапущен. Найдено плееров: ${players.length}.`
+      : `Подключено. Найдено плееров: ${players.length}.`);
   } finally {
     $('activate').disabled = false;
+    $('restartSearch').disabled = false;
   }
 }
 
@@ -287,6 +292,7 @@ async function init() {
 }
 
 $('activate').addEventListener('click', () => activate().catch((error) => setStatus(error.message, true)));
+$('restartSearch').addEventListener('click', () => activate(true).catch((error) => setStatus(error.message, true)));
 $('saveDeepseekKey').addEventListener('click', () => saveDeepseekKey(false).catch((error) => setStatus(error.message, true)));
 $('clearDeepseekKey').addEventListener('click', () => saveDeepseekKey(true).catch((error) => setStatus(error.message, true)));
 $('deepseekModel').addEventListener('change', () => saveDeepseekModel().catch((error) => setStatus(error.message, true)));

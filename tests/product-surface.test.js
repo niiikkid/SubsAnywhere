@@ -6,6 +6,7 @@ test('popup exposes one original subtitle track and no automatic subtitle search
   const html = await fs.readFile(new URL('../popup.html', import.meta.url), 'utf8');
 
   assert.match(html, /id="originalTrack"/);
+  assert.match(html, /id="restartSearch"[^>]*>Перезапустить поиск субтитров</);
   assert.doesNotMatch(html, /id="firstTrack"|id="secondTrack"/);
   assert.doesNotMatch(html, /findSubtitles|Автопоиск|SubDL/);
 });
