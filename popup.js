@@ -20,6 +20,7 @@ let state = normalizeState({});
 let selectedFrameId;
 let syncTrackId = '';
 let hasApiKey = false;
+let aiModel = 'deepseek-v4-flash';
 const enqueueOffsetTask = createSerialTaskQueue();
 const settingsCommit = createDebouncedPatchCommit(
   (patch) => request(MESSAGE.STATE_PATCH, { tabId, pageKey, patch }),
@@ -138,6 +139,7 @@ function drawSettings() {
   $('aiKeyState').textContent = hasApiKey
     ? 'Ключ сохранён. Перевод по клику включён.'
     : 'Ключ не сохранён. Перевод по клику недоступен.';
+  $('deepseekModel').value = aiModel;
 }
 
 function render() {
@@ -252,11 +254,21 @@ async function activate() {
 async function saveDeepseekKey(clear = false) {
   const apiKey = $('deepseekKey').value.trim();
   if (!clear && !apiKey) throw new Error('Вставьте API-ключ DeepSeek');
-  const data = await request(MESSAGE.AI_CONFIG_PATCH, { apiKey, clearApiKey: clear });
+  const data = await request(MESSAGE.AI_CONFIG_PATCH, { apiKey, model: aiModel, clearApiKey: clear });
   hasApiKey = Boolean(data.hasApiKey);
+  aiModel = data.model === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
   $('deepseekKey').value = '';
   drawSettings();
   setStatus(clear ? 'API-ключ DeepSeek удалён.' : 'API-ключ DeepSeek сохранён.');
+}
+
+async function saveDeepseekModel() {
+  aiModel = $('deepseekModel').value === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
+  const data = await request(MESSAGE.AI_CONFIG_PATCH, { model: aiModel });
+  hasApiKey = Boolean(data.hasApiKey);
+  aiModel = data.model === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
+  drawSettings();
+  setStatus(`Выбрана модель ${aiModel === 'deepseek-v4-pro' ? 'DeepSeek V4 Pro' : 'DeepSeek V4 Flash'}.`);
 }
 
 async function init() {
@@ -268,6 +280,7 @@ async function init() {
   state = snapshot.state;
   players = snapshot.players;
   hasApiKey = snapshot.hasApiKey;
+  aiModel = snapshot.aiModel;
   render();
   if (!players.length) setStatus('Нажмите «Подключить к плееру» на странице с видео.');
   else setStatus(`Плеер уже подключён. Найдено: ${players.length}.`);
@@ -276,6 +289,7 @@ async function init() {
 $('activate').addEventListener('click', () => activate().catch((error) => setStatus(error.message, true)));
 $('saveDeepseekKey').addEventListener('click', () => saveDeepseekKey(false).catch((error) => setStatus(error.message, true)));
 $('clearDeepseekKey').addEventListener('click', () => saveDeepseekKey(true).catch((error) => setStatus(error.message, true)));
+$('deepseekModel').addEventListener('change', () => saveDeepseekModel().catch((error) => setStatus(error.message, true)));
 $('subtitleFile').addEventListener('change', (event) => importFile(event.target.files?.[0]).catch((error) => setStatus(error.message, true)));
 $('player').addEventListener('change', () => {
   const player = players.find((item) => item.frameId === Number($('player').value));

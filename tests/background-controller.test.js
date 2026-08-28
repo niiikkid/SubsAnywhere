@@ -261,8 +261,8 @@ test('settings patch sends only lightweight settings to the selected player fram
 test('caption translation sends only the current short caption to DeepSeek', async () => {
   const calls = [];
   const deepSeek = {
-    async translateCaption(text, options) {
-      calls.push({ text, options });
+    async translateCaption(text) {
+      calls.push({ text });
       return [{ start: 0, end: 4, text: 'Wait', dictionary: 'ждать', context: 'подожди' }];
     },
   };
@@ -278,7 +278,6 @@ test('caption translation sends only the current short caption to DeepSeek', asy
   assert.deepEqual(result.data.items, [{ start: 0, end: 4, text: 'Wait', dictionary: 'ждать', context: 'подожди' }]);
   assert.deepEqual(calls, [{
     text: 'Wait for me.',
-    options: { model: 'deepseek-v4-flash', reasoningEffort: 'low' },
   }]);
 });
 

@@ -315,7 +315,7 @@ export class BackgroundController {
     const text = typeof message?.text === 'string' ? message.text.trim().slice(0, 500) : '';
     if (!text) return { items: [] };
     return {
-      items: await this.#deepSeek.translateCaption(text, message.aiOptions),
+      items: await this.#deepSeek.translateCaption(text),
     };
   }
 

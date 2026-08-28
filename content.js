@@ -26,6 +26,7 @@
     };
     const builtInTrackResolver = runtime.createBuiltInTrackResolver();
     const originalTrackModes = new Map();
+    const localBuiltInTracks = new Map();
     const cachedBuiltInSelections = new Set();
     const cachingBuiltInSelections = new Set();
     const cleanup = [];
@@ -177,11 +178,21 @@
         return runtime.upcomingCueTexts(external.cues, sourceTime, { seconds: 30 / scale, limit: 3 });
       }
       const track = builtInTrackResolver.find(video.textTracks, id, fallbackId);
-      if (!track && state.settings.secondTrackCacheSource === `${state.settings.selectedPlayerKey}\u0000${id}`) {
-        const cached = state.externalTracks.find((item) => item.id === state.settings.secondTrackCacheId && item.sourceType === 'builtin-cache');
-        if (cached) return runtime.upcomingCueTexts(cached.cues, video.currentTime, { seconds: 30, limit: 3 });
+      const nativeTexts = runtime.upcomingCueTexts(track?.cues, video.currentTime, { seconds: 30, limit: 3 });
+      if (nativeTexts.length) return nativeTexts;
+      const cached = cachedBuiltInTrack(id);
+      return runtime.upcomingCueTexts(cached?.cues, video.currentTime, { seconds: 30, limit: 3 });
+    }
+
+    function cachedBuiltInTrack(id) {
+      const selectionKey = `${state.settings.selectedPlayerKey}\u0000${id}`;
+      if (state.settings.secondTrackCacheSource === selectionKey) {
+        const persisted = state.externalTracks.find((track) => (
+          track.id === state.settings.secondTrackCacheId && track.sourceType === 'builtin-cache'
+        ));
+        if (persisted) return persisted;
       }
-      return runtime.upcomingCueTexts(track?.cues, video.currentTime, { seconds: 30, limit: 3 });
+      return localBuiltInTracks.get(selectionKey) ?? null;
     }
 
     function cacheSelectedBuiltInTrack(id, fallbackId, video) {
@@ -210,17 +221,19 @@
       if (!cues.length || !globalThis.crypto?.randomUUID) return;
       cachingBuiltInSelections.add(selectionKey);
       const snapshotId = `builtin-cache-${globalThis.crypto.randomUUID()}`;
+      const snapshot = {
+        id: snapshotId,
+        sourceType: 'builtin-cache',
+        name: 'Сохранённые встроенные субтитры',
+        cues,
+        offsetSeconds: 0,
+        timeScale: 1,
+      };
+      localBuiltInTracks.set(selectionKey, snapshot);
       chrome.runtime.sendMessage({
         type: MESSAGE.TRACK_CACHE_BUILTIN,
         sourceKey: selectionKey,
-        track: {
-          id: snapshotId,
-          sourceType: 'builtin-cache',
-          name: 'Сохранённые встроенные субтитры',
-          cues,
-          offsetSeconds: 0,
-          timeScale: 1,
-        },
+        track: snapshot,
       }).then((response) => {
         if (response?.ok === true) cachedBuiltInSelections.add(selectionKey);
         else throw new Error('Built-in subtitle cache was rejected');
@@ -291,9 +304,9 @@
           : '';
       }
       const native = builtInTrackResolver.find(video.textTracks, id, fallbackId);
-      if (native) return runtime.activeCueText(native);
-      if (state.settings.secondTrackCacheSource !== `${state.settings.selectedPlayerKey}\u0000${id}`) return '';
-      const cached = state.externalTracks.find((track) => track.id === state.settings.secondTrackCacheId && track.sourceType === 'builtin-cache');
+      const nativeText = runtime.activeCueText(native);
+      if (nativeText) return nativeText;
+      const cached = cachedBuiltInTrack(id);
       return cached ? runtime.cueTextAt(cached.cues, video.currentTime, cached.offsetSeconds, cached.timeScale) : '';
     }
 

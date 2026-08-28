@@ -28,7 +28,7 @@ function makeDocument() {
     'controls', 'status', 'player', 'originalTrack', 'originalBottom',
     'fontSize', 'originalBottomValue', 'fontSizeValue', 'externalList',
     'syncBox', 'syncTrack', 'offsetSeconds', 'timeScalePercent', 'activate', 'subtitleFile',
-    'deepseekKey', 'saveDeepseekKey', 'clearDeepseekKey', 'aiKeyState',
+    'deepseekKey', 'deepseekModel', 'saveDeepseekKey', 'clearDeepseekKey', 'aiKeyState',
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement()]));
   elements.controls.hidden = true;
@@ -88,4 +88,41 @@ test('production popup startup performs read-only hydration and never overwrites
   assert.equal(messages.find((message) => message.type === 'dualCaptions.state.get').pageKey, 'https://video.example/episode-1');
   assert.equal(document.elements.controls.hidden, true);
   assert.equal(document.elements.status.textContent, 'Нажмите «Подключить к плееру» на странице с видео.');
+});
+
+test('saving a key immediately after choosing Pro keeps the chosen model', async () => {
+  const document = makeDocument();
+  const messages = [];
+  let releaseModelPatch;
+  const modelPatch = new Promise((resolve) => { releaseModelPatch = resolve; });
+  globalThis.document = document;
+  globalThis.chrome = {
+    tabs: { query: async () => [{ id: 77, url: 'https://video.example/episode-1' }] },
+    runtime: {
+      async sendMessage(message) {
+        messages.push(structuredClone(message));
+        if (message.type === 'dualCaptions.state.get') return { ok: true, data: { state: {} } };
+        if (message.type === 'dualCaptions.player.get') return { ok: true, data: { players: [] } };
+        if (message.type === 'dualCaptions.ai.get') return { ok: true, data: { hasApiKey: false, model: 'deepseek-v4-flash' } };
+        if (message.type === 'dualCaptions.ai.patch' && !('apiKey' in message)) {
+          await modelPatch;
+          return { ok: true, data: { hasApiKey: false, model: 'deepseek-v4-pro' } };
+        }
+        if (message.type === 'dualCaptions.ai.patch') return { ok: true, data: { hasApiKey: true, model: message.model } };
+        throw new Error(`Unexpected message: ${message.type}`);
+      },
+    },
+    permissions: { request: async () => true },
+  };
+
+  await import(`../popup.js?ai-model-race-test=${Date.now()}`);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.elements.deepseekModel.value = 'deepseek-v4-pro';
+  document.elements.deepseekModel.listeners.get('change')();
+  document.elements.deepseekKey.value = 'secret-key';
+  document.elements.saveDeepseekKey.listeners.get('click')();
+
+  const keyPatch = messages.find((message) => message.type === 'dualCaptions.ai.patch' && 'apiKey' in message);
+  assert.equal(keyPatch.model, 'deepseek-v4-pro');
+  releaseModelPatch();
 });

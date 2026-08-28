@@ -10,6 +10,14 @@ test('popup exposes one original subtitle track and no automatic subtitle search
   assert.doesNotMatch(html, /findSubtitles|Автопоиск|SubDL/);
 });
 
+test('popup lets the user choose DeepSeek Flash or Pro', async () => {
+  const html = await fs.readFile(new URL('../popup.html', import.meta.url), 'utf8');
+
+  assert.match(html, /<select id="deepseekModel">/);
+  assert.match(html, /<option value="deepseek-v4-flash">DeepSeek V4 Flash<\/option>/);
+  assert.match(html, /<option value="deepseek-v4-pro">DeepSeek V4 Pro<\/option>/);
+});
+
 test('manifest keeps only DeepSeek network access', async () => {
   const manifest = JSON.parse(await fs.readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
 

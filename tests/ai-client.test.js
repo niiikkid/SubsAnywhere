@@ -22,10 +22,21 @@ test('AI credential store never exposes the saved key to the popup', async () =>
 
   const publicInfo = await credentials.patch({ apiKey: 'secret-key' });
 
-  assert.deepEqual(publicInfo, { hasApiKey: true });
-  assert.deepEqual(await credentials.publicInfo(), { hasApiKey: true });
+  assert.deepEqual(publicInfo, { hasApiKey: true, model: 'deepseek-v4-flash' });
+  assert.deepEqual(await credentials.publicInfo(), { hasApiKey: true, model: 'deepseek-v4-flash' });
   assert.equal((await credentials.get()).apiKey, 'secret-key');
   assert.equal('apiKey' in publicInfo, false);
+});
+
+test('AI credential store saves the chosen DeepSeek model for translation', async () => {
+  const storage = new MemoryStorage();
+  const credentials = new AiCredentialStore(storage);
+
+  const publicInfo = await credentials.patch({ apiKey: 'secret-key', model: 'deepseek-v4-pro' });
+
+  assert.deepEqual(publicInfo, { hasApiKey: true, model: 'deepseek-v4-pro' });
+  assert.deepEqual(await credentials.publicInfo(), { hasApiKey: true, model: 'deepseek-v4-pro' });
+  assert.equal((await credentials.get()).model, 'deepseek-v4-pro');
 });
 
 
@@ -70,7 +81,7 @@ test('caption translation accepts concise common response field names from AI', 
 test('DeepSeek prepares concise click translations for one caption only', async () => {
   const storage = new MemoryStorage();
   const credentials = new AiCredentialStore(storage);
-  await credentials.patch({ apiKey: 'secret-key' });
+  await credentials.patch({ apiKey: 'secret-key', model: 'deepseek-v4-pro' });
   let request;
   const client = new DeepSeekClient(async (_url, options) => {
     request = JSON.parse(options.body);
@@ -79,10 +90,11 @@ test('DeepSeek prepares concise click translations for one caption only', async 
     }), { status: 200, headers: { 'content-type': 'application/json' } });
   }, credentials);
 
-  const result = await client.translateCaption('I gave up.', { model: 'deepseek-v4-flash', reasoningEffort: 'low' });
+  const result = await client.translateCaption('I gave up.');
 
   assert.deepEqual(result, [{ start: 2, end: 9, text: 'gave up', dictionary: 'сдаваться', context: 'сдался' }]);
   assert.equal(request.max_tokens, 400);
+  assert.equal(request.model, 'deepseek-v4-pro');
   assert.deepEqual(request.thinking, { type: 'disabled' });
   assert.equal('reasoning_effort' in request, false);
   assert.match(request.messages[0].content, /phrases/i);

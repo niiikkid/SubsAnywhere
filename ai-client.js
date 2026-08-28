@@ -9,7 +9,10 @@ export function normalizeAiOptions(value = {}) {
 
 function normalizeCredential(value = {}) {
   const apiKey = typeof value?.apiKey === 'string' ? value.apiKey.trim().slice(0, 512) : '';
-  return { apiKey };
+  return {
+    apiKey,
+    model: normalizeAiOptions(value).model,
+  };
 }
 
 export class AiCredentialStore {
@@ -35,18 +38,19 @@ export class AiCredentialStore {
 
   async publicInfo() {
     const credential = await this.get();
-    return { hasApiKey: Boolean(credential.apiKey) };
+    return { hasApiKey: Boolean(credential.apiKey), model: credential.model };
   }
 
-  patch({ apiKey, clearApiKey = false } = {}) {
+  patch({ apiKey, model, clearApiKey = false } = {}) {
     const operation = this.#queue.then(async () => {
       const current = await this.get();
       const next = normalizeCredential({
         apiKey: clearApiKey ? '' : (typeof apiKey === 'string' && apiKey.trim() ? apiKey : current.apiKey),
+        model: DEEPSEEK_MODELS.includes(model) ? model : current.model,
       });
       await this.#storage.set({ [AI_CONFIG_KEY]: next });
       this.#credential = next;
-      return { hasApiKey: Boolean(next.apiKey) };
+      return { hasApiKey: Boolean(next.apiKey), model: next.model };
     });
     this.#queue = operation.catch(() => undefined);
     return operation;
@@ -111,10 +115,11 @@ export class DeepSeekClient {
     return Boolean((await this.#credentialStore.get()).apiKey);
   }
 
-  async #jsonCompletion({ options, system, user, maxTokens }) {
-    const { apiKey } = await this.#credentialStore.get();
+  async #jsonCompletion({ system, user, maxTokens }) {
+    const credential = await this.#credentialStore.get();
+    const { apiKey } = credential;
     if (!apiKey) throw new Error('Сначала сохраните API-ключ DeepSeek');
-    const normalized = normalizeAiOptions(options);
+    const normalized = normalizeAiOptions(credential);
     const response = await this.#fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
@@ -144,11 +149,10 @@ export class DeepSeekClient {
   }
 
 
-  async translateCaption(text, options) {
+  async translateCaption(text) {
     const caption = String(text ?? '').trim().slice(0, 500);
     if (!caption) return [];
     const result = await this.#jsonCompletion({
-      options,
       maxTokens: 400,
 
       system: [

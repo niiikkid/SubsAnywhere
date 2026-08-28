@@ -66,5 +66,6 @@ export async function loadPopupSnapshot(request, tabId, pageKey) {
     state: normalizeState(stateData.state),
     players: Array.isArray(playerData.players) ? playerData.players : [],
     hasApiKey: Boolean(aiData.hasApiKey),
+    aiModel: aiData.model === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
   };
 }
