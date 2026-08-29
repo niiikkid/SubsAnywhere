@@ -8,78 +8,112 @@
 </head>
 <body>
   <main>
-    <h1>SubsAnywhere</h1>
+    <header class="app-header">
+      <div class="app-mark" aria-hidden="true">S</div>
+      <div>
+        <p class="eyebrow">СУБТИТРЫ БЕЗ ГРАНИЦ</p>
+        <h1>SubsAnywhere</h1>
+      </div>
+    </header>
     <p id="status" class="status">Нажмите «Подключить к плееру» на странице с видео.</p>
 
     <button id="activate" class="primary">Подключить к плееру</button>
     <button id="restartSearch" type="button" class="restart-search" hidden>Перезапустить поиск субтитров</button>
 
     <section id="controls" hidden>
-      <label>Плеер
-        <select id="player"></select>
-      </label>
-
-      <label>Оригинальные субтитры
-        <select id="originalTrack"></select>
-      </label>
-      <label>Положение субтитров <output id="originalBottomValue"></output>
-        <input id="originalBottom" type="range" min="0" max="95" value="5">
-      </label>
-      <label>Размер текста <output id="fontSizeValue"></output>
-        <input id="fontSize" type="range" min="12" max="48" value="22">
-      </label>
-
-      <section class="auto-box ai-settings">
-        <h2>Перевод DeepSeek</h2>
-        <p class="hint">Текущая короткая реплика заранее разбирается на кликабельные слова и выражения. Целый файл субтитров в ИИ не отправляется.</p>
-        <label>API-ключ DeepSeek
-          <input id="deepseekKey" type="password" autocomplete="new-password" placeholder="Вставьте ключ">
-        </label>
-        <label>Модель
-          <select id="deepseekModel">
-            <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
-            <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
-          </select>
-        </label>
-        <div class="button-row">
-          <button id="saveDeepseekKey" type="button">Сохранить ключ</button>
-          <button id="clearDeepseekKey" type="button" class="danger-text">Удалить ключ</button>
+      <section class="control-card player-card">
+        <div class="section-heading">
+          <h2>Источник</h2>
+          <span>видео и дорожка</span>
         </div>
-        <p id="aiKeyState" class="hint"></p>
+        <label>Плеер
+          <select id="player"></select>
+        </label>
+
+        <label>Оригинальные субтитры
+          <select id="originalTrack"></select>
+        </label>
       </section>
 
-      <section class="import-box">
-        <h2>Свой SRT</h2>
-        <p class="hint">Если нужной встроенной дорожки нет, можно добавить оригинальные субтитры вручную.</p>
-        <label class="file-button">Добавить SRT
-          <input id="subtitleFile" type="file" accept=".srt,application/x-subrip,text/plain">
-        </label>
-        <div id="externalList" class="external-list"></div>
-      </section>
-
-      <section id="syncBox" class="sync-box" hidden>
-        <h2>Ручная синхронизация</h2>
-        <label>Файл
-          <select id="syncTrack"></select>
-        </label>
-        <label>Смещение, секунд
-          <input id="offsetSeconds" type="number" min="-3600" max="3600" step="0.1" value="0">
-        </label>
-        <div class="sync-buttons" aria-label="Изменить смещение">
-          <button type="button" data-shift="-5">−5</button>
-          <button type="button" data-shift="-1">−1</button>
-          <button type="button" data-shift="-0.1">−0,1</button>
-          <button type="button" data-shift="0.1">+0,1</button>
-          <button type="button" data-shift="1">+1</button>
-          <button type="button" data-shift="5">+5</button>
+      <section class="control-card appearance-card">
+        <div class="section-heading">
+          <h2>Внешний вид</h2>
+          <span>на видео</span>
         </div>
-        <label>Скорость дорожки, %
-          <input id="timeScalePercent" type="number" min="90" max="110" step="0.001" value="100">
+        <label>Положение субтитров <output id="originalBottomValue"></output>
+          <input id="originalBottom" type="range" min="0" max="95" value="5">
         </label>
-        <p class="hint"><b>Минус</b> — показать раньше. <b>Плюс</b> — позже.</p>
+        <label>Размер текста <output id="fontSizeValue"></output>
+          <input id="fontSize" type="range" min="12" max="48" value="22">
+        </label>
       </section>
 
-      <p class="hint">Выбранные субтитры и настройки сохраняются отдельно для каждой страницы.</p>
+      <details class="advanced-settings">
+        <summary>
+          <span>Дополнительно</span>
+          <small>DeepSeek и свой SRT</small>
+        </summary>
+        <div class="advanced-content">
+          <section class="control-card ai-settings">
+            <div class="section-heading">
+              <h2>Перевод DeepSeek</h2>
+              <span>по клику</span>
+            </div>
+            <p class="hint">Текущая короткая реплика заранее разбирается на кликабельные слова и выражения. Целый файл субтитров в ИИ не отправляется.</p>
+            <label>API-ключ DeepSeek
+              <input id="deepseekKey" type="password" autocomplete="new-password" placeholder="Вставьте ключ">
+            </label>
+            <label>Модель
+              <select id="deepseekModel">
+                <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+                <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+              </select>
+            </label>
+            <div class="button-row">
+              <button id="saveDeepseekKey" type="button">Сохранить ключ</button>
+              <button id="clearDeepseekKey" type="button" class="danger-text">Удалить ключ</button>
+            </div>
+            <p id="aiKeyState" class="hint"></p>
+          </section>
+
+          <section class="control-card import-box">
+            <div class="section-heading">
+              <h2>Свой SRT</h2>
+              <span>файл субтитров</span>
+            </div>
+            <p class="hint">Если нужной встроенной дорожки нет, можно добавить оригинальные субтитры вручную.</p>
+            <label class="file-button">Добавить SRT
+              <input id="subtitleFile" type="file" accept=".srt,application/x-subrip,text/plain">
+            </label>
+            <div id="externalList" class="external-list"></div>
+          </section>
+
+          <section id="syncBox" class="control-card sync-box" hidden>
+            <div class="section-heading">
+              <h2>Ручная синхронизация</h2>
+              <span>для SRT</span>
+            </div>
+            <label>Файл
+              <select id="syncTrack"></select>
+            </label>
+            <label>Смещение, секунд
+              <input id="offsetSeconds" type="number" min="-3600" max="3600" step="0.1" value="0">
+            </label>
+            <div class="sync-buttons" aria-label="Изменить смещение">
+              <button type="button" data-shift="-5">−5</button>
+              <button type="button" data-shift="-1">−1</button>
+              <button type="button" data-shift="-0.1">−0,1</button>
+              <button type="button" data-shift="0.1">+0,1</button>
+              <button type="button" data-shift="1">+1</button>
+              <button type="button" data-shift="5">+5</button>
+            </div>
+            <label>Скорость дорожки, %
+              <input id="timeScalePercent" type="number" min="90" max="110" step="0.001" value="100">
+            </label>
+            <p class="hint"><b>Минус</b> — показать раньше. <b>Плюс</b> — позже.</p>
+          </section>
+        </div>
+      </details>
     </section>
   </main>
   <script type="module" src="popup.js"></script>

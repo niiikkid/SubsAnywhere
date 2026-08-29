@@ -194,7 +194,10 @@ test('production turns prepared English phrases into toggled translation tooltip
   const phrase = overlay.children[0].children[0];
   assert.equal(phrase.textContent, 'Built');
   phrase.dispatch('click', { stopPropagation() {} });
-  assert.equal(overlay.children.at(-1).children[1].textContent, 'Обычно: строить');
+  assert.equal(
+    overlay.children.at(-1).children[1].children.map((child) => child.textContent).join(' '),
+    'Обычно строить',
+  );
 
   phrase.dispatch('click', { stopPropagation() {} });
   assert.equal(overlay.children.length, 1);
@@ -220,7 +223,10 @@ test('production makes the original caption clickable while its translation is l
   const token = overlay.children[0].children[0];
   assert.equal(token.textContent, 'Built');
   token.dispatch('click', { stopPropagation() {} });
-  assert.equal(overlay.children.at(-1).children[1].textContent, 'Обычно: Перевод готовится…');
+  assert.equal(
+    overlay.children.at(-1).children[1].children.map((child) => child.textContent).join(' '),
+    'Обычно Перевод готовится…',
+  );
 });
 
 test('production keeps original caption tokens clickable when AI returns no phrases', async () => {

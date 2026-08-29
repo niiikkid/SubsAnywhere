@@ -50,7 +50,7 @@
       const makeLayer = (name) => {
         const element = document.createElement('div');
         element.className = name;
-        element.style.cssText = 'position:absolute;left:4%;right:4%;color:#fff;text-align:center;font-family:Arial,sans-serif;font-weight:700;line-height:1.25;white-space:pre-line;text-shadow:-2px -2px 2px #000,2px 2px 2px #000,0 0 7px #000;';
+        element.style.cssText = 'position:absolute;left:4%;right:4%;color:#fff;text-align:center;font-family:Arial,sans-serif;font-weight:700;line-height:1.3;letter-spacing:.01em;white-space:pre-line;text-shadow:0 1px 3px rgba(0,0,0,.92);';
         root.append(element);
         return element;
       };
@@ -66,6 +66,19 @@
       state.tooltipItem = null;
     }
 
+    function makeCaptionFocusable(element) {
+      element.addEventListener('focus', () => {
+        element.style.outline = '2px solid #adc3ff';
+        element.style.outlineOffset = '2px';
+        element.style.background = 'rgba(120,151,255,.24)';
+      });
+      element.addEventListener('blur', () => {
+        element.style.outline = '';
+        element.style.outlineOffset = '';
+        element.style.background = '';
+      });
+    }
+
     function showTooltip(item, anchor) {
       if (state.tooltipItem === item) {
         dismissTooltip();
@@ -74,18 +87,29 @@
       dismissTooltip();
       const tooltip = document.createElement('div');
       tooltip.setAttribute('role', 'tooltip');
-      tooltip.style.cssText = 'position:absolute;z-index:1;min-width:145px;max-width:260px;padding:8px 28px 8px 9px;border:1px solid rgba(255,255,255,.45);border-radius:7px;background:rgba(20,20,24,.96);color:#fff;font:600 13px/1.3 Arial,sans-serif;text-align:left;white-space:normal;box-shadow:0 2px 10px #000;pointer-events:auto;transform:translate(-50%,-100%);';
+      tooltip.style.cssText = 'position:absolute;z-index:1;min-width:165px;max-width:280px;padding:10px 32px 10px 11px;border:1px solid rgba(166,190,255,.55);border-radius:10px;background:linear-gradient(145deg,rgba(29,35,53,.98),rgba(14,17,26,.98));color:#fff;font:600 13px/1.35 Arial,sans-serif;text-align:left;white-space:normal;box-shadow:0 10px 28px rgba(0,0,0,.62);backdrop-filter:blur(10px);pointer-events:auto;transform:translate(-50%,-100%);';
       const close = document.createElement('button');
       close.type = 'button';
       close.textContent = '×';
       close.setAttribute('aria-label', 'Закрыть перевод');
-      close.style.cssText = 'position:absolute;right:5px;top:3px;border:0;background:transparent;color:#fff;font:22px/1 Arial,sans-serif;cursor:pointer;';
+      close.style.cssText = 'position:absolute;right:7px;top:6px;width:20px;height:20px;border:0;border-radius:6px;background:rgba(255,255,255,.09);color:#dce5ff;font:20px/18px Arial,sans-serif;cursor:pointer;';
       close.addEventListener('click', (event) => { event.stopPropagation(); dismissTooltip(); });
       const dictionary = document.createElement('div');
-      dictionary.textContent = `Обычно: ${item.dictionary}`;
+      dictionary.style.cssText = 'font-size:14px;line-height:1.35;';
+      const dictionaryLabel = document.createElement('span');
+      dictionaryLabel.style.cssText = 'display:block;margin-bottom:2px;color:#8f9ab3;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;';
+      dictionaryLabel.textContent = 'Обычно';
+      const dictionaryValue = document.createElement('span');
+      dictionaryValue.textContent = item.dictionary;
+      dictionary.append(dictionaryLabel, dictionaryValue);
       const context = document.createElement('div');
-      context.style.cssText = 'margin-top:3px;color:#c8d9ff;';
-      context.textContent = `Здесь: ${item.context}`;
+      context.style.cssText = 'margin-top:7px;padding-top:6px;border-top:1px solid rgba(177,196,255,.18);color:#d7e1ff;font-size:14px;line-height:1.35;';
+      const contextLabel = document.createElement('span');
+      contextLabel.style.cssText = 'display:block;margin-bottom:2px;color:#8f9ab3;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;';
+      contextLabel.textContent = 'Здесь';
+      const contextValue = document.createElement('span');
+      contextValue.textContent = item.context;
+      context.append(contextLabel, contextValue);
       tooltip.append(close, dictionary, context);
       state.root.append(tooltip);
       const word = anchor.getBoundingClientRect();
@@ -107,7 +131,8 @@
         token.textContent = part;
         token.tabIndex = 0;
         token.setAttribute('role', 'button');
-        token.style.cssText = 'pointer-events:auto;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px;';
+        token.style.cssText = 'pointer-events:auto;cursor:pointer;border-radius:4px;padding:0 2px;color:#fff;text-decoration:underline;text-decoration-color:rgba(174,199,255,.9);text-decoration-style:dotted;text-decoration-thickness:2px;text-underline-offset:3px;transition:background .14s,color .14s;';
+        makeCaptionFocusable(token);
         const loading = () => showTooltip({
           dictionary: 'Перевод готовится…',
           context: 'Нажмите ещё раз через мгновение.',
@@ -274,7 +299,8 @@
         phrase.textContent = segment.text;
         phrase.tabIndex = 0;
         phrase.setAttribute('role', 'button');
-        phrase.style.cssText = 'pointer-events:auto;cursor:pointer;text-decoration:underline;text-decoration-color:rgba(255,255,255,.72);text-underline-offset:3px;';
+        phrase.style.cssText = 'pointer-events:auto;cursor:pointer;border-radius:4px;padding:0 2px;color:#fff;text-decoration:underline;text-decoration-color:rgba(174,199,255,.95);text-decoration-thickness:2px;text-underline-offset:3px;transition:background .14s,color .14s;';
+        makeCaptionFocusable(phrase);
         phrase.addEventListener('click', (event) => { event.stopPropagation(); showTooltip(segment.item, phrase); });
         phrase.addEventListener('keydown', (event) => {
           if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showTooltip(segment.item, phrase); }
