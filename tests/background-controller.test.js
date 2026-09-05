@@ -28,6 +28,16 @@ class FakeStore {
   async reconcileBuiltInTrackFallbacks(pageKey, playerKey, playerTracks) {
     return this.patchSettingsWithPlayerFallbacks(pageKey, {}, [{ key: playerKey, tracks: playerTracks }]);
   }
+  async adoptSelectedPlayerReplacement(pageKey, { previousPlayerKey, frameId, player }) {
+    if (
+      this.state.settings.selectedPlayerKey !== previousPlayerKey
+      && this.state.settings.selectedPlayerFrameId !== frameId
+    ) return this.get();
+    return this.patchSettingsWithPlayerFallbacks(pageKey, {
+      selectedPlayerKey: player.key,
+      selectedPlayerFrameId: frameId,
+    }, [player]);
+  }
   async addExternalTrack(_pageKey, track) { this.state.externalTracks.push(structuredClone(track)); return this.get(); }
   async removeExternalTrack(_pageKey, id) { this.state.externalTracks = this.state.externalTracks.filter((track) => track.id !== id); return this.get(); }
   async updateExternalTrackOffset(_pageKey, id, value) {
@@ -144,6 +154,65 @@ test('a selected player report restores persisted state after service-worker res
   assert.equal(chrome.sent[0].message.type, MESSAGE.CONTENT_FULL_STATE);
   assert.equal(chrome.sent[0].message.settings.fontSize, 27);
   assert.equal(chrome.sent[0].message.externalTracks[0].id, 'mine');
+});
+
+test('a selected iframe slot stays connected when the site switches player providers', async () => {
+  const chrome = makeChrome();
+  const store = new FakeStore();
+  const controller = new BackgroundController(chrome, store);
+  await controller.handle({
+    type: MESSAGE.PLAYER_REPORT,
+    player: {
+      title: 'Standard player',
+      frameUrl: 'https://api.ortified.ws/embed/movie/331',
+      videoIndex: 0,
+      tracks: [{ id: 'standard-en', fallbackId: 'caption-1', label: 'Eng. full' }],
+    },
+  }, { tab: { id: 4, url: 'https://kinogomy.net/films/170.html' }, frameId: 9 });
+  const [standardPlayer] = controller.players(4);
+  await controller.handle({
+    type: MESSAGE.PLAYER_SELECT,
+    tabId: 4,
+    frameId: 9,
+    playerKey: standardPlayer.key,
+    pageKey: 'https://kinogomy.net/films/170.html',
+  }, {});
+  await controller.handle({
+    type: MESSAGE.STATE_PATCH,
+    tabId: 4,
+    pageKey: 'https://kinogomy.net/films/170.html',
+    patch: { secondTrackId: 'standard-en' },
+  }, {});
+  chrome.sent.length = 0;
+
+  const restartedController = new BackgroundController(chrome, store, {
+    discoveryTimeoutMs: 100,
+    discoveryQuietMs: 5,
+  });
+  chrome.scripting.executeScript = async () => {
+    await restartedController.handle({
+      type: MESSAGE.PLAYER_REPORT,
+      player: {
+        title: '4K player',
+        frameUrl: 'https://synthezoid-as.stloadi.live/',
+        videoIndex: 0,
+        tracks: [{ id: 'four-k-en', fallbackId: 'caption-1', label: 'English' }],
+      },
+    }, { tab: { id: 4, url: 'https://kinogomy.net/films/170.html' }, frameId: 9 });
+    return [];
+  };
+  const result = await restartedController.handle({
+    type: MESSAGE.PLAYER_DISCOVER,
+    tabId: 4,
+    pageKey: 'https://kinogomy.net/films/170.html',
+  }, {});
+
+  assert.equal(result.ok, true);
+  assert.equal(store.state.settings.selectedPlayerKey, result.data.players[0].key);
+  assert.equal(store.state.settings.selectedPlayerFrameId, 9);
+  assert.equal(store.state.settings.secondTrackFallbackId, 'caption-1');
+  assert.equal(chrome.sent.length, 1);
+  assert.equal(chrome.sent[0].message.type, MESSAGE.CONTENT_FULL_STATE);
 });
 
 test('a selected player report persists the built-in recovery position before an audio switch', async () => {

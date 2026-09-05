@@ -104,6 +104,26 @@ export class StateStore {
     });
   }
 
+  adoptSelectedPlayerReplacement(pageKey, { previousPlayerKey = '', frameId, player } = {}) {
+    return this.#mutatePage(pageKey, (state) => {
+      if (!player?.key || !Number.isInteger(frameId) || frameId < 0) return null;
+      if (state.settings.selectedPlayerKey === player.key) return null;
+      const selectedSameFrame = state.settings.selectedPlayerFrameId === frameId;
+      const selectedPreviousPlayer = state.settings.selectedPlayerFrameId < 0
+        && previousPlayerKey
+        && state.settings.selectedPlayerKey === previousPlayerKey;
+      if (!selectedPreviousPlayer && !selectedSameFrame) return null;
+      const next = patchSettings(state, {
+        selectedPlayerKey: player.key,
+        selectedPlayerFrameId: frameId,
+      });
+      const fallbackPatch = builtInTrackFallbackPatch(next.settings, player.tracks ?? [], {
+        replaceLegacyFallback: true,
+      });
+      return Object.keys(fallbackPatch).length ? patchSettings(next, fallbackPatch) : next;
+    });
+  }
+
   #mutatePage(pageKey, updater) {
     const operation = this.#queue.then(async () => {
       await this.#ensureLoaded();

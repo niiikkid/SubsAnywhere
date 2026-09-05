@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const DEFAULT_STATE = Object.freeze({
   schemaVersion: SCHEMA_VERSION,
@@ -10,6 +10,7 @@ export const DEFAULT_STATE = Object.freeze({
     secondBottom: 5,
     fontSize: 22,
     selectedPlayerKey: '',
+    selectedPlayerFrameId: -1,
   }),
   externalTracks: Object.freeze([]),
 });
@@ -27,6 +28,7 @@ const SETTING_KEYS = new Set([
   'secondBottom',
   'fontSize',
   'selectedPlayerKey',
+  'selectedPlayerFrameId',
 ]);
 const MAX_BUILT_IN_CACHE_CUES = 5_000;
 const MAX_BUILT_IN_CUE_CHARS = 1_200;
@@ -102,6 +104,9 @@ export function normalizeState(value = {}) {
       secondBottom: bounded(selectedBottom, 0, 95, DEFAULT_STATE.settings.secondBottom),
       fontSize: bounded(settings.fontSize, 12, 48, DEFAULT_STATE.settings.fontSize),
       selectedPlayerKey: typeof settings.selectedPlayerKey === 'string' ? settings.selectedPlayerKey : DEFAULT_STATE.settings.selectedPlayerKey,
+      selectedPlayerFrameId: Number.isInteger(settings.selectedPlayerFrameId) && settings.selectedPlayerFrameId >= 0
+        ? settings.selectedPlayerFrameId
+        : DEFAULT_STATE.settings.selectedPlayerFrameId,
     },
     externalTracks: tracks,
   };

@@ -68,6 +68,22 @@ test('caption translation never matches a word inside another word and handles r
   ]);
 });
 
+test('caption translation prefers a complete phrase even when AI returns its words first', () => {
+  const result = normalizeCaptionTranslation('You should look after him.', {
+    items: [
+      { text: 'look', dictionary: 'смотреть', context: 'следить' },
+      { text: 'after', dictionary: 'после', context: 'за' },
+      { text: 'look after', dictionary: 'заботиться, присматривать', context: 'присмотреть за' },
+      { text: 'him', dictionary: 'он, ему', context: 'ним' },
+    ],
+  });
+
+  assert.deepEqual(result, [
+    { start: 11, end: 21, text: 'look after', dictionary: 'заботиться, присматривать', context: 'присмотреть за' },
+    { start: 22, end: 25, text: 'him', dictionary: 'он, ему', context: 'ним' },
+  ]);
+});
+
 test('caption translation accepts concise common response field names from AI', () => {
   const result = normalizeCaptionTranslation('I gave up.', {
     phrases: [{ phrase: 'gave up', translation: 'сдаться', contextTranslation: 'сдался' }],
@@ -93,11 +109,13 @@ test('DeepSeek prepares concise click translations for one caption only', async 
   const result = await client.translateCaption('I gave up.');
 
   assert.deepEqual(result, [{ start: 2, end: 9, text: 'gave up', dictionary: 'сдаваться', context: 'сдался' }]);
-  assert.equal(request.max_tokens, 400);
+  assert.equal(request.max_tokens, 800);
   assert.equal(request.model, 'deepseek-v4-pro');
   assert.deepEqual(request.thinking, { type: 'disabled' });
   assert.equal('reasoning_effort' in request, false);
   assert.match(request.messages[0].content, /phrases/i);
+  assert.match(request.messages[0].content, /every English word exactly once/i);
+  assert.match(request.messages[0].content, /multi-word/i);
   assert.match(request.messages[0].content, /2-3 short Russian variants/i);
   assert.match(request.messages[1].content, /I gave up\./);
 });

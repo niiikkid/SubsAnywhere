@@ -234,11 +234,17 @@ export class BackgroundController {
   async #reportPlayer(tabId, frameId, playerData, message, sender) {
     const pageKey = this.#pageKey(message, sender);
     await this.#adoptPage(tabId, pageKey);
+    const previousPlayer = this.players(tabId).find((item) => item.frameId === frameId);
     const player = this.#registry.report(tabId, frameId, {
       ...playerData,
       tabTitle: sender.tab?.title || playerData?.tabTitle || '',
     });
-    const state = await this.#store.reconcileBuiltInTrackFallbacks(pageKey, player.key, player.tracks);
+    let state = await this.#store.reconcileBuiltInTrackFallbacks(pageKey, player.key, player.tracks);
+    state = await this.#store.adoptSelectedPlayerReplacement(pageKey, {
+      previousPlayerKey: previousPlayer?.key,
+      frameId,
+      player,
+    });
     const selected = player.key === state.settings.selectedPlayerKey;
     const restored = selected
       ? await this.#send(tabId, frameId, {
@@ -256,7 +262,7 @@ export class BackgroundController {
     if (!player) throw new Error('Выбранный плеер больше недоступен');
     const state = await this.#store.patchSettingsWithPlayerFallbacks(
       pageKey,
-      { selectedPlayerKey: player.key },
+      { selectedPlayerKey: player.key, selectedPlayerFrameId: player.frameId },
       [player],
     );
     const delivered = await this.#send(message.tabId, player.frameId, {

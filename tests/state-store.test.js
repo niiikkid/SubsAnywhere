@@ -109,6 +109,48 @@ test('StateStore ignores fallback reports for an unselected player without writi
   assert.equal(storage.writes.length, 0);
 });
 
+test('StateStore does not let a late replacement report overwrite a newer manual player choice', async () => {
+  const store = new StateStore(new MemoryStorage({}));
+  await store.patchSettings(PAGE_A, {
+    selectedPlayerKey: 'old-provider',
+    selectedPlayerFrameId: 9,
+  });
+
+  const reconcile = store.reconcileBuiltInTrackFallbacks(PAGE_A, 'new-provider', []);
+  const manualSelection = store.patchSettings(PAGE_A, {
+    selectedPlayerKey: 'other-player',
+    selectedPlayerFrameId: 12,
+  });
+  const lateReplacement = store.adoptSelectedPlayerReplacement(PAGE_A, {
+    previousPlayerKey: 'old-provider',
+    frameId: 9,
+    player: { key: 'new-provider', tracks: [] },
+  });
+  await Promise.all([reconcile, manualSelection, lateReplacement]);
+
+  const state = await store.get(PAGE_A);
+  assert.equal(state.settings.selectedPlayerKey, 'other-player');
+  assert.equal(state.settings.selectedPlayerFrameId, 12);
+});
+
+test('StateStore never transfers a selected player key to a different iframe slot', async () => {
+  const store = new StateStore(new MemoryStorage({}));
+  await store.patchSettings(PAGE_A, {
+    selectedPlayerKey: 'shared-provider-key',
+    selectedPlayerFrameId: 9,
+  });
+
+  await store.adoptSelectedPlayerReplacement(PAGE_A, {
+    previousPlayerKey: 'shared-provider-key',
+    frameId: 12,
+    player: { key: 'replacement-in-other-frame', tracks: [] },
+  });
+
+  const state = await store.get(PAGE_A);
+  assert.equal(state.settings.selectedPlayerKey, 'shared-provider-key');
+  assert.equal(state.settings.selectedPlayerFrameId, 9);
+});
+
 test('StateStore owns external-track timing mutations and persists each atomic result', async () => {
   const storage = new MemoryStorage({});
   const store = new StateStore(storage);
