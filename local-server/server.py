@@ -100,6 +100,8 @@ class SubtitleService:
                     "zh-Hans",
                     "--sub-format",
                     "srt",
+                    "--convert-subs",
+                    "srt",
                     "-o",
                     str(output_template),
                     f"https://www.youtube.com/watch?v={safe_id}",

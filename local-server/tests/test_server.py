@@ -54,6 +54,8 @@ class SubtitleServiceTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn("--write-subs", calls[0])
         self.assertIn("--write-auto-subs", calls[1])
+        self.assertEqual(calls[0][calls[0].index("--convert-subs") + 1], "srt")
+        self.assertEqual(calls[1][calls[1].index("--convert-subs") + 1], "srt")
         self.assertNotIn("-x", calls[0] + calls[1])
         self.assertTrue(all(isinstance(command, list) for command in calls))
 
