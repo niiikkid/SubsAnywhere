@@ -1,12 +1,14 @@
 import { AiCredentialStore, DeepSeekClient } from './ai-client.js';
 import { BackgroundController } from './background-controller.js';
+import { LocalSubtitleClient } from './local-subtitles-client.js';
 import { StateStore } from './state-store.js';
 
 const storage = chrome.storage.local;
 const store = new StateStore(storage);
 const credentialStore = new AiCredentialStore(storage);
 const deepSeek = new DeepSeekClient(globalThis.fetch.bind(globalThis), credentialStore);
-const controller = new BackgroundController(chrome, store, { credentialStore, deepSeek });
+const localSubtitles = new LocalSubtitleClient(globalThis.fetch.bind(globalThis));
+const controller = new BackgroundController(chrome, store, { credentialStore, deepSeek, localSubtitles });
 
 storage.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => undefined);
 

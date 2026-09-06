@@ -215,6 +215,33 @@ export function addExternalTrack(state, track) {
   return normalizeState({ ...current, externalTracks: [...current.externalTracks, normalized] });
 }
 
+export function upsertManagedExternalTrack(state, track) {
+  const current = normalizeState(state);
+  const normalized = normalizeTrack(track);
+  if (!normalized || !normalized.cues.length || normalized.sourceType !== 'local-server') {
+    throw new Error('Managed external track is invalid');
+  }
+  const index = current.externalTracks.findIndex((existing) => existing.id === normalized.id);
+  if (index < 0) {
+    return normalizeState({ ...current, externalTracks: [...current.externalTracks, normalized] });
+  }
+  const existing = current.externalTracks[index];
+  if (existing.sourceType !== 'local-server') {
+    throw new Error(`External track already exists: ${normalized.id}`);
+  }
+  const replacement = {
+    ...normalized,
+    offsetSeconds: existing.offsetSeconds,
+    timeScale: existing.timeScale,
+  };
+  return normalizeState({
+    ...current,
+    externalTracks: current.externalTracks.map((item, itemIndex) => (
+      itemIndex === index ? replacement : item
+    )),
+  });
+}
+
 export function cacheBuiltInTrack(state, track, sourceKey) {
   const current = normalizeState(state);
   if (!track || typeof track.id !== 'string' || !track.id.startsWith('builtin-cache-') || track.sourceType !== 'builtin-cache' || !Array.isArray(track.cues)) {

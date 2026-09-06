@@ -39,6 +39,12 @@ class FakeStore {
     }, [player]);
   }
   async addExternalTrack(_pageKey, track) { this.state.externalTracks.push(structuredClone(track)); return this.get(); }
+  async upsertManagedExternalTrack(_pageKey, track) {
+    const index = this.state.externalTracks.findIndex((item) => item.id === track.id);
+    if (index < 0) this.state.externalTracks.push(structuredClone(track));
+    else this.state.externalTracks[index] = structuredClone(track);
+    return this.get();
+  }
   async removeExternalTrack(_pageKey, id) { this.state.externalTracks = this.state.externalTracks.filter((track) => track.id !== id); return this.get(); }
   async updateExternalTrackOffset(_pageKey, id, value) {
     this.state.externalTracks = this.state.externalTracks.map((track) => track.id === id ? { ...track, offsetSeconds: value } : track);
@@ -493,4 +499,56 @@ test('top-page navigation resets the old frame before a new page can reuse its s
   assert.equal(chrome.sent.length, 1);
   assert.equal(chrome.sent[0].message.type, MESSAGE.CONTENT_RESET);
   assert.deepEqual(controller.players(9), []);
+});
+
+test('background forwards explicit YouTube subtitle actions to the local client', async () => {
+  const calls = [];
+  const localSubtitles = {
+    async existing(videoId) { calls.push(['existing', videoId]); return { status: 'ready' }; },
+    async generate(videoId) { calls.push(['generate', videoId]); return { status: 'running' }; },
+    async status(videoId) { calls.push(['status', videoId]); return { status: 'missing' }; },
+  };
+  const controller = new BackgroundController(makeChrome(), new FakeStore(), { localSubtitles });
+
+  const existing = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_EXISTING, videoId: 'rwnyaH6cTDE' });
+  const generated = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_GENERATE, videoId: 'rwnyaH6cTDE' });
+  const status = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_STATUS, videoId: 'rwnyaH6cTDE' });
+
+  assert.equal(existing.ok, true);
+  assert.equal(generated.data.status, 'running');
+  assert.equal(status.data.status, 'missing');
+  assert.deepEqual(calls, [
+    ['existing', 'rwnyaH6cTDE'],
+    ['generate', 'rwnyaH6cTDE'],
+    ['status', 'rwnyaH6cTDE'],
+  ]);
+});
+
+test('background stores a local-server subtitle and delivers it to the selected player', async () => {
+  const chrome = makeChrome();
+  const store = new FakeStore();
+  const controller = new BackgroundController(chrome, store);
+  await controller.handle({
+    type: MESSAGE.PLAYER_REPORT,
+    player: { title: 'YouTube', frameUrl: 'https://www.youtube.com/watch?v=rwnyaH6cTDE', videoIndex: 0, tracks: [] },
+  }, { tab: { id: 5, url: 'https://www.youtube.com/watch?v=rwnyaH6cTDE' }, frameId: 0 });
+  const [player] = controller.players(5);
+  await controller.handle({ type: MESSAGE.PLAYER_SELECT, tabId: 5, frameId: 0, playerKey: player.key }, {});
+  chrome.sent.length = 0;
+
+  const result = await controller.handle({
+    type: MESSAGE.TRACK_UPSERT_LOCAL,
+    tabId: 5,
+    pageKey: 'https://www.youtube.com/watch?v=rwnyaH6cTDE',
+    track: {
+      id: 'youtube-rwnyaH6cTDE-youtube',
+      name: 'YouTube rwnyaH6cTDE youtube Chinese',
+      sourceType: 'local-server',
+      cues: [{ start: 0, end: 1, text: '你好' }],
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.state.externalTracks[0].id, 'youtube-rwnyaH6cTDE-youtube');
+  assert.equal(chrome.sent[0].message.type, MESSAGE.CONTENT_TRACKS);
 });

@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "SubsAnywhere",
-  "version": "0.6.1",
-  "description": "Показывает оригинальные субтитры и переводит слова и выражения по клику через DeepSeek.",
+  "version": "0.7.0",
+  "description": "Показывает оригинальные и локальные субтитры и переводит слова и выражения по клику через DeepSeek.",
   "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage"],
-  "host_permissions": ["https://api.deepseek.com/*"],
+  "host_permissions": ["https://api.deepseek.com/*", "http://127.0.0.1:43817/*"],
   "optional_host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js", "type": "module" },
   "action": {

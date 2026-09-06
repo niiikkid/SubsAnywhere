@@ -2,3 +2,5 @@
 node_modules/
 coverage/
 *.zip
+__pycache__/
+*.py[cod]

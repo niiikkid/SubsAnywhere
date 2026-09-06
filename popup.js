@@ -1,4 +1,5 @@
 import { parseSrt } from './caption-core.js';
+import { localSubtitleTrack, youtubeVideoId } from './local-subtitles-client.js';
 import { canonicalPageKey } from './page-context.js';
 import {
   choosePlayer,
@@ -21,6 +22,9 @@ let selectedFrameId;
 let syncTrackId = '';
 let hasApiKey = false;
 let aiModel = 'deepseek-v4-flash';
+let youtubeId = '';
+let youtubePollTimer;
+let selectGeneratedWhenReady = false;
 const enqueueOffsetTask = createSerialTaskQueue();
 const settingsCommit = createDebouncedPatchCommit(
   (patch) => request(MESSAGE.STATE_PATCH, { tabId, pageKey, patch }),
@@ -37,6 +41,12 @@ async function request(type, payload = {}) {
 function setStatus(text, error = false) {
   status.textContent = text;
   status.classList.toggle('error', error);
+}
+
+function setYoutubeStatus(text, error = false) {
+  const element = $('youtubeSubtitleStatus');
+  element.textContent = text;
+  element.classList.toggle('error', error);
 }
 
 function currentPlayer() {
@@ -209,6 +219,118 @@ async function importFile(file) {
   $('subtitleFile').value = '';
 }
 
+async function installLocalSubtitle(payload, selectTrack = false) {
+  if (payload?.status !== 'ready' || typeof payload.srt !== 'string') return false;
+  if (payload.srt.length > 5 * 1024 * 1024) throw new Error('Локальный файл субтитров слишком большой');
+  const cues = parseSrt(payload.srt);
+  if (!cues.length) throw new Error('Локальный сервер вернул пустые субтитры');
+  const source = payload.source === 'generated' ? 'generated' : 'youtube';
+  const track = localSubtitleTrack(youtubeId, source, cues);
+  const shouldSelect = selectTrack
+    || !state.settings.secondTrackId
+    || state.settings.secondTrackId === `external:${track.id}`;
+  const stored = await request(MESSAGE.TRACK_UPSERT_LOCAL, { tabId, pageKey, track });
+  state = normalizeState(stored.state);
+  syncTrackId = track.id;
+  if (shouldSelect) {
+    const selected = await request(MESSAGE.STATE_PATCH, {
+      tabId,
+      pageKey,
+      patch: { secondTrackId: `external:${track.id}` },
+    });
+    state = normalizeState(selected.state);
+  }
+  render();
+  return true;
+}
+
+async function pollGeneratedSubtitle() {
+  clearTimeout(youtubePollTimer);
+  if (!youtubeId) return;
+  try {
+    const result = await request(MESSAGE.LOCAL_SUBTITLE_STATUS, { videoId: youtubeId });
+    if (result.status === 'ready') {
+      await installLocalSubtitle(result, selectGeneratedWhenReady);
+      selectGeneratedWhenReady = false;
+      setYoutubeStatus('Созданные субтитры готовы.');
+      $('createYoutubeSubtitles').disabled = false;
+      $('createYoutubeSubtitles').textContent = 'Создать заново';
+      return;
+    }
+    if (result.status === 'error') throw new Error(result.error || 'Не удалось создать субтитры');
+    if (result.status === 'running') {
+      setYoutubeStatus('Создаю субтитры из аудио… Окно можно закрыть.');
+      $('createYoutubeSubtitles').disabled = true;
+      youtubePollTimer = setTimeout(() => pollGeneratedSubtitle(), 1500);
+      return;
+    }
+    $('createYoutubeSubtitles').disabled = false;
+  } catch (error) {
+    $('createYoutubeSubtitles').disabled = false;
+    setYoutubeStatus(error.message, true);
+  }
+}
+
+async function loadYoutubeSubtitles() {
+  if (!youtubeId) return;
+  $('youtubeSubtitles').hidden = false;
+  setYoutubeStatus('Проверяю локальный сервер…');
+  try {
+    const generated = await request(MESSAGE.LOCAL_SUBTITLE_STATUS, { videoId: youtubeId });
+    let generatedReady = false;
+    let generatedRunning = false;
+    if (generated.status === 'ready') {
+      await installLocalSubtitle(generated);
+      $('createYoutubeSubtitles').textContent = 'Создать заново';
+      generatedReady = true;
+    }
+    if (generated.status === 'running') {
+      $('createYoutubeSubtitles').disabled = true;
+      generatedRunning = true;
+    }
+    const existing = await request(MESSAGE.LOCAL_SUBTITLE_EXISTING, { videoId: youtubeId });
+    const existingReady = await installLocalSubtitle(existing);
+    if (generatedRunning) {
+      setYoutubeStatus('Создаю субтитры из аудио… Окно можно закрыть.');
+      youtubePollTimer = setTimeout(() => pollGeneratedSubtitle(), 1500);
+    } else if (generatedReady) {
+      setYoutubeStatus('Созданные субтитры готовы. Готовая дорожка YouTube также сохранена.');
+    } else if (existingReady) {
+      setYoutubeStatus('Готовые китайские субтитры YouTube скачаны и подключены.');
+    } else {
+      setYoutubeStatus('Готовых китайских субтитров нет. Можно создать свои.');
+    }
+  } catch (error) {
+    setYoutubeStatus(`${error.message}. Запустите npm run local-server.`, true);
+  }
+}
+
+async function createYoutubeSubtitles() {
+  if (!youtubeId) return;
+  const button = $('createYoutubeSubtitles');
+  button.disabled = true;
+  selectGeneratedWhenReady = true;
+  setYoutubeStatus('Запускаю скачивание аудио…');
+  try {
+    const result = await request(MESSAGE.LOCAL_SUBTITLE_GENERATE, { videoId: youtubeId });
+    if (result.status === 'ready') {
+      await installLocalSubtitle(result, true);
+      selectGeneratedWhenReady = false;
+      setYoutubeStatus('Созданные субтитры подключены.');
+      button.disabled = false;
+      button.textContent = 'Создать заново';
+      return;
+    }
+    if (result.status === 'error') throw new Error(result.error || 'Не удалось запустить создание');
+    setYoutubeStatus('Создаю субтитры из аудио… Окно можно закрыть.');
+    youtubePollTimer = setTimeout(() => pollGeneratedSubtitle(), 1500);
+  } catch (error) {
+    selectGeneratedWhenReady = false;
+    button.disabled = false;
+    setYoutubeStatus(error.message, true);
+  }
+}
+
 async function deleteTrack(id) {
   await settingsCommit.flush();
   const data = await request(MESSAGE.TRACK_REMOVE, { tabId, pageKey, id });
@@ -280,6 +402,8 @@ async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!Number.isInteger(tab?.id)) throw new Error('Не удалось определить активную вкладку.');
   tabId = tab.id;
+  youtubeId = youtubeVideoId(tab.url || '');
+  $('youtubeSubtitles').hidden = !youtubeId;
   pageKey = canonicalPageKey(tab.url || `https://local.invalid/tab/${tab.id}`);
   const snapshot = await loadPopupSnapshot(request, tabId, pageKey);
   state = snapshot.state;
@@ -289,6 +413,7 @@ async function init() {
   render();
   if (!players.length) setStatus('Нажмите «Подключить к плееру» на странице с видео.');
   else setStatus(`Плеер уже подключён. Найдено: ${players.length}.`);
+  await loadYoutubeSubtitles();
 }
 
 $('activate').addEventListener('click', () => activate().catch((error) => setStatus(error.message, true)));
@@ -297,6 +422,7 @@ $('saveDeepseekKey').addEventListener('click', () => saveDeepseekKey(false).catc
 $('clearDeepseekKey').addEventListener('click', () => saveDeepseekKey(true).catch((error) => setStatus(error.message, true)));
 $('deepseekModel').addEventListener('change', () => saveDeepseekModel().catch((error) => setStatus(error.message, true)));
 $('subtitleFile').addEventListener('change', (event) => importFile(event.target.files?.[0]).catch((error) => setStatus(error.message, true)));
+$('createYoutubeSubtitles').addEventListener('click', () => createYoutubeSubtitles());
 $('player').addEventListener('change', () => {
   const player = players.find((item) => item.frameId === Number($('player').value));
   selectPlayer(player).catch((error) => setStatus(error.message, true));

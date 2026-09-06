@@ -9,6 +9,7 @@ import {
   patchSettings,
   removeExternalTrack,
   setPageStateInRoot,
+  upsertManagedExternalTrack,
   updateExternalTrackOffset,
   updateExternalTrackTiming,
 } from './state-core.js';
@@ -77,6 +78,10 @@ export class StateStore {
 
   addExternalTrack(pageKey, track) {
     return this.#mutatePage(pageKey, (state) => addExternalTrack(state, track));
+  }
+
+  upsertManagedExternalTrack(pageKey, track) {
+    return this.#mutatePage(pageKey, (state) => upsertManagedExternalTrack(state, track));
   }
 
   cacheBuiltInTrack(pageKey, track, sourceKey) {

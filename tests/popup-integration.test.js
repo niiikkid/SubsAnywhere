@@ -29,6 +29,7 @@ function makeDocument() {
     'fontSize', 'originalBottomValue', 'fontSizeValue', 'externalList',
     'syncBox', 'syncTrack', 'offsetSeconds', 'timeScalePercent', 'activate', 'restartSearch', 'subtitleFile',
     'deepseekKey', 'deepseekModel', 'saveDeepseekKey', 'clearDeepseekKey', 'aiKeyState',
+    'youtubeSubtitles', 'youtubeSubtitleStatus', 'createYoutubeSubtitles',
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement()]));
   elements.controls.hidden = true;
@@ -161,4 +162,158 @@ test('saving a key immediately after choosing Pro keeps the chosen model', async
   const keyPatch = messages.find((message) => message.type === 'dualCaptions.ai.patch' && 'apiKey' in message);
   assert.equal(keyPatch.model, 'deepseek-v4-pro');
   releaseModelPatch();
+});
+
+test('YouTube startup downloads ready Chinese subtitles without starting recognition', async () => {
+  const document = makeDocument();
+  const messages = [];
+  const player = {
+    frameId: 0,
+    key: 'youtube-player',
+    title: 'YouTube',
+    tracks: [],
+  };
+  const localTrack = {
+    id: 'youtube-rwnyaH6cTDE-youtube',
+    name: 'YouTube rwnyaH6cTDE youtube Chinese',
+    language: 'zh',
+    sourceType: 'local-server',
+    cues: [{ start: 0, end: 1, text: '你好' }],
+    offsetSeconds: 0,
+    timeScale: 1,
+  };
+  globalThis.document = document;
+  globalThis.chrome = {
+    tabs: { query: async () => [{ id: 88, url: 'https://www.youtube.com/watch?v=rwnyaH6cTDE' }] },
+    runtime: {
+      async sendMessage(message) {
+        messages.push(structuredClone(message));
+        if (message.type === 'dualCaptions.state.get') return { ok: true, data: { state: {} } };
+        if (message.type === 'dualCaptions.player.get') return { ok: true, data: { players: [player] } };
+        if (message.type === 'dualCaptions.ai.get') return { ok: true, data: { hasApiKey: false } };
+        if (message.type === 'dualCaptions.localSubtitle.status') return { ok: true, data: { status: 'missing' } };
+        if (message.type === 'dualCaptions.localSubtitle.existing') {
+          return {
+            ok: true,
+            data: {
+              status: 'ready',
+              source: 'youtube',
+              srt: '1\n00:00:00,000 --> 00:00:01,000\n你好\n',
+            },
+          };
+        }
+        if (message.type === 'dualCaptions.track.upsertLocal') {
+          assert.deepEqual(message.track, localTrack);
+          return { ok: true, data: { state: { settings: {}, externalTracks: [localTrack] } } };
+        }
+        if (message.type === 'dualCaptions.state.patch') {
+          assert.deepEqual(message.patch, { secondTrackId: 'external:youtube-rwnyaH6cTDE-youtube' });
+          return {
+            ok: true,
+            data: {
+              state: {
+                settings: { secondTrackId: message.patch.secondTrackId },
+                externalTracks: [localTrack],
+              },
+            },
+          };
+        }
+        throw new Error(`Unexpected message: ${message.type}`);
+      },
+    },
+    permissions: { request: async () => true },
+  };
+
+  await import(`../popup.js?youtube-existing-test=${Date.now()}`);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(document.elements.youtubeSubtitles.hidden, false);
+  assert.match(document.elements.youtubeSubtitleStatus.textContent, /подключены/i);
+  assert.equal(messages.some((message) => message.type === 'dualCaptions.localSubtitle.generate'), false);
+  assert.deepEqual(messages.filter((message) => message.type.startsWith('dualCaptions.localSubtitle')).map((message) => message.type), [
+    'dualCaptions.localSubtitle.status',
+    'dualCaptions.localSubtitle.existing',
+  ]);
+});
+
+test('YouTube recognition starts only after the create button is clicked', async () => {
+  const document = makeDocument();
+  const messages = [];
+  const track = {
+    id: 'youtube-rwnyaH6cTDE-generated',
+    name: 'YouTube rwnyaH6cTDE generated Chinese',
+    language: 'zh',
+    sourceType: 'local-server',
+    cues: [{ start: 0, end: 1, text: '自己' }],
+    offsetSeconds: 0,
+    timeScale: 1,
+  };
+  globalThis.document = document;
+  globalThis.chrome = {
+    tabs: { query: async () => [{ id: 89, url: 'https://youtu.be/rwnyaH6cTDE' }] },
+    runtime: {
+      async sendMessage(message) {
+        messages.push(structuredClone(message));
+        if (message.type === 'dualCaptions.state.get') {
+          return {
+            ok: true,
+            data: { state: { settings: { secondTrackId: 'external:youtube-rwnyaH6cTDE-youtube' } } },
+          };
+        }
+        if (message.type === 'dualCaptions.player.get') return { ok: true, data: { players: [] } };
+        if (message.type === 'dualCaptions.ai.get') return { ok: true, data: { hasApiKey: false } };
+        if (message.type === 'dualCaptions.localSubtitle.status') return { ok: true, data: { status: 'missing' } };
+        if (message.type === 'dualCaptions.localSubtitle.existing') return { ok: true, data: { status: 'missing' } };
+        if (message.type === 'dualCaptions.localSubtitle.generate') {
+          return {
+            ok: true,
+            data: {
+              status: 'ready', source: 'generated',
+              srt: '1\n00:00:00,000 --> 00:00:01,000\n自己\n',
+            },
+          };
+        }
+        if (message.type === 'dualCaptions.track.upsertLocal') {
+          assert.deepEqual(message.track, track);
+          return {
+            ok: true,
+            data: {
+              state: {
+                settings: { secondTrackId: 'external:youtube-rwnyaH6cTDE-youtube' },
+                externalTracks: [track],
+              },
+            },
+          };
+        }
+        if (message.type === 'dualCaptions.state.patch') {
+          return {
+            ok: true,
+            data: {
+              state: {
+                settings: { secondTrackId: message.patch.secondTrackId },
+                externalTracks: [track],
+              },
+            },
+          };
+        }
+        throw new Error(`Unexpected message: ${message.type}`);
+      },
+    },
+    permissions: { request: async () => true },
+  };
+
+  await import(`../popup.js?youtube-generate-test=${Date.now()}`);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(messages.some((message) => message.type === 'dualCaptions.localSubtitle.generate'), false);
+
+  document.elements.createYoutubeSubtitles.listeners.get('click')();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(messages.filter((message) => message.type === 'dualCaptions.localSubtitle.generate').length, 1);
+  assert.equal(
+    messages.find((message) => message.type === 'dualCaptions.state.patch')?.patch.secondTrackId,
+    'external:youtube-rwnyaH6cTDE-generated',
+  );
+  assert.match(document.elements.youtubeSubtitleStatus.textContent, /подключены/i);
+  assert.equal(document.elements.createYoutubeSubtitles.textContent, 'Создать заново');
 });

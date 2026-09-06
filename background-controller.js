@@ -85,6 +85,7 @@ export class BackgroundController {
   #registry;
   #credentialStore;
   #deepSeek;
+  #localSubtitles;
   #discoveryTimeoutMs;
   #discoveryQuietMs;
   #contentRegistration;
@@ -96,6 +97,7 @@ export class BackgroundController {
     this.#registry = options.registry ?? new PlayerRegistry();
     this.#credentialStore = options.credentialStore;
     this.#deepSeek = options.deepSeek;
+    this.#localSubtitles = options.localSubtitles;
     this.#discoveryTimeoutMs = options.discoveryTimeoutMs ?? 1500;
     this.#discoveryQuietMs = options.discoveryQuietMs ?? 75;
   }
@@ -134,6 +136,10 @@ export class BackgroundController {
           return ok(await this.#mutateTracks(message.tabId, this.#pageKey(message, sender), () => (
             this.#store.addExternalTrack(this.#pageKey(message, sender), message.track)
           )));
+        case MESSAGE.TRACK_UPSERT_LOCAL:
+          return ok(await this.#mutateTracks(message.tabId, this.#pageKey(message, sender), () => (
+            this.#store.upsertManagedExternalTrack(this.#pageKey(message, sender), message.track)
+          )));
         case MESSAGE.TRACK_CACHE_BUILTIN:
           return ok(await this.#cacheBuiltInTrack(message, sender));
         case MESSAGE.TRACK_REMOVE:
@@ -160,6 +166,15 @@ export class BackgroundController {
           return ok(await this.#credentialStore.patch(message));
         case MESSAGE.CAPTION_TRANSLATE:
           return ok(await this.#translateCaption(message));
+        case MESSAGE.LOCAL_SUBTITLE_EXISTING:
+          if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');
+          return ok(await this.#localSubtitles.existing(message.videoId));
+        case MESSAGE.LOCAL_SUBTITLE_GENERATE:
+          if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');
+          return ok(await this.#localSubtitles.generate(message.videoId));
+        case MESSAGE.LOCAL_SUBTITLE_STATUS:
+          if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');
+          return ok(await this.#localSubtitles.status(message.videoId));
         default:
           throw new Error(`Unknown message: ${message?.type ?? 'empty'}`);
       }

@@ -21,6 +21,9 @@ button:disabled { opacity: .55; cursor: wait; }
 .primary { width: 100%; border: 1px solid #8ba7ff; padding: 9px; background: linear-gradient(135deg, #7898ff, #7865e8); box-shadow: 0 7px 18px rgba(85, 102, 230, .24); color: white; font-weight: 800; }
 .primary:hover { border-color: #b1c1ff; background: linear-gradient(135deg, #87a5ff, #8773f4); }
 .restart-search { width: 100%; margin-top: 7px; color: #c9d5f6; }
+.youtube-card { margin-top: 10px; }
+.youtube-card button { width: 100%; margin-top: 9px; border-color: #697da8; background: #25304a; }
+#youtubeSubtitleStatus.error { color: #ffb2bb; }
 #controls { margin-top: 10px; }
 .advanced-settings { margin-top: 8px; }
 .advanced-settings summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; border: 1px solid #30394a; border-radius: 10px; background: #171c26; color: #dbe4ff; cursor: pointer; list-style: none; font-weight: 750; }

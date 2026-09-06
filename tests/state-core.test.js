@@ -14,6 +14,7 @@ import {
   patchSettings,
   removeExternalTrack,
   setPageStateInRoot,
+  upsertManagedExternalTrack,
   updateExternalTrackOffset,
 } from '../state-core.js';
 
@@ -223,6 +224,46 @@ test('addExternalTrack rejects duplicate ids instead of replacing user data', ()
     /already exists/i,
   );
   assert.equal(state.externalTracks[0].name, 'Original');
+});
+
+test('upsertManagedExternalTrack refreshes only a local-server track and keeps its timing', () => {
+  const existing = {
+    id: 'youtube-rwnyaH6cTDE-generated',
+    name: 'YouTube rwnyaH6cTDE generated Chinese',
+    sourceType: 'local-server',
+    cues: [{ start: 0, end: 1, text: '旧' }],
+    offsetSeconds: 1.5,
+    timeScale: 1.01,
+  };
+  const state = normalizeState({ ...DEFAULT_STATE, externalTracks: [existing] });
+
+  const next = upsertManagedExternalTrack(state, {
+    ...existing,
+    cues: [{ start: 2, end: 3, text: '新' }],
+    offsetSeconds: 0,
+    timeScale: 1,
+  });
+
+  assert.equal(next.externalTracks.length, 1);
+  assert.equal(next.externalTracks[0].cues[0].text, '新');
+  assert.equal(next.externalTracks[0].offsetSeconds, 1.5);
+  assert.equal(next.externalTracks[0].timeScale, 1.01);
+});
+
+test('upsertManagedExternalTrack never replaces a user-imported track with the same id', () => {
+  const existing = {
+    id: 'youtube-rwnyaH6cTDE-generated',
+    name: 'User file',
+    cues: [{ start: 0, end: 1, text: 'Keep me' }],
+  };
+  const state = normalizeState({ ...DEFAULT_STATE, externalTracks: [existing] });
+
+  assert.throws(() => upsertManagedExternalTrack(state, {
+    ...existing,
+    sourceType: 'local-server',
+    cues: [{ start: 0, end: 1, text: 'Replacement' }],
+  }), /already exists/i);
+  assert.equal(state.externalTracks[0].cues[0].text, 'Keep me');
 });
 
 test('updateExternalTrackOffset clamps offset and leaves other files untouched', () => {
