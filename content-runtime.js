@@ -1,11 +1,29 @@
 ((root) => {
   const cueIndexCache = new WeakMap();
+  const PINYIN_MARKER = '\u2063';
+  const SOURCE_MARKER = '\u2064';
 
   function cleanSubtitleText(value) {
     return String(value ?? '')
       .replace(/<br\s*\/?>/gi, '\n')
       .replace(/<[^>]*>/g, '')
       .trim();
+  }
+
+  function splitPinyinCaption(value) {
+    const lines = cleanSubtitleText(value).split('\n').map((line) => line.trim());
+    if (
+      lines.length < 2
+      || !lines[0]?.startsWith(PINYIN_MARKER)
+      || !lines[1]?.startsWith(SOURCE_MARKER)
+      || lines.slice(2).some((line) => line.startsWith(PINYIN_MARKER) || line.startsWith(SOURCE_MARKER))
+    ) return null;
+    const pinyin = lines[0].slice(PINYIN_MARKER.length).trim();
+    const characters = [
+      lines[1].slice(SOURCE_MARKER.length).trim(),
+      ...lines.slice(2),
+    ].filter(Boolean).join('\n');
+    return pinyin && /[\u3400-\u9fff\uf900-\ufaff]/.test(characters) ? { pinyin, characters } : null;
   }
 
   function captionSegments(text, items = []) {
@@ -330,6 +348,8 @@
     installController,
     mutationsAffectVideo,
     normalizeSettings,
+
+    splitPinyinCaption,
 
     upcomingCueTexts,
 

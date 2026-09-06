@@ -119,3 +119,56 @@ test('DeepSeek prepares concise click translations for one caption only', async 
   assert.match(request.messages[0].content, /2-3 short Russian variants/i);
   assert.match(request.messages[1].content, /I gave up\./);
 });
+
+test('DeepSeek translates a linked Chinese sentence in one request', async () => {
+  const storage = new MemoryStorage();
+  const credentials = new AiCredentialStore(storage);
+  await credentials.patch({ apiKey: 'secret-key' });
+  let request;
+  const client = new DeepSeekClient(async (_url, options) => {
+    request = JSON.parse(options.body);
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '{"translation":"Привет, мир","glossary":[{"pinyin":"nǐ hǎo","translation":"здравствуйте"},{"pinyin":"shì jiè","translation":"мир"}]}' } }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }, credentials);
+
+  const result = await client.translateChineseCaption('你好，世界', 'nǐ hǎo, shì jiè');
+
+  assert.deepEqual(result, {
+    dictionary: 'Привет, мир',
+    context: 'Привет, мир',
+    glossary: [
+      { pinyin: 'nǐ hǎo', translation: 'здравствуйте' },
+      { pinyin: 'shì jiè', translation: 'мир' },
+    ],
+  });
+  assert.equal(request.max_tokens, 500);
+  assert.match(request.messages[0].content, /Chinese subtitle sentence/i);
+  assert.match(request.messages[1].content, /你好，世界/);
+  assert.match(request.messages[1].content, /nǐ hǎo, shì jiè/);
+});
+
+test('DeepSeek rejects model glossary terms that are not exact displayed pinyin phrases', async () => {
+  const storage = new MemoryStorage();
+  const credentials = new AiCredentialStore(storage);
+  await credentials.patch({ apiKey: 'secret-key' });
+  const client = new DeepSeekClient(async () => new Response(JSON.stringify({
+    choices: [{ message: { content: JSON.stringify({
+      translation: 'Привет, мир',
+      glossary: [
+        { pinyin: ' nǐ   hǎo ', translation: 'здравствуйте' },
+        { pinyin: 'shì jiè', translation: 'мир' },
+        { pinyin: 'nǐ hǎo shì', translation: 'выдуманный переход через запятую' },
+        { pinyin: 'hǎ', translation: 'обрезанный слог' },
+        { pinyin: 'jiè le', translation: 'выдуманное слово' },
+      ],
+    }) } }],
+  }), { status: 200, headers: { 'content-type': 'application/json' } }), credentials);
+
+  const result = await client.translateChineseCaption('你好，世界', 'nǐ hǎo, shì jiè');
+
+  assert.deepEqual(result.glossary, [
+    { pinyin: 'nǐ hǎo', translation: 'здравствуйте' },
+    { pinyin: 'shì jiè', translation: 'мир' },
+  ]);
+});

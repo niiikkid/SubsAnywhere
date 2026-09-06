@@ -6,9 +6,11 @@ import tempfile
 import threading
 import unittest
 import urllib.request
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import server
+import pinyin
 
 
 class PathSafetyTests(unittest.TestCase):
@@ -29,6 +31,88 @@ class PathSafetyTests(unittest.TestCase):
 
 
 class SubtitleServiceTests(unittest.TestCase):
+    def test_generated_subtitle_file_is_enriched_idempotently_before_returning_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            path = server.output_paths(root, "rwnyaH6cTDE").generated_srt
+            path.parent.mkdir(parents=True)
+            path.write_text("1\n00:00:00,000 --> 00:00:01,000\n你好\n", encoding="utf-8")
+            batches = []
+            service = server.SubtitleService(
+                root,
+                pinyinize=lambda source: pinyin.bilingual_srt(
+                    source,
+                    convert_many=lambda texts: batches.append(texts) or ["nǐ hǎo"],
+                ),
+            )
+
+            first = service.generated("rwnyaH6cTDE")
+            second = service.generated("rwnyaH6cTDE")
+
+            self.assertIn("\u2063nǐ hǎo\n\u2064你好", first["srt"])
+            self.assertEqual(second["srt"], first["srt"])
+            self.assertEqual(path.read_text(encoding="utf-8"), first["srt"])
+            self.assertEqual(batches, [["你好"]])
+
+    def test_generated_serializes_enrichment_per_file_and_never_writes_the_final_srt_directly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            path = server.output_paths(root, "rwnyaH6cTDE").generated_srt
+            path.parent.mkdir(parents=True)
+            raw = "1\n00:00:00,000 --> 00:00:01,000\n你好\n"
+            enriched = "1\n00:00:00,000 --> 00:00:01,000\n\u2063nǐ hǎo\n\u2064你好\n"
+            path.write_text(raw, encoding="utf-8")
+            entered = threading.Event()
+            second_entered = threading.Event()
+            release = threading.Event()
+            calls = []
+            target_writes = []
+            original_write_text = pathlib.Path.write_text
+
+            def pinyinize(source):
+                calls.append(source)
+                if len(calls) == 1:
+                    entered.set()
+                    self.assertTrue(release.wait(timeout=2))
+                    return enriched
+                second_entered.set()
+                return source
+
+            def tracked_write_text(target, data, *args, **kwargs):
+                if target == path:
+                    target_writes.append(data)
+                return original_write_text(target, data, *args, **kwargs)
+
+            service = server.SubtitleService(root, pinyinize=pinyinize)
+            results = []
+            errors = []
+
+            def load_generated():
+                try:
+                    results.append(service.generated("rwnyaH6cTDE"))
+                except Exception as error:  # pragma: no cover - asserted below
+                    errors.append(error)
+
+            with mock.patch.object(pathlib.Path, "write_text", tracked_write_text):
+                first = threading.Thread(target=load_generated)
+                second = threading.Thread(target=load_generated)
+                first.start()
+                self.assertTrue(entered.wait(timeout=2))
+                second.start()
+                try:
+                    self.assertFalse(second_entered.wait(timeout=0.1))
+                    self.assertEqual(calls, [raw])
+                finally:
+                    release.set()
+                    first.join(timeout=2)
+                    second.join(timeout=2)
+
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(target_writes, [])
+            self.assertEqual([result["srt"] for result in results], [enriched, enriched])
+
     def test_existing_subtitles_fall_back_to_automatic_captions_without_audio_download(self):
         calls = []
         with tempfile.TemporaryDirectory() as temporary:
@@ -45,11 +129,16 @@ class SubtitleServiceTests(unittest.TestCase):
                     )
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-            service = server.SubtitleService(root, run_command=run)
+            service = server.SubtitleService(
+                root,
+                run_command=run,
+                pinyinize=lambda source: source.replace("你好", "nǐ hǎo\n你好"),
+            )
             result = service.existing("rwnyaH6cTDE")
 
         self.assertEqual(result["status"], "ready")
         self.assertEqual(result["source"], "youtube")
+        self.assertIn("nǐ hǎo\n你好", result["srt"])
         self.assertIn("你好", result["srt"])
         self.assertEqual(len(calls), 2)
         self.assertIn("--write-subs", calls[0])
@@ -84,12 +173,14 @@ class SubtitleServiceTests(unittest.TestCase):
                 run_command=run,
                 start_background=lambda target: target(),
                 asr_python="/local/funasr/python",
+                pinyinize=lambda source: source.replace("你好", "nǐ hǎo\n你好"),
             )
             service.generate("rwnyaH6cTDE")
             result = service.generated("rwnyaH6cTDE")
 
         self.assertEqual(result["status"], "ready")
         self.assertEqual(result["source"], "generated")
+        self.assertIn("nǐ hǎo\n你好", result["srt"])
         self.assertIn("你好", result["srt"])
         self.assertEqual(len(calls), 2)
         self.assertIn("-x", calls[0])

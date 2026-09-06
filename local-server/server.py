@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
+import tempfile
 import threading
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -14,6 +16,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterator
 from urllib.parse import parse_qs, urlparse
+
+from pinyin import bilingual_srt
 
 VIDEO_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
 DEFAULT_HOST = "127.0.0.1"
@@ -69,6 +73,7 @@ class SubtitleService:
         yt_dlp: str = "yt-dlp",
         asr_python: str | None = None,
         start_background=None,
+        pinyinize=None,
     ) -> None:
         self.output_root = Path(output_root).expanduser().resolve()
         self.run_command = run_command
@@ -78,14 +83,16 @@ class SubtitleService:
         )
         self.transcriber = Path(__file__).with_name("transcribe.py")
         self.start_background = start_background or self._start_thread
+        self.pinyinize = pinyinize or bilingual_srt
         self.jobs = {}
         self.lock = threading.Lock()
+        self.subtitle_locks = {}
 
     def existing(self, video_id: str) -> dict:
         safe_id = validate_video_id(video_id)
         paths = output_paths(self.output_root, safe_id)
         if paths.youtube_srt.is_file() and paths.youtube_srt.stat().st_size:
-            return self._subtitle_payload(paths.youtube_srt, "youtube")
+            return self._youtube_subtitle_payload(paths.youtube_srt)
         paths.directory.mkdir(parents=True, exist_ok=True)
         output_template = paths.directory / f"youtube-{safe_id}-youtube.%(ext)s"
         failures = []
@@ -120,7 +127,7 @@ class SubtitleService:
             if candidate:
                 if candidate != paths.youtube_srt:
                     candidate.replace(paths.youtube_srt)
-                return self._subtitle_payload(paths.youtube_srt, "youtube")
+                return self._youtube_subtitle_payload(paths.youtube_srt)
         if len(failures) == 2:
             raise RuntimeError(failures[-1])
         return {"status": "missing", "source": "youtube"}
@@ -142,7 +149,7 @@ class SubtitleService:
             return job
         path = output_paths(self.output_root, safe_id).generated_srt
         if path.is_file() and path.stat().st_size:
-            return self._subtitle_payload(path, "generated")
+            return self._pinyin_subtitle_payload(path, "generated")
         return {"status": "missing", "source": "generated"}
 
     def _generate_worker(self, video_id: str) -> None:
@@ -209,8 +216,13 @@ class SubtitleService:
             for key, path in temporary.items():
                 if not path.is_file() or not path.stat().st_size:
                     raise RuntimeError(f"Transcriber did not create {key} output")
-            for key, path in temporary.items():
-                path.replace(destinations[key])
+            self._pinyinize_srt(
+                paths.generated_srt,
+                temporary["srt"].read_text(encoding="utf-8"),
+            )
+            temporary["srt"].unlink(missing_ok=True)
+            for key in ("text", "markdown"):
+                temporary[key].replace(destinations[key])
             with self.lock:
                 self.jobs[video_id] = {"status": "ready", "source": "generated"}
         except Exception as error:
@@ -231,13 +243,52 @@ class SubtitleService:
             detail = (result.stderr or result.stdout or "Command failed").strip()
             raise RuntimeError(detail)
 
+    def _subtitle_lock(self, path: Path) -> threading.Lock:
+        key = str(path.resolve())
+        with self.lock:
+            return self.subtitle_locks.setdefault(key, threading.Lock())
+
     @staticmethod
-    def _subtitle_payload(path: Path, source: str) -> dict:
+    def _write_text_atomically(path: Path, contents: str) -> None:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary.write(contents)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            temporary_path = Path(temporary.name)
+        try:
+            os.replace(temporary_path, path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+
+    def _pinyinize_srt(self, path: Path, contents: str | None = None) -> str:
+        with self._subtitle_lock(path):
+            source = path.read_text(encoding="utf-8") if contents is None else contents
+            converted = self.pinyinize(source)
+            existing = path.read_text(encoding="utf-8") if path.is_file() else None
+            if converted != existing:
+                self._write_text_atomically(path, converted)
+            return converted
+
+    def _pinyin_subtitle_payload(self, path: Path, subtitle_source: str) -> dict:
+        return self._subtitle_payload(path, subtitle_source, self._pinyinize_srt(path))
+
+    def _youtube_subtitle_payload(self, path: Path) -> dict:
+        return self._pinyin_subtitle_payload(path, "youtube")
+
+    @staticmethod
+    def _subtitle_payload(path: Path, source: str, contents: str | None = None) -> dict:
         return {
             "status": "ready",
             "source": source,
             "file_name": path.name,
-            "srt": path.read_text(encoding="utf-8"),
+            "srt": path.read_text(encoding="utf-8") if contents is None else contents,
         }
 
 

@@ -36,6 +36,7 @@
     let translationInFlight = false;
     const queuedTranslations = [];
     const queuedTranslationSet = new Set();
+    const inFlightTranslationKeys = new Set();
     let lastTranslationAt = 0;
     let translationDispatchScheduled = false;
 
@@ -94,23 +95,45 @@
       close.setAttribute('aria-label', 'Закрыть перевод');
       close.style.cssText = 'position:absolute;right:7px;top:6px;width:20px;height:20px;border:0;border-radius:6px;background:rgba(255,255,255,.09);color:#dce5ff;font:20px/18px Arial,sans-serif;cursor:pointer;';
       close.addEventListener('click', (event) => { event.stopPropagation(); dismissTooltip(); });
+      const glossary = (Array.isArray(item.glossary) ? item.glossary : [])
+        .map((term) => ({
+          pinyin: typeof term?.pinyin === 'string' ? term.pinyin.trim().slice(0, 120) : '',
+          translation: typeof term?.translation === 'string' ? term.translation.trim().slice(0, 160) : '',
+        }))
+        .filter((term) => term.pinyin && term.translation)
+        .slice(0, 12);
       const dictionary = document.createElement('div');
       dictionary.style.cssText = 'font-size:14px;line-height:1.35;';
       const dictionaryLabel = document.createElement('span');
       dictionaryLabel.style.cssText = 'display:block;margin-bottom:2px;color:#8f9ab3;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;';
-      dictionaryLabel.textContent = 'Обычно';
+      dictionaryLabel.textContent = glossary.length ? 'Перевод' : 'Обычно';
       const dictionaryValue = document.createElement('span');
       dictionaryValue.textContent = item.dictionary;
       dictionary.append(dictionaryLabel, dictionaryValue);
-      const context = document.createElement('div');
-      context.style.cssText = 'margin-top:7px;padding-top:6px;border-top:1px solid rgba(177,196,255,.18);color:#d7e1ff;font-size:14px;line-height:1.35;';
-      const contextLabel = document.createElement('span');
-      contextLabel.style.cssText = 'display:block;margin-bottom:2px;color:#8f9ab3;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;';
-      contextLabel.textContent = 'Здесь';
-      const contextValue = document.createElement('span');
-      contextValue.textContent = item.context;
-      context.append(contextLabel, contextValue);
-      tooltip.append(close, dictionary, context);
+      if (!glossary.length) {
+        const context = document.createElement('div');
+        context.style.cssText = 'margin-top:7px;padding-top:6px;border-top:1px solid rgba(177,196,255,.18);color:#d7e1ff;font-size:14px;line-height:1.35;';
+        const contextLabel = document.createElement('span');
+        contextLabel.style.cssText = 'display:block;margin-bottom:2px;color:#8f9ab3;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;';
+        contextLabel.textContent = 'Здесь';
+        const contextValue = document.createElement('span');
+        contextValue.textContent = item.context;
+        context.append(contextLabel, contextValue);
+        tooltip.append(close, dictionary, context);
+      } else {
+        const terms = document.createElement('div');
+        terms.style.cssText = 'margin-top:7px;padding-top:6px;border-top:1px solid rgba(177,196,255,.18);color:#d7e1ff;font-size:13px;line-height:1.4;';
+        const termsLabel = document.createElement('span');
+        termsLabel.style.cssText = 'display:block;margin-bottom:3px;color:#8f9ab3;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;';
+        termsLabel.textContent = 'Слова';
+        terms.append(termsLabel);
+        for (const term of glossary) {
+          const row = document.createElement('div');
+          row.textContent = `${term.pinyin} — ${term.translation}`;
+          terms.append(row);
+        }
+        tooltip.append(close, dictionary, terms);
+      }
       state.root.append(tooltip);
       const word = anchor.getBoundingClientRect();
       const rootRect = state.root.getBoundingClientRect();
@@ -120,11 +143,11 @@
       state.tooltipItem = item;
     }
 
-    function renderPendingCaption(text) {
+    function renderPendingCaption(target, text) {
       for (const part of text.split(/(\s+)/)) {
         if (!part) continue;
         if (/^\s+$/.test(part)) {
-          state.second.append(document.createTextNode(part));
+          target.append(document.createTextNode(part));
           continue;
         }
         const token = document.createElement('span');
@@ -141,26 +164,46 @@
         token.addEventListener('keydown', (event) => {
           if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); loading(); }
         });
-        state.second.append(token);
+        target.append(token);
       }
     }
 
-    function rememberTranslation(text, items) {
-      translationCache.delete(text);
-      translationCache.set(text, items);
+    function translationDescriptor(text) {
+      const bilingual = runtime.splitPinyinCaption(text);
+      if (bilingual) {
+        return {
+          key: `zh\u0000${bilingual.characters}`,
+          sourceText: bilingual.characters,
+          displayText: bilingual.pinyin,
+          language: 'zh',
+          characters: bilingual.characters,
+        };
+      }
+      return {
+        key: `caption\u0000${text}`,
+        sourceText: text,
+        displayText: text,
+        language: '',
+        characters: '',
+      };
+    }
+
+    function rememberTranslation(key, items) {
+      translationCache.delete(key);
+      translationCache.set(key, items);
       while (translationCache.size > maxCachedTranslations) translationCache.delete(translationCache.keys().next().value);
     }
 
-    function requestTranslation(text, priority = false) {
-      if (!text || translationCache.has(text) || queuedTranslationSet.has(text)) return;
+    function requestTranslation(descriptor, priority = false) {
+      if (!descriptor?.key || !descriptor.sourceText || translationCache.has(descriptor.key) || queuedTranslationSet.has(descriptor.key) || inFlightTranslationKeys.has(descriptor.key)) return;
       if (queuedTranslations.length >= maxQueuedTranslations) {
         if (!priority) return;
         const displaced = queuedTranslations.pop();
-        if (displaced) queuedTranslationSet.delete(displaced);
+        if (displaced) queuedTranslationSet.delete(displaced.key);
       }
-      if (priority) queuedTranslations.unshift(text);
-      else queuedTranslations.push(text);
-      queuedTranslationSet.add(text);
+      if (priority) queuedTranslations.unshift(descriptor);
+      else queuedTranslations.push(descriptor);
+      queuedTranslationSet.add(descriptor.key);
       pumpTranslations();
     }
 
@@ -169,19 +212,26 @@
       const run = () => {
         translationDispatchScheduled = false;
         if (translationInFlight) return;
-        const nextText = queuedTranslations.shift();
-        if (nextText) queuedTranslationSet.delete(nextText);
-        if (!nextText) return;
+        const next = queuedTranslations.shift();
+        if (next) queuedTranslationSet.delete(next.key);
+        if (!next) return;
         translationInFlight = true;
+        inFlightTranslationKeys.add(next.key);
         lastTranslationAt = Date.now();
-        chrome.runtime.sendMessage({ type: 'dualCaptions.caption.translate', text: nextText })
+        chrome.runtime.sendMessage({
+          type: 'dualCaptions.caption.translate',
+          text: next.sourceText,
+          displayText: next.displayText,
+          language: next.language,
+        })
           .then((response) => {
-            if (response?.ok === true && Array.isArray(response?.data?.items)) rememberTranslation(nextText, response.data.items);
+            if (response?.ok === true && Array.isArray(response?.data?.items)) rememberTranslation(next.key, response.data.items);
           })
           .catch(() => undefined)
           .finally(() => {
             translationInFlight = false;
             render();
+            inFlightTranslationKeys.delete(next.key);
             pumpTranslations();
           });
       };
@@ -270,29 +320,35 @@
       }).finally(() => cachingBuiltInSelections.delete(selectionKey));
     }
 
-    function renderInteractiveCaption(text, isEnglish) {
-      const items = translationCache.get(text);
-      const key = `${state.settings.secondTrackId}\u0000${text}`;
+    function renderInteractiveCaption(text) {
+      const descriptor = translationDescriptor(text);
+      const items = translationCache.get(descriptor.key);
+      const key = `${state.settings.secondTrackId}\u0000${descriptor.key}`;
       if (state.renderedCaptionKey === key && state.renderedCaptionItems === items) return;
       state.renderedCaptionKey = key;
       state.renderedCaptionItems = items;
       dismissTooltip();
       state.second.replaceChildren();
-      if (!text) {
+      if (!descriptor.displayText) {
         return;
       }
-      if (!isEnglish) {
-        state.second.textContent = text;
-        return;
+      let target = state.second;
+      if (descriptor.characters) {
+        target = document.createElement('div');
+        target.style.cssText = 'pointer-events:auto;';
+        const characters = document.createElement('div');
+        characters.textContent = descriptor.characters;
+        characters.style.cssText = 'margin-top:2px;color:#fff;font-size:.72em;font-weight:600;line-height:1.15;opacity:.68;pointer-events:none;';
+        state.second.append(target, characters);
       }
       if (!items || !items.length) {
-        renderPendingCaption(text);
-        if (!items) requestTranslation(text, true);
+        renderPendingCaption(target, descriptor.displayText);
+        if (!items) requestTranslation(descriptor, true);
         return;
       }
-      for (const segment of runtime.captionSegments(text, items)) {
+      for (const segment of runtime.captionSegments(descriptor.displayText, items)) {
         if (!segment.item) {
-          state.second.append(document.createTextNode(segment.text));
+          target.append(document.createTextNode(segment.text));
           continue;
         }
         const phrase = document.createElement('span');
@@ -305,7 +361,7 @@
         phrase.addEventListener('keydown', (event) => {
           if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showTooltip(segment.item, phrase); }
         });
-        state.second.append(phrase);
+        target.append(phrase);
       }
     }
 
@@ -380,9 +436,9 @@
         video,
       );
       cacheSelectedBuiltInTrack(state.settings.secondTrackId, state.settings.secondTrackFallbackId, video);
-      renderInteractiveCaption(secondText, true);
+      renderInteractiveCaption(secondText);
       for (const text of futureCaptionTexts(state.settings.secondTrackId, state.settings.secondTrackFallbackId, video)) {
-        requestTranslation(text);
+        requestTranslation(translationDescriptor(text));
       }
       state.second.style.bottom = `${state.settings.secondBottom}%`;
       state.second.style.fontSize = `${state.settings.fontSize}px`;

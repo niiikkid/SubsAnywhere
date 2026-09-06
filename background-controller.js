@@ -335,6 +335,21 @@ export class BackgroundController {
     if (!this.#deepSeek) throw new Error('DeepSeek пока недоступен');
     const text = typeof message?.text === 'string' ? message.text.trim().slice(0, 500) : '';
     if (!text) return { items: [] };
+    if (message?.language === 'zh') {
+      const displayText = typeof message?.displayText === 'string' ? message.displayText.trim().slice(0, 500) : '';
+      if (!displayText) return { items: [] };
+      const translation = await this.#deepSeek.translateChineseCaption(text, displayText);
+      return {
+        items: [{
+          start: 0,
+          end: displayText.length,
+          text: displayText,
+          dictionary: translation.dictionary,
+          context: translation.context,
+          glossary: translation.glossary,
+        }],
+      };
+    }
     return {
       items: await this.#deepSeek.translateCaption(text),
     };

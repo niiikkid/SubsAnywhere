@@ -181,6 +181,17 @@ test('runtime sanitizes subtitle markup before it reaches textContent', async ()
   assert.equal(runtime.cleanSubtitleText('<i>Hello</i><br>world'), 'Hello\nworld');
 });
 
+test('runtime accepts only adjacent pinyin marker frames and preserves every Chinese source line', async () => {
+  const runtime = await loadRuntime();
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(runtime.splitPinyinCaption('\u2063nǐ hǎo, shì jiè\n\u2064你好，\n世界'))),
+    { pinyin: 'nǐ hǎo, shì jiè', characters: '你好，\n世界' },
+  );
+  assert.equal(runtime.splitPinyinCaption('\u2063nǐ hǎo\nnot a source marker\n\u2064你好'), null);
+  assert.equal(runtime.splitPinyinCaption('Hello\n\u2063nǐ hǎo\n\u2064你好'), null);
+});
+
 test('runtime splits a caption into plain text and clickable phrase segments', async () => {
   const runtime = await loadRuntime();
 

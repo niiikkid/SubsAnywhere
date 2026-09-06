@@ -356,6 +356,39 @@ test('caption translation sends only the current short caption to DeepSeek', asy
   }]);
 });
 
+test('Chinese pinyin click translates its linked characters in one request', async () => {
+  const calls = [];
+  const deepSeek = {
+    async translateChineseCaption(text, pinyin) {
+      calls.push({ text, pinyin });
+      return {
+        dictionary: 'Привет, мир',
+        context: 'Привет, мир',
+        glossary: [{ pinyin: 'nǐ hǎo', translation: 'здравствуйте' }],
+      };
+    },
+  };
+  const controller = new BackgroundController(makeChrome(), new FakeStore(), { deepSeek });
+
+  const result = await controller.handle({
+    type: MESSAGE.CAPTION_TRANSLATE,
+    language: 'zh',
+    text: '你好，世界',
+    displayText: 'nǐ hǎo, shì jiè',
+  }, { tab: { id: 3 } });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, [{ text: '你好，世界', pinyin: 'nǐ hǎo, shì jiè' }]);
+  assert.deepEqual(result.data.items, [{
+    start: 0,
+    end: 15,
+    text: 'nǐ hǎo, shì jiè',
+    dictionary: 'Привет, мир',
+    context: 'Привет, мир',
+    glossary: [{ pinyin: 'nǐ hǎo', translation: 'здравствуйте' }],
+  }]);
+});
+
 test('selecting a built-in track persists its recovery position immediately', async () => {
   const chrome = makeChrome();
   const store = new FakeStore();

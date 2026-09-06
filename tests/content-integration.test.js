@@ -166,6 +166,83 @@ test('production content message renders only the selected original track safely
   assert.equal(overlay.children[0].style.bottom, '8%');
 });
 
+test('production makes pinyin the primary clickable line and keeps its characters linked', async () => {
+  const harness = await makeHarness();
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'external:chinese', secondBottom: 8, fontSize: 24 },
+    externalTracks: [{
+      id: 'chinese',
+      name: 'Chinese',
+      offsetSeconds: 0,
+      cues: [{ start: 1, end: 2, text: '\u2063nǐ hǎo, shì jiè\n\u2064你好，世界' }],
+    }],
+  }, {}, () => {});
+  await Promise.resolve();
+
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  const caption = overlay.children[0];
+  assert.equal(caption.children[0].children.map((child) => child.textContent).join(''), 'nǐ hǎo, shì jiè');
+  assert.equal(caption.children[1].textContent, '你好，世界');
+  assert.match(caption.children[1].style.cssText, /opacity:\.68/);
+  assert.deepEqual(
+    harness.reports.filter((message) => message.type === 'dualCaptions.caption.translate').map((message) => ({
+      text: message.text,
+      displayText: message.displayText,
+      language: message.language,
+    })),
+    [{ text: '你好，世界', displayText: 'nǐ hǎo, shì jiè', language: 'zh' }],
+  );
+});
+
+test('production shows a pinyin-to-Russian glossary with the full Chinese sentence translation', async () => {
+  const harness = await makeHarness();
+  harness.context.chrome.runtime.sendMessage = (message) => {
+    if (message.type === 'dualCaptions.caption.translate') {
+      return Promise.resolve({ ok: true, data: {
+        items: [{
+          start: 0,
+          end: 15,
+          text: 'nǐ hǎo, shì jiè',
+          dictionary: 'Привет, мир',
+          context: 'Привет, мир',
+          glossary: [
+            { pinyin: 'nǐ hǎo', translation: 'здравствуйте' },
+            { pinyin: 'shì jiè', translation: 'мир' },
+          ],
+        }],
+      } });
+    }
+    harness.reports.push(structuredClone(message));
+    return Promise.resolve({ ok: true });
+  };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'external:chinese', secondBottom: 8, fontSize: 24 },
+    externalTracks: [{
+      id: 'chinese',
+      name: 'Chinese',
+      offsetSeconds: 0,
+      cues: [{ start: 1, end: 2, text: '\u2063nǐ hǎo, shì jiè\n\u2064你好，世界' }],
+    }],
+  }, {}, () => {});
+  for (let index = 0; index < 4; index += 1) await Promise.resolve();
+
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  const phrase = overlay.children[0].children[0].children[0];
+  phrase.dispatch('click', { stopPropagation() {} });
+  const tooltip = overlay.children.at(-1);
+
+  assert.equal(tooltip.children[1].children.map((child) => child.textContent).join(' '), 'Перевод Привет, мир');
+  assert.equal(tooltip.children[2].children.map((child) => child.textContent).join(' '), 'Слова nǐ hǎo — здравствуйте shì jiè — мир');
+});
+
 test('production turns prepared English phrases into toggled translation tooltips', async () => {
   const harness = await makeHarness();
   harness.context.chrome.runtime.sendMessage = (message) => {
@@ -201,6 +278,51 @@ test('production turns prepared English phrases into toggled translation tooltip
 
   phrase.dispatch('click', { stopPropagation() {} });
   assert.equal(overlay.children.length, 1);
+});
+
+test('production does not queue a second translation while the same caption is in flight', async () => {
+  const harness = await makeHarness();
+  const pending = [];
+  harness.document.videos[0].textTracks[0].activeCues = [{ text: 'Current line' }];
+  harness.document.videos[0].textTracks[0].cues = [
+    { startTime: 1, endTime: 2, text: 'Current line' },
+    { startTime: 5, endTime: 6, text: 'First next' },
+    { startTime: 10, endTime: 11, text: 'Second next' },
+    { startTime: 15, endTime: 16, text: 'Third next' },
+  ];
+  harness.context.chrome.runtime.sendMessage = (message) => {
+    harness.reports.push(structuredClone(message));
+    if (message.type !== 'dualCaptions.caption.translate') return Promise.resolve({ ok: true });
+    return new Promise((resolve) => pending.push({ message, resolve }));
+  };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'track-0', secondBottom: 8, fontSize: 24 },
+    externalTracks: [],
+  }, {}, () => {});
+  pending.shift().resolve({ ok: true, data: { items: [] } });
+  for (let index = 0; index < 4; index += 1) await Promise.resolve();
+  harness.scheduled.shift()?.();
+  await Promise.resolve();
+
+  harness.document.videos[0].currentTime = 5.5;
+  harness.document.videos[0].textTracks[0].activeCues = [{ text: 'First next' }];
+  harness.document.videos[0].dispatch('timeupdate');
+  pending.shift().resolve({ ok: true, data: { items: [] } });
+  for (let index = 0; index < 4; index += 1) await Promise.resolve();
+  harness.scheduled.shift()?.();
+  await Promise.resolve();
+
+  assert.equal(
+    harness.reports.filter((message) => (
+      message.type === 'dualCaptions.caption.translate' && message.text === 'First next'
+    )).length,
+    1,
+  );
 });
 
 test('production makes the original caption clickable while its translation is loading', async () => {
