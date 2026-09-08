@@ -20,6 +20,7 @@ export const MESSAGE = Object.freeze({
   CONTENT_FULL_STATE: 'dualCaptions.content.fullState',
   CONTENT_SETTINGS: 'dualCaptions.content.settings',
   CONTENT_TRACKS: 'dualCaptions.content.tracks',
+  CONTENT_POSITION_PATCH: 'dualCaptions.content.positionPatch',
   CONTENT_RESET: 'dualCaptions.content.reset',
 });
 

@@ -65,12 +65,17 @@ def output_paths(root: Path, video_id: str) -> OutputPaths:
     )
 
 
+def progress_path(paths: OutputPaths) -> Path:
+    return paths.directory / f".{paths.generated_srt.stem}.progress.json"
+
+
 class SubtitleService:
     def __init__(
         self,
         output_root: Path,
         run_command=subprocess.run,
         yt_dlp: str = "yt-dlp",
+        cookies_from_browser: str = "chrome",
         asr_python: str | None = None,
         start_background=None,
         pinyinize=None,
@@ -78,6 +83,7 @@ class SubtitleService:
         self.output_root = Path(output_root).expanduser().resolve()
         self.run_command = run_command
         self.yt_dlp = yt_dlp
+        self.cookies_from_browser = cookies_from_browser
         self.asr_python = asr_python or str(
             Path.home() / ".hermes/venvs/video-url-to-subtitles/bin/python"
         )
@@ -100,6 +106,8 @@ class SubtitleService:
             result = self.run_command(
                 [
                     self.yt_dlp,
+                    "--cookies-from-browser",
+                    self.cookies_from_browser,
                     "--skip-download",
                     "--no-playlist",
                     flag,
@@ -137,7 +145,13 @@ class SubtitleService:
         with self.lock:
             if self.jobs.get(safe_id, {}).get("status") == "running":
                 return dict(self.jobs[safe_id])
-            self.jobs[safe_id] = {"status": "running", "source": "generated"}
+            progress_path(output_paths(self.output_root, safe_id)).unlink(missing_ok=True)
+            self.jobs[safe_id] = {
+                "status": "running",
+                "source": "generated",
+                "stage": "preparing",
+                "progress": 0,
+            }
         self.start_background(lambda: self._generate_worker(safe_id))
         return self.generated(safe_id)
 
@@ -146,6 +160,15 @@ class SubtitleService:
         with self.lock:
             job = dict(self.jobs.get(safe_id, {}))
         if job.get("status") in {"running", "error"}:
+            if job.get("status") == "running":
+                try:
+                    live_progress = json.loads(
+                        progress_path(output_paths(self.output_root, safe_id)).read_text(encoding="utf-8")
+                    )
+                    if isinstance(live_progress, dict):
+                        job.update(live_progress)
+                except (FileNotFoundError, json.JSONDecodeError, OSError):
+                    pass
             return job
         path = output_paths(self.output_root, safe_id).generated_srt
         if path.is_file() and path.stat().st_size:
@@ -157,10 +180,14 @@ class SubtitleService:
         paths.directory.mkdir(parents=True, exist_ok=True)
         try:
             if not paths.audio.is_file() or not paths.audio.stat().st_size:
+                with self.lock:
+                    self.jobs[video_id].update(stage="downloading", progress=0)
                 audio_template = paths.directory / f"youtube-{video_id}-audio.%(ext)s"
                 result = self.run_command(
                     [
                         self.yt_dlp,
+                        "--cookies-from-browser",
+                        self.cookies_from_browser,
                         "--no-playlist",
                         "-f",
                         "ba/bestaudio",
@@ -188,6 +215,8 @@ class SubtitleService:
             }
             for path in temporary.values():
                 path.unlink(missing_ok=True)
+            with self.lock:
+                self.jobs[video_id].update(stage="recognizing", progress=0)
             result = self.run_command(
                 [
                     self.asr_python,
@@ -201,6 +230,8 @@ class SubtitleService:
                     str(temporary["markdown"]),
                     "--device",
                     "cpu",
+                    "--progress",
+                    str(progress_path(paths)),
                 ],
                 capture_output=True,
                 text=True,
@@ -225,7 +256,9 @@ class SubtitleService:
                 temporary[key].replace(destinations[key])
             with self.lock:
                 self.jobs[video_id] = {"status": "ready", "source": "generated"}
+            progress_path(paths).unlink(missing_ok=True)
         except Exception as error:
+            progress_path(paths).unlink(missing_ok=True)
             with self.lock:
                 self.jobs[video_id] = {
                     "status": "error",

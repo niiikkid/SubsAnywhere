@@ -148,6 +148,23 @@ test('DeepSeek translates a linked Chinese sentence in one request', async () =>
   assert.match(request.messages[1].content, /nǐ hǎo, shì jiè/);
 });
 
+test('DeepSeek keeps every valid Chinese glossary term returned for a caption', async () => {
+  const storage = new MemoryStorage();
+  const credentials = new AiCredentialStore(storage);
+  await credentials.patch({ apiKey: 'secret-key' });
+  const glossary = Array.from({ length: 13 }, (_, index) => ({
+    pinyin: `cí${index + 1}`,
+    translation: `слово ${index + 1}`,
+  }));
+  const client = new DeepSeekClient(async () => new Response(JSON.stringify({
+    choices: [{ message: { content: JSON.stringify({ translation: 'Полная фраза', glossary }) } }],
+  }), { status: 200, headers: { 'content-type': 'application/json' } }), credentials);
+
+  const result = await client.translateChineseCaption('完整句子', glossary.map((term) => term.pinyin).join(' '));
+
+  assert.deepEqual(result.glossary, glossary);
+});
+
 test('DeepSeek rejects model glossary terms that are not exact displayed pinyin phrases', async () => {
   const storage = new MemoryStorage();
   const credentials = new AiCredentialStore(storage);

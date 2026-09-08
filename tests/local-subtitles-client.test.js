@@ -1,10 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  formatGenerationProgress,
   LocalSubtitleClient,
   localSubtitleTrack,
   youtubeVideoId,
 } from '../local-subtitles-client.js';
+
+test('formatGenerationProgress reports exact work and a useful ETA', () => {
+  assert.deepEqual(formatGenerationProgress({
+    status: 'running',
+    stage: 'recognizing',
+    progress: 42,
+    completed_segments: 21,
+    total_segments: 50,
+    eta_seconds: 125,
+  }), {
+    visible: true,
+    value: 42,
+    label: 'Распознаю речь: 21 из 50 сегментов.',
+    detail: '42% · осталось примерно 3 мин',
+  });
+  assert.equal(formatGenerationProgress({ status: 'running', stage: 'downloading' }).label, 'Скачиваю аудио…');
+  assert.equal(formatGenerationProgress({ status: 'ready' }).visible, false);
+});
 
 test('youtubeVideoId accepts supported YouTube pages and rejects other URLs', () => {
   assert.equal(youtubeVideoId('https://www.youtube.com/watch?v=rwnyaH6cTDE&t=3'), 'rwnyaH6cTDE');

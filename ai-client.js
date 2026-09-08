@@ -214,8 +214,7 @@ export class DeepSeekClient {
           ? String(item.translation ?? item.meaning).trim().slice(0, 160)
           : '',
       }))
-      .filter((item) => item.pinyin && item.translation && isExactPinyinPhrase(item.pinyin, pronunciation))
-      .slice(0, 12);
+      .filter((item) => item.pinyin && item.translation && isExactPinyinPhrase(item.pinyin, pronunciation));
     return { dictionary: translation, context: translation, glossary };
   }
 

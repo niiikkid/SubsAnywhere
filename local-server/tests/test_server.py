@@ -31,6 +31,32 @@ class PathSafetyTests(unittest.TestCase):
 
 
 class SubtitleServiceTests(unittest.TestCase):
+    def test_generated_returns_live_transcriber_progress(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            service = server.SubtitleService(root)
+            paths = server.output_paths(root, "rwnyaH6cTDE")
+            paths.directory.mkdir(parents=True)
+            server.progress_path(paths).write_text(json.dumps({
+                "stage": "recognizing",
+                "progress": 42,
+                "completed_segments": 21,
+                "total_segments": 50,
+                "eta_seconds": 125,
+            }), encoding="utf-8")
+            service.jobs["rwnyaH6cTDE"] = {
+                "status": "running",
+                "source": "generated",
+                "stage": "recognizing",
+            }
+
+            result = service.generated("rwnyaH6cTDE")
+
+        self.assertEqual(result["progress"], 42)
+        self.assertEqual(result["completed_segments"], 21)
+        self.assertEqual(result["total_segments"], 50)
+        self.assertEqual(result["eta_seconds"], 125)
+
     def test_generated_subtitle_file_is_enriched_idempotently_before_returning_it(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -147,6 +173,44 @@ class SubtitleServiceTests(unittest.TestCase):
         self.assertEqual(calls[1][calls[1].index("--convert-subs") + 1], "srt")
         self.assertNotIn("-x", calls[0] + calls[1])
         self.assertTrue(all(isinstance(command, list) for command in calls))
+
+    def test_youtube_commands_read_cookies_from_chrome(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+
+            def run(command, **kwargs):
+                calls.append(command)
+                if "-x" in command:
+                    output = pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", "mp3"))
+                    output.parent.mkdir(parents=True, exist_ok=True)
+                    output.write_bytes(b"audio")
+                elif command[0] != "/local/funasr/python":
+                    paths = server.output_paths(root, "rwnyaH6cTDE")
+                    paths.directory.mkdir(parents=True, exist_ok=True)
+                    paths.youtube_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\n你好\n", encoding="utf-8")
+                else:
+                    pathlib.Path(command[command.index("--srt") + 1]).write_text("1\n00:00:00,000 --> 00:00:01,000\n你好\n", encoding="utf-8")
+                    pathlib.Path(command[command.index("--text") + 1]).write_text("你好\n", encoding="utf-8")
+                    pathlib.Path(command[command.index("--markdown") + 1]).write_text("[00:00] 你好\n", encoding="utf-8")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            service = server.SubtitleService(
+                root,
+                run_command=run,
+                start_background=lambda target: target(),
+                asr_python="/local/funasr/python",
+                pinyinize=lambda source: source,
+            )
+            service.existing("rwnyaH6cTDE")
+            service.generate("rwnyaH6cTDE")
+
+        youtube_commands = [command for command in calls if command[0] == "yt-dlp"]
+        self.assertEqual(len(youtube_commands), 2)
+        self.assertTrue(all(
+            command[command.index("--cookies-from-browser") + 1] == "chrome"
+            for command in youtube_commands
+        ))
 
     def test_generation_downloads_audio_only_and_runs_the_local_transcriber(self):
         calls = []

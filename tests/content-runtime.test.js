@@ -212,6 +212,38 @@ test('runtime external cue lookup keeps positive offset semantics', async () => 
   assert.equal(runtime.cueTextAt(cues, 12.5, 2), 'Later');
 });
 
+test('runtime moves subtitles by pointer delta without a jump and keeps them inside the player', async () => {
+  const runtime = await loadRuntime();
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(runtime.moveCaptionPosition(
+      { secondLeft: 50, secondBottom: 10, pointerX: 300, pointerY: 400 },
+      300,
+      400,
+      { width: 800, height: 400 },
+    ))),
+    { secondLeft: 50, secondBottom: 10 },
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(runtime.moveCaptionPosition(
+      { secondLeft: 50, secondBottom: 10, pointerX: 300, pointerY: 400 },
+      380,
+      360,
+      { width: 800, height: 400 },
+    ))),
+    { secondLeft: 60, secondBottom: 20 },
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(runtime.moveCaptionPosition(
+      { secondLeft: 50, secondBottom: 10, pointerX: 300, pointerY: 400 },
+      -999,
+      9_999,
+      { width: 800, height: 400 },
+    ))),
+    { secondLeft: 4, secondBottom: 0 },
+  );
+});
+
 test('runtime applies AI speed correction without rewriting cue times', async () => {
   const runtime = await loadRuntime();
   const cues = [{ start: 10, end: 12, text: 'Scaled' }];
@@ -315,8 +347,13 @@ test('runtime normalizes settings at the content-script boundary', async () => {
     { ...runtime.normalizeSettings({
       secondTrackId: 'saved',
       secondTrackFallbackId: 'caption-1',
+      secondLeft: 200,
       secondBottom: 200,
       fontSize: '31',
+      subtitleColor: '#3B82F6',
+      subtitleBackground: true,
+      subtitleBackgroundColor: '#18233F',
+      subtitleBackgroundOpacity: 64,
       selectedPlayerKey: 'player',
     }) },
     {
@@ -324,8 +361,13 @@ test('runtime normalizes settings at the content-script boundary', async () => {
       secondTrackFallbackId: 'caption-1',
       secondTrackCacheId: '',
       secondTrackCacheSource: '',
+      secondLeft: 96,
       secondBottom: 95,
       fontSize: 31,
+      subtitleColor: '#3b82f6',
+      subtitleBackground: true,
+      subtitleBackgroundColor: '#18233f',
+      subtitleBackgroundOpacity: 64,
       selectedPlayerKey: 'player',
     },
   );

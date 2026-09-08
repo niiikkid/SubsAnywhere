@@ -213,9 +213,28 @@
       secondTrackFallbackId: typeof value.secondTrackFallbackId === 'string' ? value.secondTrackFallbackId : '',
       secondTrackCacheId: typeof value.secondTrackCacheId === 'string' ? value.secondTrackCacheId : '',
       secondTrackCacheSource: typeof value.secondTrackCacheSource === 'string' ? value.secondTrackCacheSource : '',
+      secondLeft: bounded(value.secondLeft, 4, 96, 50),
       secondBottom: bounded(value.secondBottom, 0, 95, 5),
       fontSize: bounded(value.fontSize, 12, 48, 22),
+      subtitleColor: /^#[0-9a-f]{6}$/i.test(String(value.subtitleColor)) ? String(value.subtitleColor).toLowerCase() : '#ffffff',
+      subtitleBackground: Boolean(value.subtitleBackground),
+      subtitleBackgroundColor: /^#[0-9a-f]{6}$/i.test(String(value.subtitleBackgroundColor)) ? String(value.subtitleBackgroundColor).toLowerCase() : '#000000',
+      subtitleBackgroundOpacity: bounded(value.subtitleBackgroundOpacity, 10, 100, 78),
       selectedPlayerKey: typeof value.selectedPlayerKey === 'string' ? value.selectedPlayerKey : '',
+    };
+  }
+
+  function moveCaptionPosition(drag, pointerX, pointerY, overlayRect) {
+    const width = Number(overlayRect?.width);
+    const height = Number(overlayRect?.height);
+    const initialLeft = Number(drag?.secondLeft);
+    const initialBottom = Number(drag?.secondBottom);
+    const startX = Number(drag?.pointerX);
+    const startY = Number(drag?.pointerY);
+    if (![width, height, initialLeft, initialBottom, startX, startY, pointerX, pointerY].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+    return {
+      secondLeft: Math.min(96, Math.max(4, initialLeft + ((pointerX - startX) / width) * 100)),
+      secondBottom: Math.min(95, Math.max(0, initialBottom - ((pointerY - startY) / height) * 100)),
     };
   }
 
@@ -347,6 +366,7 @@
     findBuiltInTrack,
     installController,
     mutationsAffectVideo,
+    moveCaptionPosition,
     normalizeSettings,
 
     splitPinyinCaption,

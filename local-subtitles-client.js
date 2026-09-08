@@ -42,6 +42,34 @@ export function localSubtitleTrack(videoId, source, cues) {
   };
 }
 
+function formatEta(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '';
+  if (seconds < 60) return 'меньше минуты';
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes} мин`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours} ч${remainingMinutes ? ` ${remainingMinutes} мин` : ''}`;
+}
+
+export function formatGenerationProgress(payload) {
+  if (payload?.status !== 'running') return { visible: false, value: 0, label: '', detail: '' };
+  const value = Math.max(0, Math.min(100, Math.round(Number(payload.progress) || 0)));
+  if (payload.stage !== 'recognizing') {
+    const label = payload.stage === 'downloading' ? 'Скачиваю аудио…' : 'Подготавливаю распознавание…';
+    return { visible: true, value, label, detail: `${value}%` };
+  }
+  const completed = Math.max(0, Math.round(Number(payload.completed_segments) || 0));
+  const total = Math.max(0, Math.round(Number(payload.total_segments) || 0));
+  const eta = formatEta(Number(payload.eta_seconds));
+  return {
+    visible: true,
+    value,
+    label: total ? `Распознаю речь: ${completed} из ${total} сегментов.` : 'Определяю объём речи…',
+    detail: `${value}%${eta ? ` · осталось примерно ${eta}` : ''}`,
+  };
+}
+
 export class LocalSubtitleClient {
   #fetch;
   #baseUrl;

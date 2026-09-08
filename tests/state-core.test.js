@@ -61,6 +61,59 @@ test('normalizeState preserves a temporarily unavailable selected track id', () 
   assert.equal(state.settings.secondTrackId, 'track-not-loaded-yet');
 });
 
+test('normalizeState keeps subtitle colour and makes its background transparent by default', () => {
+  const defaults = normalizeState({});
+  const configured = normalizeState({
+    settings: {
+      subtitleColor: '#3b82f6',
+      subtitleBackground: true,
+      subtitleBackgroundColor: '#18233f',
+      subtitleBackgroundOpacity: 64,
+    },
+  });
+
+  assert.equal(defaults.settings.subtitleColor, '#ffffff');
+  assert.equal(defaults.settings.subtitleBackground, false);
+  assert.equal(defaults.settings.subtitleBackgroundColor, '#000000');
+  assert.equal(defaults.settings.subtitleBackgroundOpacity, 78);
+  assert.equal(configured.settings.subtitleColor, '#3b82f6');
+  assert.equal(configured.settings.subtitleBackground, true);
+  assert.equal(configured.settings.subtitleBackgroundColor, '#18233f');
+  assert.equal(configured.settings.subtitleBackgroundOpacity, 64);
+});
+
+test('normalizeState preserves all subtitle appearance preferences and horizontal position', () => {
+  const settings = normalizeState({
+    settings: {
+      secondLeft: 73,
+      fontSize: 31,
+      subtitleColor: '#3b82f6',
+      subtitleBackground: true,
+      subtitleBackgroundColor: '#18233f',
+      subtitleBackgroundOpacity: 64,
+    },
+  }).settings;
+
+  assert.deepEqual(
+    {
+      secondLeft: settings.secondLeft,
+      fontSize: settings.fontSize,
+      subtitleColor: settings.subtitleColor,
+      subtitleBackground: settings.subtitleBackground,
+      subtitleBackgroundColor: settings.subtitleBackgroundColor,
+      subtitleBackgroundOpacity: settings.subtitleBackgroundOpacity,
+    },
+    {
+      secondLeft: 73,
+      fontSize: 31,
+      subtitleColor: '#3b82f6',
+      subtitleBackground: true,
+      subtitleBackgroundColor: '#18233f',
+      subtitleBackgroundOpacity: 64,
+    },
+  );
+});
+
 test('built-in selections persist a recovery position before the player context is replaced', () => {
   const patch = builtInTrackFallbackPatch(
     { secondTrackId: 'builtin-en' },

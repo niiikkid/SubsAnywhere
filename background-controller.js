@@ -132,6 +132,8 @@ export class BackgroundController {
           return ok(await this.#selectPlayer(message, this.#pageKey(message, sender)));
         case MESSAGE.STATE_PATCH:
           return ok(await this.#updateSettings(message, this.#pageKey(message, sender)));
+        case MESSAGE.CONTENT_POSITION_PATCH:
+          return ok(await this.#updateCaptionPosition(message, sender));
         case MESSAGE.TRACK_ADD:
           return ok(await this.#mutateTracks(message.tabId, this.#pageKey(message, sender), () => (
             this.#store.addExternalTrack(this.#pageKey(message, sender), message.track)
@@ -296,6 +298,29 @@ export class BackgroundController {
       this.players(message.tabId),
     );
     const delivered = await this.#sendToSelected(message.tabId, state, {
+      type: MESSAGE.CONTENT_SETTINGS,
+      settings: state.settings,
+    });
+    return { state, delivered };
+  }
+
+  async #updateCaptionPosition(message, sender) {
+    const tabId = sender?.tab?.id;
+    const frameId = sender?.frameId ?? 0;
+    if (!Number.isInteger(tabId)) throw new Error('Caption position has no tab');
+    const pageKey = this.#pageKey(message, sender);
+    await this.#adoptPage(tabId, pageKey);
+    const current = await this.#store.get(pageKey);
+    const player = this.players(tabId).find((item) => (
+      item.key === current.settings.selectedPlayerKey && item.frameId === frameId
+    ));
+    if (!player) throw new Error('Caption position came from an unselected player');
+    const state = await this.#store.patchSettingsWithPlayerFallbacks(
+      pageKey,
+      { secondLeft: message.secondLeft, secondBottom: message.secondBottom },
+      [player],
+    );
+    const delivered = await this.#send(tabId, frameId, {
       type: MESSAGE.CONTENT_SETTINGS,
       settings: state.settings,
     });

@@ -13,6 +13,9 @@ select { appearance: none; padding-right: 38px; background-image: url("data:imag
 select:hover, input:hover { border-color: #505e79; }
 select:focus, input:focus, button:focus-visible, .file-button:focus-within { outline: none; border-color: #89a6ff; box-shadow: 0 0 0 3px rgba(103, 139, 255, .18); }
 input[type="range"] { height: 19px; padding: 0; accent-color: #7f9cff; cursor: pointer; }
+input[type="color"] { height: 34px; padding: 3px; cursor: pointer; }
+.toggle-control { display: flex; align-items: center; gap: 8px; }
+.toggle-control input[type="checkbox"] { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: #7f9cff; }
 output { float: right; color: #aabfff; font-size: 11px; font-weight: 750; }
 button { border: 1px solid #353e50; border-radius: 8px; padding: 7px 9px; background: #202634; color: #f5f7fb; font: inherit; font-weight: 650; cursor: pointer; transition: transform .14s, background .14s, border-color .14s; }
 button:hover { border-color: #687a9f; background: #283146; }
@@ -24,6 +27,13 @@ button:disabled { opacity: .55; cursor: wait; }
 .youtube-card { margin-top: 10px; }
 .youtube-card button { width: 100%; margin-top: 9px; border-color: #697da8; background: #25304a; }
 #youtubeSubtitleStatus.error { color: #ffb2bb; }
+.youtube-progress { margin-top: 8px; }
+.progress-row { display: flex; align-items: center; gap: 8px; }
+.progress-row progress { width: 100%; height: 8px; overflow: hidden; border: 0; border-radius: 999px; background: #2b3240; }
+.progress-row progress::-webkit-progress-bar { border-radius: 999px; background: #2b3240; }
+.progress-row progress::-webkit-progress-value { border-radius: 999px; background: linear-gradient(90deg, #7898ff, #8d72f2); transition: width .25s ease; }
+.progress-row output { min-width: 34px; float: none; text-align: right; }
+.youtube-progress .hint { margin-top: 4px; }
 #controls { margin-top: 10px; }
 .advanced-settings { margin-top: 8px; }
 .advanced-settings summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; border: 1px solid #30394a; border-radius: 10px; background: #171c26; color: #dbe4ff; cursor: pointer; list-style: none; font-weight: 750; }

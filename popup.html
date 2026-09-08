@@ -26,6 +26,13 @@
         <span>локальный сервер</span>
       </div>
       <p id="youtubeSubtitleStatus" class="hint">Проверяю готовые китайские субтитры…</p>
+      <div id="youtubeProgressBox" class="youtube-progress" hidden>
+        <div class="progress-row">
+          <progress id="youtubeProgress" max="100" value="0"></progress>
+          <output id="youtubeProgressValue">0%</output>
+        </div>
+        <p id="youtubeProgressDetail" class="hint">0%</p>
+      </div>
       <button id="createYoutubeSubtitles" type="button">Создать свои субтитры</button>
       <p class="hint">Запускается только вручную: сервер скачает аудио и распознает китайскую речь локально.</p>
     </section>
@@ -50,11 +57,24 @@
           <h2>Внешний вид</h2>
           <span>на видео</span>
         </div>
-        <label>Положение субтитров <output id="originalBottomValue"></output>
-          <input id="originalBottom" type="range" min="0" max="95" value="5">
-        </label>
+        <p class="hint">Перетаскивайте субтитры по видео за заметный значок ⠿.</p>
         <label>Размер текста <output id="fontSizeValue"></output>
           <input id="fontSize" type="range" min="12" max="48" value="22">
+        </label>
+        <div class="two-columns">
+          <label>Цвет текста
+            <input id="subtitleColor" type="color" value="#ffffff">
+          </label>
+          <label>Цвет фона
+            <input id="subtitleBackgroundColor" type="color" value="#000000">
+          </label>
+        </div>
+        <label>Непрозрачность фона <output id="subtitleBackgroundOpacityValue"></output>
+          <input id="subtitleBackgroundOpacity" type="range" min="10" max="100" value="78">
+        </label>
+        <label class="toggle-control">
+          <input id="subtitleBackground" type="checkbox">
+          Непрозрачный фон
         </label>
       </section>
 

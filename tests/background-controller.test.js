@@ -333,6 +333,38 @@ test('settings patch sends only lightweight settings to the selected player fram
   assert.equal('externalTracks' in chrome.sent[0].message, false);
 });
 
+test('the selected player persists a dragged subtitle position on both axes', async () => {
+  const chrome = makeChrome();
+  const store = new FakeStore();
+  const controller = new BackgroundController(chrome, store);
+  const sender = { tab: { id: 3, url: 'https://video.example/episode' }, frameId: 8 };
+  await controller.handle({
+    type: MESSAGE.PLAYER_REPORT,
+    player: { title: 'Player', frameUrl: 'https://player.example/embed', videoIndex: 0, tracks: [] },
+  }, sender);
+  const [player] = controller.players(3);
+  await controller.handle({
+    type: MESSAGE.PLAYER_SELECT,
+    tabId: 3,
+    pageKey: 'https://video.example/episode',
+    frameId: 8,
+    playerKey: player.key,
+  }, {});
+  chrome.sent.length = 0;
+
+  const result = await controller.handle({
+    type: MESSAGE.CONTENT_POSITION_PATCH,
+    secondLeft: 64,
+    secondBottom: 27,
+  }, sender);
+
+  assert.equal(result.ok, true);
+  assert.equal(store.state.settings.secondLeft, 64);
+  assert.equal(store.state.settings.secondBottom, 27);
+  assert.deepEqual(chrome.sent[0].message.settings.secondLeft, 64);
+  assert.deepEqual(chrome.sent[0].message.settings.secondBottom, 27);
+});
+
 test('caption translation sends only the current short caption to DeepSeek', async () => {
   const calls = [];
   const deepSeek = {

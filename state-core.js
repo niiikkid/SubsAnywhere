@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 7;
 
 export const DEFAULT_STATE = Object.freeze({
   schemaVersion: SCHEMA_VERSION,
@@ -7,8 +7,13 @@ export const DEFAULT_STATE = Object.freeze({
     secondTrackFallbackId: '',
     secondTrackCacheId: '',
     secondTrackCacheSource: '',
+    secondLeft: 50,
     secondBottom: 5,
     fontSize: 22,
+    subtitleColor: '#ffffff',
+    subtitleBackground: false,
+    subtitleBackgroundColor: '#000000',
+    subtitleBackgroundOpacity: 78,
     selectedPlayerKey: '',
     selectedPlayerFrameId: -1,
   }),
@@ -25,8 +30,13 @@ const SETTING_KEYS = new Set([
   'secondTrackFallbackId',
   'secondTrackCacheId',
   'secondTrackCacheSource',
+  'secondLeft',
   'secondBottom',
   'fontSize',
+  'subtitleColor',
+  'subtitleBackground',
+  'subtitleBackgroundColor',
+  'subtitleBackgroundOpacity',
   'selectedPlayerKey',
   'selectedPlayerFrameId',
 ]);
@@ -43,6 +53,10 @@ const clone = (value) => structuredClone(value);
 function bounded(value, minimum, maximum, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
+}
+
+function normalizeSubtitleColor(value, fallback = DEFAULT_STATE.settings.subtitleColor) {
+  return /^#[0-9a-f]{6}$/i.test(String(value)) ? String(value).toLowerCase() : fallback;
 }
 
 
@@ -101,8 +115,13 @@ export function normalizeState(value = {}) {
       secondTrackFallbackId: selectedFallbackId,
       secondTrackCacheId: typeof settings.secondTrackCacheId === 'string' ? settings.secondTrackCacheId : '',
       secondTrackCacheSource: typeof settings.secondTrackCacheSource === 'string' ? settings.secondTrackCacheSource : '',
+      secondLeft: bounded(settings.secondLeft, 4, 96, DEFAULT_STATE.settings.secondLeft),
       secondBottom: bounded(selectedBottom, 0, 95, DEFAULT_STATE.settings.secondBottom),
       fontSize: bounded(settings.fontSize, 12, 48, DEFAULT_STATE.settings.fontSize),
+      subtitleColor: normalizeSubtitleColor(settings.subtitleColor),
+      subtitleBackground: Boolean(settings.subtitleBackground),
+      subtitleBackgroundColor: normalizeSubtitleColor(settings.subtitleBackgroundColor, DEFAULT_STATE.settings.subtitleBackgroundColor),
+      subtitleBackgroundOpacity: bounded(settings.subtitleBackgroundOpacity, 10, 100, DEFAULT_STATE.settings.subtitleBackgroundOpacity),
       selectedPlayerKey: typeof settings.selectedPlayerKey === 'string' ? settings.selectedPlayerKey : DEFAULT_STATE.settings.selectedPlayerKey,
       selectedPlayerFrameId: Number.isInteger(settings.selectedPlayerFrameId) && settings.selectedPlayerFrameId >= 0
         ? settings.selectedPlayerFrameId

@@ -161,9 +161,11 @@ test('production content message renders only the selected original track safely
 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
   assert.ok(overlay);
-  assert.equal(overlay.children.length, 1);
+  assert.equal(overlay.children.length, 2);
   assert.equal(overlay.children[0].children.map((child) => child.textContent).join(''), 'Imported');
   assert.equal(overlay.children[0].style.bottom, '8%');
+  assert.equal(overlay.children[0].style.left, '50%');
+  assert.equal(overlay.children[1].textContent, '⠿');
 });
 
 test('production makes pinyin the primary clickable line and keeps its characters linked', async () => {
@@ -212,6 +214,17 @@ test('production shows a pinyin-to-Russian glossary with the full Chinese senten
           glossary: [
             { pinyin: 'nǐ hǎo', translation: 'здравствуйте' },
             { pinyin: 'shì jiè', translation: 'мир' },
+            { pinyin: 'wǒ', translation: 'я' },
+            { pinyin: 'men', translation: 'множественное число' },
+            { pinyin: 'xué', translation: 'учиться' },
+            { pinyin: 'zhōng wén', translation: 'китайский язык' },
+            { pinyin: 'hěn', translation: 'очень' },
+            { pinyin: 'yǒu', translation: 'есть' },
+            { pinyin: 'yì si', translation: 'интересный' },
+            { pinyin: 'xiè xie', translation: 'спасибо' },
+            { pinyin: 'zài jiàn', translation: 'до свидания' },
+            { pinyin: 'míng tiān', translation: 'завтра' },
+            { pinyin: 'jiàn', translation: 'увидимся' },
           ],
         }],
       } });
@@ -240,7 +253,7 @@ test('production shows a pinyin-to-Russian glossary with the full Chinese senten
   const tooltip = overlay.children.at(-1);
 
   assert.equal(tooltip.children[1].children.map((child) => child.textContent).join(' '), 'Перевод Привет, мир');
-  assert.equal(tooltip.children[2].children.map((child) => child.textContent).join(' '), 'Слова nǐ hǎo — здравствуйте shì jiè — мир');
+  assert.equal(tooltip.children[2].children.map((child) => child.textContent).join(' '), 'Слова nǐ hǎo — здравствуйте shì jiè — мир wǒ — я men — множественное число xué — учиться zhōng wén — китайский язык hěn — очень yǒu — есть yì si — интересный xiè xie — спасибо zài jiàn — до свидания míng tiān — завтра jiàn — увидимся');
 });
 
 test('production turns prepared English phrases into toggled translation tooltips', async () => {
@@ -277,7 +290,7 @@ test('production turns prepared English phrases into toggled translation tooltip
   );
 
   phrase.dispatch('click', { stopPropagation() {} });
-  assert.equal(overlay.children.length, 1);
+  assert.equal(overlay.children.length, 2);
 });
 
 test('production does not queue a second translation while the same caption is in flight', async () => {

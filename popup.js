@@ -1,5 +1,5 @@
 import { parseSrt } from './caption-core.js';
-import { localSubtitleTrack, youtubeVideoId } from './local-subtitles-client.js';
+import { formatGenerationProgress, localSubtitleTrack, youtubeVideoId } from './local-subtitles-client.js';
 import { canonicalPageKey } from './page-context.js';
 import {
   choosePlayer,
@@ -47,6 +47,15 @@ function setYoutubeStatus(text, error = false) {
   const element = $('youtubeSubtitleStatus');
   element.textContent = text;
   element.classList.toggle('error', error);
+}
+
+function drawYoutubeProgress(payload) {
+  const progress = formatGenerationProgress(payload);
+  $('youtubeProgressBox').hidden = !progress.visible;
+  $('youtubeProgress').value = progress.value;
+  $('youtubeProgressValue').value = `${progress.value}%`;
+  $('youtubeProgressDetail').textContent = progress.detail;
+  if (progress.visible) setYoutubeStatus(progress.label);
 }
 
 function currentPlayer() {
@@ -142,9 +151,14 @@ function drawSync() {
 function drawSettings() {
   const settings = state.settings;
   drawTrackSelect($('originalTrack'), settings.secondTrackId, settings.secondTrackFallbackId);
-  $('originalBottom').value = settings.secondBottom;
   $('fontSize').value = settings.fontSize;
-  $('originalBottomValue').value = `${settings.secondBottom}%`;
+  $('subtitleColor').value = settings.subtitleColor;
+  $('subtitleBackground').checked = settings.subtitleBackground;
+  $('subtitleBackgroundColor').value = settings.subtitleBackgroundColor;
+  $('subtitleBackgroundOpacity').value = settings.subtitleBackgroundOpacity;
+  $('subtitleBackgroundOpacityValue').value = `${settings.subtitleBackgroundOpacity}%`;
+  $('subtitleBackgroundColor').disabled = !settings.subtitleBackground;
+  $('subtitleBackgroundOpacity').disabled = !settings.subtitleBackground;
   $('fontSizeValue').value = `${settings.fontSize}px`;
   $('aiKeyState').textContent = hasApiKey
     ? 'Ключ сохранён. Перевод по клику включён.'
@@ -178,8 +192,8 @@ async function selectPlayer(player) {
 
 function updateLocalSetting(key, value) {
   state = patchSettings(state, { [key]: value });
-  if (key === 'secondBottom') $('originalBottomValue').value = `${state.settings.secondBottom}%`;
   if (key === 'fontSize') $('fontSizeValue').value = `${state.settings.fontSize}px`;
+  if (key === 'subtitleBackgroundOpacity') $('subtitleBackgroundOpacityValue').value = `${state.settings.subtitleBackgroundOpacity}%`;
   return state.settings[key];
 }
 
@@ -250,6 +264,7 @@ async function pollGeneratedSubtitle() {
   try {
     const result = await request(MESSAGE.LOCAL_SUBTITLE_STATUS, { videoId: youtubeId });
     if (result.status === 'ready') {
+      drawYoutubeProgress(result);
       await installLocalSubtitle(result, selectGeneratedWhenReady);
       selectGeneratedWhenReady = false;
       setYoutubeStatus('Созданные субтитры готовы.');
@@ -259,14 +274,16 @@ async function pollGeneratedSubtitle() {
     }
     if (result.status === 'error') throw new Error(result.error || 'Не удалось создать субтитры');
     if (result.status === 'running') {
-      setYoutubeStatus('Создаю субтитры из аудио… Окно можно закрыть.');
+      drawYoutubeProgress(result);
       $('createYoutubeSubtitles').disabled = true;
       youtubePollTimer = setTimeout(() => pollGeneratedSubtitle(), 1500);
       return;
     }
     $('createYoutubeSubtitles').disabled = false;
+    drawYoutubeProgress(result);
   } catch (error) {
     $('createYoutubeSubtitles').disabled = false;
+    drawYoutubeProgress({ status: 'error' });
     setYoutubeStatus(error.message, true);
   }
 }
@@ -280,27 +297,29 @@ async function loadYoutubeSubtitles() {
     let generatedReady = false;
     let generatedRunning = false;
     if (generated.status === 'ready') {
+      drawYoutubeProgress(generated);
       await installLocalSubtitle(generated);
       $('createYoutubeSubtitles').textContent = 'Создать заново';
       generatedReady = true;
     }
     if (generated.status === 'running') {
+      drawYoutubeProgress(generated);
       $('createYoutubeSubtitles').disabled = true;
       generatedRunning = true;
-    }
-    const existing = await request(MESSAGE.LOCAL_SUBTITLE_EXISTING, { videoId: youtubeId });
-    const existingReady = await installLocalSubtitle(existing);
-    if (generatedRunning) {
-      setYoutubeStatus('Создаю субтитры из аудио… Окно можно закрыть.');
       youtubePollTimer = setTimeout(() => pollGeneratedSubtitle(), 1500);
-    } else if (generatedReady) {
+    }
+    const existingReady = generatedRunning
+      ? false
+      : await installLocalSubtitle(await request(MESSAGE.LOCAL_SUBTITLE_EXISTING, { videoId: youtubeId }));
+    if (!generatedRunning && generatedReady) {
       setYoutubeStatus('Созданные субтитры готовы. Готовая дорожка YouTube также сохранена.');
-    } else if (existingReady) {
+    } else if (!generatedRunning && existingReady) {
       setYoutubeStatus('Готовые китайские субтитры YouTube скачаны и подключены.');
-    } else {
+    } else if (!generatedRunning) {
       setYoutubeStatus('Готовых китайских субтитров нет. Можно создать свои.');
     }
   } catch (error) {
+    drawYoutubeProgress({ status: 'error' });
     setYoutubeStatus(`${error.message}. Запустите npm run local-server.`, true);
   }
 }
@@ -310,10 +329,11 @@ async function createYoutubeSubtitles() {
   const button = $('createYoutubeSubtitles');
   button.disabled = true;
   selectGeneratedWhenReady = true;
-  setYoutubeStatus('Запускаю скачивание аудио…');
+  drawYoutubeProgress({ status: 'running', stage: 'preparing', progress: 0 });
   try {
     const result = await request(MESSAGE.LOCAL_SUBTITLE_GENERATE, { videoId: youtubeId });
     if (result.status === 'ready') {
+      drawYoutubeProgress(result);
       await installLocalSubtitle(result, true);
       selectGeneratedWhenReady = false;
       setYoutubeStatus('Созданные субтитры подключены.');
@@ -322,11 +342,12 @@ async function createYoutubeSubtitles() {
       return;
     }
     if (result.status === 'error') throw new Error(result.error || 'Не удалось запустить создание');
-    setYoutubeStatus('Создаю субтитры из аудио… Окно можно закрыть.');
+    drawYoutubeProgress(result);
     youtubePollTimer = setTimeout(() => pollGeneratedSubtitle(), 1500);
   } catch (error) {
     selectGeneratedWhenReady = false;
     button.disabled = false;
+    drawYoutubeProgress({ status: 'error' });
     setYoutubeStatus(error.message, true);
   }
 }
@@ -428,9 +449,26 @@ $('player').addEventListener('change', () => {
   selectPlayer(player).catch((error) => setStatus(error.message, true));
 });
 $('originalTrack').addEventListener('change', () => persistSetting('secondTrackId', $('originalTrack').value));
-$('originalBottom').addEventListener('input', () => previewSetting('secondBottom', Number($('originalBottom').value)));
 $('fontSize').addEventListener('input', () => previewSetting('fontSize', Number($('fontSize').value)));
-for (const id of ['originalBottom', 'fontSize']) {
+$('subtitleColor').addEventListener('input', () => previewSetting('subtitleColor', $('subtitleColor').value));
+$('subtitleColor').addEventListener('change', () => {
+  settingsCommit.flush().catch((error) => setStatus(`Не удалось сохранить настройку: ${error.message}`, true));
+});
+$('subtitleBackground').addEventListener('change', () => {
+  persistSetting('subtitleBackground', $('subtitleBackground').checked);
+  drawSettings();
+});
+$('subtitleBackgroundColor').addEventListener('input', () => previewSetting('subtitleBackgroundColor', $('subtitleBackgroundColor').value));
+$('subtitleBackgroundColor').addEventListener('change', () => {
+  settingsCommit.flush().catch((error) => setStatus(`Не удалось сохранить настройку: ${error.message}`, true));
+});
+$('subtitleBackgroundOpacity').addEventListener('input', () => previewSetting('subtitleBackgroundOpacity', Number($('subtitleBackgroundOpacity').value)));
+for (const id of ['subtitleBackgroundOpacity']) {
+  $(id).addEventListener('change', () => {
+    settingsCommit.flush().catch((error) => setStatus(`Не удалось сохранить настройку: ${error.message}`, true));
+  });
+}
+for (const id of ['fontSize']) {
   $(id).addEventListener('change', () => {
     settingsCommit.flush().catch((error) => setStatus(`Не удалось сохранить настройку: ${error.message}`, true));
   });

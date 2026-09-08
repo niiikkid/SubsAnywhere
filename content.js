@@ -9,6 +9,7 @@
     CONTENT_SETTINGS: 'dualCaptions.content.settings',
     CONTENT_TRACKS: 'dualCaptions.content.tracks',
     TRACK_CACHE_BUILTIN: 'dualCaptions.track.cacheBuiltin',
+    CONTENT_POSITION_PATCH: 'dualCaptions.content.positionPatch',
 
     CONTENT_RESET: 'dualCaptions.content.reset',
   });
@@ -19,8 +20,10 @@
       externalTracks: [],
       root: null,
       second: null,
+      dragHandle: null,
       tooltip: null,
       tooltipItem: null,
+      drag: null,
       renderedCaptionKey: '',
       renderedCaptionItems: null,
     };
@@ -51,12 +54,58 @@
       const makeLayer = (name) => {
         const element = document.createElement('div');
         element.className = name;
-        element.style.cssText = 'position:absolute;left:4%;right:4%;color:#fff;text-align:center;font-family:Arial,sans-serif;font-weight:700;line-height:1.3;letter-spacing:.01em;white-space:pre-line;text-shadow:0 1px 3px rgba(0,0,0,.92);';
+        element.style.cssText = 'position:absolute;left:50%;max-width:92%;color:#fff;text-align:center;font-family:Arial,sans-serif;font-weight:700;line-height:1.3;letter-spacing:.01em;white-space:pre-line;text-shadow:0 1px 3px rgba(0,0,0,.92);transform:translateX(-50%);';
         root.append(element);
         return element;
       };
       state.second = makeLayer('subs-anywhere-original');
       state.second.style.pointerEvents = 'auto';
+      const dragHandle = document.createElement('button');
+      dragHandle.type = 'button';
+      dragHandle.textContent = '⠿';
+      dragHandle.title = 'Перетащить субтитры';
+      dragHandle.setAttribute('aria-label', 'Перетащить субтитры по видео');
+      dragHandle.style.cssText = 'position:absolute;z-index:2;display:grid;width:28px;height:28px;place-items:center;border:1px solid rgba(204,217,255,.85);border-radius:8px;background:rgba(19,24,38,.9);color:#eaf0ff;font:700 22px/1 Arial,sans-serif;box-shadow:0 3px 12px rgba(0,0,0,.5);cursor:grab;touch-action:none;pointer-events:auto;';
+      const moveDrag = (event) => {
+        if (!state.drag || event.pointerId !== state.drag.pointerId) return;
+        const position = runtime.moveCaptionPosition(state.drag, event.clientX, event.clientY, state.root.getBoundingClientRect());
+        if (!position) return;
+        Object.assign(state.settings, position);
+        applyCaptionPosition();
+        positionDragHandle();
+      };
+      const finishDrag = (event) => {
+        if (!state.drag || event.pointerId !== state.drag.pointerId) return;
+        moveDrag(event);
+        state.drag = null;
+        dragHandle.releasePointerCapture?.(event.pointerId);
+        dragHandle.style.cursor = 'grab';
+        render();
+        chrome.runtime.sendMessage({
+          type: MESSAGE.CONTENT_POSITION_PATCH,
+          secondLeft: state.settings.secondLeft,
+          secondBottom: state.settings.secondBottom,
+        }).catch(() => undefined);
+      };
+      dragHandle.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        state.drag = {
+          pointerId: event.pointerId,
+          pointerX: event.clientX,
+          pointerY: event.clientY,
+          secondLeft: state.settings.secondLeft,
+          secondBottom: state.settings.secondBottom,
+        };
+        dragHandle.style.cursor = 'grabbing';
+        dragHandle.setPointerCapture?.(event.pointerId);
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      dragHandle.addEventListener('pointermove', moveDrag);
+      dragHandle.addEventListener('pointerup', finishDrag);
+      dragHandle.addEventListener('pointercancel', finishDrag);
+      root.append(dragHandle);
+      state.dragHandle = dragHandle;
       document.documentElement.append(root);
       state.root = root;
     }
@@ -100,8 +149,7 @@
           pinyin: typeof term?.pinyin === 'string' ? term.pinyin.trim().slice(0, 120) : '',
           translation: typeof term?.translation === 'string' ? term.translation.trim().slice(0, 160) : '',
         }))
-        .filter((term) => term.pinyin && term.translation)
-        .slice(0, 12);
+        .filter((term) => term.pinyin && term.translation);
       const dictionary = document.createElement('div');
       dictionary.style.cssText = 'font-size:14px;line-height:1.35;';
       const dictionaryLabel = document.createElement('span');
@@ -154,7 +202,7 @@
         token.textContent = part;
         token.tabIndex = 0;
         token.setAttribute('role', 'button');
-        token.style.cssText = 'pointer-events:auto;cursor:pointer;border-radius:4px;padding:0 2px;color:#fff;text-decoration:underline;text-decoration-color:rgba(174,199,255,.9);text-decoration-style:dotted;text-decoration-thickness:2px;text-underline-offset:3px;transition:background .14s,color .14s;';
+        token.style.cssText = 'pointer-events:auto;cursor:pointer;border-radius:4px;padding:0 2px;color:inherit;text-decoration:underline;text-decoration-color:rgba(174,199,255,.9);text-decoration-style:dotted;text-decoration-thickness:2px;text-underline-offset:3px;transition:background .14s,color .14s;';
         makeCaptionFocusable(token);
         const loading = () => showTooltip({
           dictionary: 'Перевод готовится…',
@@ -338,7 +386,7 @@
         target.style.cssText = 'pointer-events:auto;';
         const characters = document.createElement('div');
         characters.textContent = descriptor.characters;
-        characters.style.cssText = 'margin-top:2px;color:#fff;font-size:.72em;font-weight:600;line-height:1.15;opacity:.68;pointer-events:none;';
+        characters.style.cssText = 'margin-top:2px;color:inherit;font-size:.72em;font-weight:600;line-height:1.15;opacity:.68;pointer-events:none;';
         state.second.append(target, characters);
       }
       if (!items || !items.length) {
@@ -355,7 +403,7 @@
         phrase.textContent = segment.text;
         phrase.tabIndex = 0;
         phrase.setAttribute('role', 'button');
-        phrase.style.cssText = 'pointer-events:auto;cursor:pointer;border-radius:4px;padding:0 2px;color:#fff;text-decoration:underline;text-decoration-color:rgba(174,199,255,.95);text-decoration-thickness:2px;text-underline-offset:3px;transition:background .14s,color .14s;';
+        phrase.style.cssText = 'pointer-events:auto;cursor:pointer;border-radius:4px;padding:0 2px;color:inherit;text-decoration:underline;text-decoration-color:rgba(174,199,255,.95);text-decoration-thickness:2px;text-underline-offset:3px;transition:background .14s,color .14s;';
         makeCaptionFocusable(phrase);
         phrase.addEventListener('click', (event) => { event.stopPropagation(); showTooltip(segment.item, phrase); });
         phrase.addEventListener('keydown', (event) => {
@@ -415,6 +463,33 @@
       state.root.style.width = `${rect.width}px`;
       state.root.style.height = `${rect.height}px`;
       state.root.style.display = state.active && rect.width && rect.height ? 'block' : 'none';
+      positionDragHandle();
+    }
+
+    function applyCaptionPosition() {
+      state.second.style.left = `${state.settings.secondLeft}%`;
+      state.second.style.bottom = `${state.settings.secondBottom}%`;
+    }
+
+    function positionDragHandle() {
+      if (!state.root || !state.second || !state.dragHandle) return;
+      const rootRect = state.root.getBoundingClientRect();
+      const captionRect = state.second.getBoundingClientRect();
+      const visible = Boolean(state.second.textContent);
+      state.dragHandle.style.display = visible ? 'grid' : 'none';
+      if (!visible || !rootRect.width || !rootRect.height) return;
+      const left = Math.min(rootRect.width - 28, Math.max(0, captionRect.right - rootRect.left - 7));
+      const top = Math.min(rootRect.height - 28, Math.max(0, captionRect.top - rootRect.top - 5));
+      state.dragHandle.style.left = `${left}px`;
+      state.dragHandle.style.top = `${top}px`;
+    }
+
+    function subtitleBackgroundStyle() {
+      const color = state.settings.subtitleBackgroundColor;
+      const red = Number.parseInt(color.slice(1, 3), 16);
+      const green = Number.parseInt(color.slice(3, 5), 16);
+      const blue = Number.parseInt(color.slice(5, 7), 16);
+      return `rgba(${red}, ${green}, ${blue}, ${state.settings.subtitleBackgroundOpacity / 100})`;
     }
 
     function render() {
@@ -436,12 +511,17 @@
         video,
       );
       cacheSelectedBuiltInTrack(state.settings.secondTrackId, state.settings.secondTrackFallbackId, video);
-      renderInteractiveCaption(secondText);
-      for (const text of futureCaptionTexts(state.settings.secondTrackId, state.settings.secondTrackFallbackId, video)) {
-        requestTranslation(translationDescriptor(text));
+      if (!state.drag) {
+        renderInteractiveCaption(secondText);
+        for (const text of futureCaptionTexts(state.settings.secondTrackId, state.settings.secondTrackFallbackId, video)) {
+          requestTranslation(translationDescriptor(text));
+        }
       }
-      state.second.style.bottom = `${state.settings.secondBottom}%`;
+      applyCaptionPosition();
       state.second.style.fontSize = `${state.settings.fontSize}px`;
+      state.second.style.color = state.settings.subtitleColor;
+      state.second.style.background = state.settings.subtitleBackground ? subtitleBackgroundStyle() : 'transparent';
+      state.second.style.padding = state.settings.subtitleBackground ? '4px 20px 4px 8px' : '0 12px 0 0';
       positionOverlay();
     }
 
