@@ -32,6 +32,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 43817
 MAX_SUBTITLE_BYTES = 5 * 1024 * 1024
 MAX_AUDIO_BYTES = 512 * 1024 * 1024
+CHINESE_SUBTITLE_LANGUAGES = ("zh-Hans", "zh-CN", "zh", "zh-Hant", "zh-TW")
 ERROR_MESSAGES = {
     "interrupted": "Generation interrupted by server restart; retry.",
     "start_failed": "Could not start generation; retry.",
@@ -338,7 +339,8 @@ class SubtitleService:
                 output_template = Path(directory) / f"youtube-{safe_id}-youtube.%(ext)s"
                 result = self.run_command(
                     self._youtube_command() + ["--skip-download", "--no-playlist", flag,
-                        "--sub-langs", "zh-Hans", "--sub-format", "srt", "--convert-subs", "srt",
+                        "--sub-langs", ",".join(CHINESE_SUBTITLE_LANGUAGES),
+                        "--sub-format", "srt", "--convert-subs", "srt",
                         "-o", str(output_template), f"https://www.youtube.com/watch?v={safe_id}"],
                     capture_output=True, text=True, timeout=180, check=False,
                 )
@@ -349,8 +351,9 @@ class SubtitleService:
                 candidate = next((path for path in Path(directory).glob("*.srt")
                                   if path.is_file() and path.stat().st_size), None)
                 if candidate:
-                    self._validate_srt(self._read_subtitle(candidate))
-                    contents = self._pinyinize_srt(candidate)
+                    contents = self._clean_srt(self._read_subtitle(candidate))
+                    self._validate_srt(contents)
+                    contents = self._pinyinize_srt(candidate, contents)
                     self._check_cancelled()
                     candidate.replace(paths.youtube_srt)
                     return self._subtitle_payload(paths.youtube_srt, "youtube", contents)
@@ -683,6 +686,15 @@ class SubtitleService:
         finally:
             if temporary_path is not None:
                 SubtitleService._remove_work_file(temporary_path)
+
+    @staticmethod
+    def _clean_srt(contents: str) -> str:
+        normalized = contents.replace("\r\n", "\n").replace("\r", "\n").strip().lstrip("\ufeff")
+        timestamp = r"[0-9]{2,}:[0-5][0-9]:[0-5][0-9][,.][0-9]{3}"
+        empty_cue = re.compile(r"[0-9]+\n" + timestamp + r"\s+-->\s+" + timestamp + r"[^\n]*\Z")
+        blocks = [block for block in re.split(r"\n\s*\n", normalized)
+                  if not empty_cue.fullmatch(block)]
+        return "\n\n".join(blocks).strip() + ("\n" if blocks else "")
 
     @staticmethod
     def _validate_srt(contents: str) -> None:

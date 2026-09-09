@@ -174,6 +174,31 @@ class SubtitleServiceTests(unittest.TestCase):
         self.assertNotIn("-x", calls[0] + calls[1])
         self.assertTrue(all(isinstance(command, list) for command in calls))
 
+    def test_existing_subtitles_accept_generic_chinese_language_code(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+
+            def run(command, **kwargs):
+                calls.append(command)
+                if "--write-subs" in command and "zh" in command[command.index("--sub-langs") + 1].split(","):
+                    pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", "zh.srt")).write_text(
+                        "1\n00:00:00,000 --> 00:00:01,000\n每天学习中文\n\n"
+                        "2\n00:00:01,000 --> 00:00:02,000\n\n"
+                        "3\n00:00:02,000 --> 00:00:03,000\n继续学习\n",
+                        encoding="utf-8",
+                    )
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            service = server.SubtitleService(root, run_command=run, pinyinize=lambda source: source)
+            result = service.existing("yDr4gAxZif0")
+
+        self.assertEqual(result["status"], "ready")
+        self.assertIn("每天学习中文", result["srt"])
+        self.assertIn("继续学习", result["srt"])
+        self.assertNotIn("00:00:01,000 --> 00:00:02,000", result["srt"])
+        self.assertEqual(len(calls), 1)
+
     def test_youtube_commands_read_cookies_from_chrome(self):
         calls = []
         with tempfile.TemporaryDirectory() as temporary:
