@@ -84,7 +84,7 @@ export class PlayerRegistry {
     this.#waiters.delete(tabId);
   }
 
-  waitForPlayers(tabId, timeoutMs = 1500, quietMs = 75) {
+  waitForPlayers(tabId, timeoutMs = 5000, quietMs = 300) {
     return new Promise((resolve) => {
       const waiters = this.#waiters.get(tabId) ?? new Set();
       let settled = false;
@@ -132,8 +132,8 @@ export class BackgroundController {
     this.#credentialStore = options.credentialStore;
     this.#deepSeek = options.deepSeek;
     this.#localSubtitles = options.localSubtitles;
-    this.#discoveryTimeoutMs = options.discoveryTimeoutMs ?? 1500;
-    this.#discoveryQuietMs = options.discoveryQuietMs ?? 75;
+    this.#discoveryTimeoutMs = options.discoveryTimeoutMs ?? 5000;
+    this.#discoveryQuietMs = options.discoveryQuietMs ?? 300;
   }
 
   players(tabId) {
@@ -376,7 +376,7 @@ export class BackgroundController {
     if (!playerData || typeof playerData !== 'object' || Array.isArray(playerData)
       || !Number.isInteger(playerData.videoIndex) || playerData.videoIndex < 0 || playerData.videoIndex > 10_000
       || !Array.isArray(playerData.tracks) || playerData.tracks.length > 128
-      || !sender.url || playerData.frameUrl !== sender.url) throw new Error('Некорректный отчёт плеера');
+      || !sender.url) throw new Error('Некорректный отчёт плеера');
     const report = {
       frameUrl: boundedString(sender.url, 8192),
       title: boundedString(playerData.title, 512),

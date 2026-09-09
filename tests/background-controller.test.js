@@ -220,6 +220,18 @@ test('PlayerRegistry discovery collects late reports from multiple iframe player
   assert.deepEqual(found.map((player) => player.title), ['First', 'Second']);
 });
 
+test('default discovery waits for a player created after a slow iframe startup', async () => {
+  const registry = new PlayerRegistry();
+  const waiting = registry.waitForPlayers(7);
+  setTimeout(() => {
+    registry.report(7, 12, { title: 'Delayed', frameUrl: 'https://slow.example/embed', videoIndex: 0, tracks: [] });
+  }, 1600);
+
+  const players = await waiting;
+
+  assert.equal(players[0]?.title, 'Delayed');
+});
+
 test('discover re-injects both runtime and bootstrap and returns the reported player', async () => {
   const chrome = makeChrome();
   const store = new FakeStore();
@@ -237,6 +249,27 @@ test('discover re-injects both runtime and bootstrap and returns the reported pl
 
   assert.equal(result.ok, true);
   assert.equal(result.data.players[0].title, 'Recovered');
+});
+
+test('player report trusts Chrome sender URL after an iframe redirect', async () => {
+  const chrome = makeChrome();
+  const controller = new BackgroundController(chrome, new FakeStore());
+  const result = await controller.handle({
+    type: MESSAGE.PLAYER_REPORT,
+    player: {
+      title: 'Redirected player',
+      frameUrl: 'https://redirector.example/loading',
+      videoIndex: 0,
+      tracks: [],
+    },
+  }, {
+    tab: { id: 4, url: 'https://site.example/movie' },
+    frameId: 9,
+    url: 'https://player.example/embed/movie',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.player.frameUrl, 'https://player.example/embed/movie');
 });
 
 test('a selected player report restores persisted state after service-worker restart', async () => {
@@ -586,11 +619,10 @@ test('only the selected current frame document can spend a translation request',
   assert.equal(calls, 1);
 });
 
-test('player reports reject spoofed frame identity and excessive track metadata before registration', async () => {
+test('player reports reject invalid sender identity and excessive track metadata before registration', async () => {
   const controller = new BackgroundController(makeChrome(), new FakeStore());
   const player = { title: 'Player', frameUrl: 'https://player.example/embed', videoIndex: 0, tracks: [] };
   for (const [data, sender] of [
-    [{ ...player, frameUrl: 'https://private.example/' }, { url: player.frameUrl }],
     [{ ...player, tracks: Array.from({ length: 129 }, () => ({ id: 'en' })) }, {}],
     [{ ...player, title: 'x'.repeat(100_000) }, {}],
     [player, { frameId: -1 }],
