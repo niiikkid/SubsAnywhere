@@ -139,8 +139,12 @@ export class DeepSeekClient {
     const { apiKey } = credential;
     if (!apiKey) throw new Error('Сначала сохраните API-ключ DeepSeek');
     const normalized = normalizeAiOptions(credential);
+    const signal = AbortSignal.timeout(25_000);
     const response = await this.#fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
+      signal,
+      redirect: 'error',
+      credentials: 'omit',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
@@ -156,12 +160,24 @@ export class DeepSeekClient {
         max_tokens: maxTokens,
         stream: false,
       }),
+    }).catch(() => {
+      throw new Error(signal.aborted
+        ? 'DeepSeek не ответил вовремя. Попробуйте ещё раз'
+        : 'Не удалось связаться с DeepSeek. Проверьте соединение и повторите');
     });
     if (!response.ok) {
-      const body = (await response.text()).slice(0, 500);
-      throw new Error(`DeepSeek: ошибка ${response.status}${body ? ` — ${body}` : ''}`);
+      await response.body?.cancel();
+      const hints = {
+        401: 'Проверьте API-ключ в настройках расширения',
+        402: 'Недостаточно средств на балансе DeepSeek',
+        403: 'Доступ к DeepSeek запрещён. Проверьте ключ и доступность сервиса',
+        429: 'Достигнут лимит DeepSeek. Попробуйте позже',
+      };
+      throw new Error(hints[response.status] || `DeepSeek временно недоступен (${response.status}). Попробуйте позже`);
     }
-    const payload = await response.json();
+    const payload = await response.json().catch(() => {
+      throw new Error(signal.aborted ? 'DeepSeek не ответил вовремя. Попробуйте ещё раз' : 'Не удалось прочитать ответ DeepSeek. Повторите запрос');
+    });
     const content = payload?.choices?.[0]?.message?.content;
     if (!content) throw new Error('DeepSeek не вернул результат');
     return parseJsonContent(content);

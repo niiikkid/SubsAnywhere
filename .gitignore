@@ -4,3 +4,12 @@ coverage/
 *.zip
 __pycache__/
 *.py[cod]
+.venv/
+.env
+.env.*
+!.env.example
+cookies*.txt
+*.cookies.txt
+models/
+data/
+artifacts/

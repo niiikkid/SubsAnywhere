@@ -15,7 +15,20 @@
         <h1>SubsAnywhere</h1>
       </div>
     </header>
-    <p id="status" class="status">Нажмите «Подключить к плееру» на странице с видео.</p>
+    <nav class="section-tabs" role="tablist" aria-label="Разделы расширения">
+      <button id="playerTab" type="button" role="tab" aria-controls="playerPanel" aria-selected="true">Плеер</button>
+      <button id="appearanceTab" type="button" role="tab" aria-controls="appearancePanel" aria-selected="false" tabindex="-1">Внешний вид</button>
+      <button id="settingsTab" type="button" role="tab" aria-controls="settingsPanel" aria-selected="false" tabindex="-1">Настройки</button>
+    </nav>
+    <p id="pageScope" class="hint scope-note">Внешний вид и SRT сохраняются для этой страницы. DeepSeek — для всех сайтов.</p>
+    <div class="save-feedback">
+      <p id="saveStatus" role="status" aria-live="polite">Изменения сохраняются автоматически</p>
+      <button id="retrySave" type="button" hidden>Повторить сохранение</button>
+      <button id="retrySettings" type="button" hidden>Загрузить настройки снова</button>
+    </div>
+    <section id="controls">
+    <section id="playerPanel" role="tabpanel" aria-labelledby="playerTab">
+    <p id="status" class="status" role="status" aria-live="polite">Нажмите «Подключить к плееру» на странице с видео.</p>
 
     <button id="activate" class="primary">Подключить к плееру</button>
     <button id="restartSearch" type="button" class="restart-search" hidden>Перезапустить поиск субтитров</button>
@@ -25,19 +38,19 @@
         <h2>Субтитры YouTube</h2>
         <span>локальный сервер</span>
       </div>
-      <p id="youtubeSubtitleStatus" class="hint">Проверяю готовые китайские субтитры…</p>
+      <p id="youtubeSubtitleStatus" class="hint" role="status" aria-live="polite">Проверяю готовые китайские субтитры…</p>
       <div id="youtubeProgressBox" class="youtube-progress" hidden>
         <div class="progress-row">
-          <progress id="youtubeProgress" max="100" value="0"></progress>
+          <progress id="youtubeProgress" max="100" value="0" aria-label="Создание субтитров"></progress>
           <output id="youtubeProgressValue">0%</output>
         </div>
         <p id="youtubeProgressDetail" class="hint">0%</p>
       </div>
       <button id="createYoutubeSubtitles" type="button">Создать свои субтитры</button>
+      <button id="retryYoutubeSubtitles" type="button" hidden>Проверить сервер и продолжить</button>
       <p class="hint">Запускается только вручную: сервер скачает аудио и распознает китайскую речь локально.</p>
     </section>
 
-    <section id="controls" hidden>
       <section class="control-card player-card">
         <div class="section-heading">
           <h2>Источник</h2>
@@ -52,11 +65,17 @@
         </label>
       </section>
 
-      <section class="control-card appearance-card">
+    </section>
+      <section id="appearancePanel" role="tabpanel" aria-labelledby="appearanceTab" class="control-card appearance-card" hidden>
         <div class="section-heading">
           <h2>Внешний вид</h2>
-          <span>на видео</span>
+          <span>для этой страницы</span>
         </div>
+        <div class="preview-scene" aria-label="Пример внешнего вида субтитров">
+          <span class="preview-label">ПРЕДПРОСМОТР</span>
+          <span id="subtitlePreview">One line at a time.</span>
+        </div>
+        <p class="hint">Плеер не нужен для настройки. На видео размер зависит от масштаба кадра.</p>
         <p class="hint">Перетаскивайте субтитры по видео за заметный значок ⠿.</p>
         <label>Размер текста <output id="fontSizeValue"></output>
           <input id="fontSize" type="range" min="12" max="48" value="22">
@@ -74,16 +93,11 @@
         </label>
         <label class="toggle-control">
           <input id="subtitleBackground" type="checkbox">
-          Непрозрачный фон
+          Показывать фон
         </label>
       </section>
 
-      <details class="advanced-settings">
-        <summary>
-          <span>Дополнительно</span>
-          <small>DeepSeek и свой SRT</small>
-        </summary>
-        <div class="advanced-content">
+      <section id="settingsPanel" role="tabpanel" aria-labelledby="settingsTab" hidden>
           <section class="control-card ai-settings">
             <div class="section-heading">
               <h2>Перевод DeepSeek</h2>
@@ -142,8 +156,7 @@
             </label>
             <p class="hint"><b>Минус</b> — показать раньше. <b>Плюс</b> — позже.</p>
           </section>
-        </div>
-      </details>
+      </section>
     </section>
   </main>
   <script type="module" src="popup.js"></script>

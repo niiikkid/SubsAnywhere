@@ -28,7 +28,10 @@ def short_time(milliseconds: int) -> str:
 
 
 def cached_model_paths(home: Path | None = None) -> tuple[Path, Path]:
-    cache = (home or Path.home()) / ".cache/modelscope/hub/models/iic"
+    configured = os.environ.get("SUBSANYWHERE_MODELS_DIR")
+    cache = Path(configured).expanduser() if configured and home is None else (
+        (home or Path.home()) / ".cache/modelscope/hub/models/iic"
+    )
     model = cache / "SenseVoiceSmall"
     vad = cache / "speech_fsmn_vad_zh-cn-16k-common-pytorch"
     if not model.is_dir() or not vad.is_dir():

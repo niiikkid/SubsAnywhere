@@ -1,0 +1,52 @@
+name: subsanywhere
+
+services:
+  subtitles:
+    image: subsanywhere-server:0.9.0
+    build:
+      context: .
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SUBSANYWHERE_HTTP_PORT:-43817}:43817"
+    environment:
+      SUBSANYWHERE_COOKIES_BROWSER: ""
+      SUBSANYWHERE_COOKIES_FILE: ""
+      SUBSANYWHERE_MAX_JOBS: "1"
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+    volumes:
+      - subtitles:/data
+      - models:/models:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1g,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 8g
+    cpus: 4
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  model-import:
+    image: subsanywhere-server:0.9.0
+    profiles: [tools]
+    init: true
+    network_mode: none
+    read_only: true
+    volumes:
+      - models:/models
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: [python, import_models.py, /source, /models]
+
+volumes:
+  subtitles:
+  models:

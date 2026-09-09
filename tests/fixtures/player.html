@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>SubsAnywhere local player fixture</title>
+<style>html,body{margin:0;background:#111827;color:white}video{display:block;width:640px;height:360px}</style>
+<video muted autoplay playsinline></video>
+<script>
+const canvas = document.createElement('canvas');
+canvas.width = 640;
+canvas.height = 360;
+const paint = canvas.getContext('2d');
+paint.fillStyle = '#172033';
+paint.fillRect(0, 0, 640, 360);
+paint.fillStyle = '#cad3e5';
+paint.font = '20px Arial';
+paint.fillText('Local test video — no network media', 140, 165);
+const video = document.querySelector('video');
+video.srcObject = canvas.captureStream(1);
+const track = video.addTextTrack('subtitles', 'English', 'en');
+track.addCue(new VTTCue(0, 600, 'Hello from a local video.'));
+track.mode = 'showing';
+video.play();
+</script>
+</html>

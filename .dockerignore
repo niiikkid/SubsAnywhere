@@ -1,0 +1,7 @@
+# Allow-list: never send browser data, credentials or models to a build.
+**
+!Dockerfile
+!local-server/
+!local-server/*.py
+!local-server/pyproject.toml
+!local-server/uv.lock

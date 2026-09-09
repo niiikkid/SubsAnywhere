@@ -2,8 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   choosePlayer,
-  createDebouncedPatchCommit,
-  createSerialTaskQueue,
+
   decodeSubtitleBuffer,
   loadPopupSnapshot,
 } from '../popup-model.js';
@@ -44,47 +43,6 @@ test('loadPopupSnapshot reads state and players without issuing any write messag
   assert.equal(snapshot.players.length, 2);
   assert.equal(snapshot.state.settings.secondTrackId, '');
   assert.equal(snapshot.hasApiKey, true);
-});
-
-test('serial popup task queue preserves every rapid offset adjustment in order', async () => {
-  const enqueue = createSerialTaskQueue();
-  let offset = 0;
-  const operations = [1, 1, 1, -0.1].map((delta, index) => enqueue(async () => {
-    await new Promise((resolve) => setTimeout(resolve, index === 0 ? 10 : 0));
-    offset += delta;
-  }));
-
-  await Promise.all(operations);
-
-  assert.equal(offset, 2.9);
-});
-
-test('debounced popup settings merge rapid slider input into one durable write', async () => {
-  const commits = [];
-  const writer = createDebouncedPatchCommit(async (patch) => commits.push(patch), 10);
-
-  writer.schedule({ secondBottom: 10 });
-  writer.schedule({ secondBottom: 20 });
-  writer.schedule({ fontSize: 30 });
-  await new Promise((resolve) => setTimeout(resolve, 20));
-
-  assert.deepEqual(commits, [{ secondBottom: 20, fontSize: 30 }]);
-});
-
-test('debounced popup flush waits for an already running durable write', async () => {
-  let finishCommit;
-  const blocker = new Promise((resolve) => { finishCommit = resolve; });
-  const writer = createDebouncedPatchCommit(() => blocker, 1);
-  writer.schedule({ fontSize: 30 });
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  let flushed = false;
-  const waiting = writer.flush().then(() => { flushed = true; });
-  await Promise.resolve();
-  assert.equal(flushed, false);
-
-  finishCommit();
-  await waiting;
-  assert.equal(flushed, true);
 });
 
 test('subtitle decoder prefers UTF-8 and falls back to Windows-1251', () => {

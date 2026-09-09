@@ -2,6 +2,38 @@ import { canonicalPageKey } from './page-context.js';
 import { MESSAGE, failure, ok } from './protocol.js';
 
 const CONTENT_SCRIPT_ID = 'dual-captions-player-discovery-v1';
+const CONTENT_MESSAGES = new Set([
+  MESSAGE.PLAYER_REPORT, MESSAGE.CONTENT_POSITION_PATCH, MESSAGE.TRACK_CACHE_BUILTIN, MESSAGE.CAPTION_TRANSLATE,
+]);
+const SERIALIZED_MESSAGES = new Set([
+  MESSAGE.PLAYER_REPORT, MESSAGE.PLAYER_SELECT, MESSAGE.STATE_PATCH, MESSAGE.CONTENT_POSITION_PATCH,
+  MESSAGE.TRACK_ADD, MESSAGE.TRACK_UPSERT_LOCAL, MESSAGE.TRACK_CACHE_BUILTIN,
+  MESSAGE.TRACK_REMOVE, MESSAGE.TRACK_OFFSET, MESSAGE.TRACK_TIMING,
+]);
+
+function validateContentSize(message) {
+  let remaining = message.type === MESSAGE.TRACK_CACHE_BUILTIN ? 6 * 1024 * 1024 : 64 * 1024;
+  let entries = message.type === MESSAGE.TRACK_CACHE_BUILTIN ? 40_000 : 2_000;
+  const visit = (value, depth) => {
+    if (--entries < 0 || depth > 8) throw new Error('Сообщение плеера слишком большое');
+    if (typeof value === 'string') remaining -= value.length;
+    else if (value && typeof value === 'object') {
+      for (const key in value) {
+        if (!Object.hasOwn(value, key)) continue;
+        remaining -= key.length;
+        visit(value[key], depth + 1);
+      }
+    }
+    if (remaining < 0) throw new Error('Сообщение плеера слишком большое');
+  };
+  visit(message, 0);
+}
+
+function boundedString(value, limit, fallback = '') {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'string' || value.length > limit) throw new Error('Некорректные данные плеера');
+  return value;
+}
 
 export function stablePlayerKey(frameUrl, videoIndex = 0) {
   try {
@@ -90,6 +122,8 @@ export class BackgroundController {
   #discoveryQuietMs;
   #contentRegistration;
   #tabPageKeys = new Map();
+  #tabOperations = new Map();
+  #playerRecoveries = new Map();
 
   constructor(chromeApi, store, options = {}) {
     this.#chrome = chromeApi;
@@ -106,6 +140,10 @@ export class BackgroundController {
     return this.#registry.list(tabId);
   }
 
+  initialize() {
+    return this.#ensureContentRegistration(true);
+  }
+
   removeTab(tabId) {
     this.#registry.removeTab(tabId);
     this.#tabPageKeys.delete(tabId);
@@ -113,17 +151,40 @@ export class BackgroundController {
 
   async handleTabNavigation(tabId, url) {
     if (!Number.isInteger(tabId) || !url) return;
-    await this.#adoptPage(tabId, canonicalPageKey(url));
+    await this.#enqueue(tabId, () => this.#adoptPage(tabId, canonicalPageKey(url)));
   }
 
   async handle(message, sender = {}) {
     try {
+      const fromContent = this.#authorize(message, sender);
+      // Extension pages may themselves occupy tabs; that is not a content sender.
+      if (!fromContent) sender = { id: sender.id, url: sender.url };
+      // Reports must be able to enter the tab queue while recovery awaits their acknowledgement.
+      if (fromContent && message.type !== MESSAGE.PLAYER_REPORT) await this.#recoverSelectedSender(message, sender);
+      const operation = () => this.#dispatch(message, sender);
+      return await (SERIALIZED_MESSAGES.has(message.type)
+        ? this.#enqueue(sender.tab?.id ?? message.tabId, operation) : operation());
+    } catch (error) {
+      return failure(error);
+    }
+  }
+
+  #enqueue(tabId, operation) {
+    const pending = (this.#tabOperations.get(tabId) ?? Promise.resolve()).then(operation);
+    const settled = pending.catch(() => undefined).finally(() => {
+      if (this.#tabOperations.get(tabId) === settled) this.#tabOperations.delete(tabId);
+    });
+    this.#tabOperations.set(tabId, settled);
+    return pending;
+  }
+
+  async #dispatch(message, sender) {
       switch (message?.type) {
         case MESSAGE.PLAYER_REPORT:
           if (!sender.tab?.id && sender.tab?.id !== 0) throw new Error('Player report has no tab');
           return ok(await this.#reportPlayer(sender.tab.id, sender.frameId ?? 0, message.player, message, sender));
         case MESSAGE.PLAYER_GET:
-          return ok({ players: await this.#getPlayers(message.tabId, this.#pageKey(message, sender)) });
+          return ok({ players: await this.#getPlayers(message.tabId, this.#pageKey(message, sender), message.cachedOnly === true) });
         case MESSAGE.PLAYER_DISCOVER:
           return ok({ players: await this.#discover(message.tabId, this.#pageKey(message, sender)) });
         case MESSAGE.STATE_GET:
@@ -167,6 +228,7 @@ export class BackgroundController {
           if (!this.#credentialStore) throw new Error('DeepSeek пока недоступен');
           return ok(await this.#credentialStore.patch(message));
         case MESSAGE.CAPTION_TRANSLATE:
+          await this.#enqueue(sender.tab.id, () => this.#selectedSender(message, sender));
           return ok(await this.#translateCaption(message));
         case MESSAGE.LOCAL_SUBTITLE_EXISTING:
           if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');
@@ -180,15 +242,42 @@ export class BackgroundController {
         default:
           throw new Error(`Unknown message: ${message?.type ?? 'empty'}`);
       }
-    } catch (error) {
-      return failure(error);
+  }
+
+  #authorize(message, sender) {
+    if (!this.#chrome.runtime?.id || sender?.id !== this.#chrome.runtime.id) {
+      throw new Error('Недоверенный отправитель');
     }
+    if (sender.url === this.#chrome.runtime.getURL('popup.html')) {
+      if (CONTENT_MESSAGES.has(message?.type)) throw new Error('Сообщение доступно только плееру');
+      return false;
+    }
+    if (sender.tab) {
+      if (!Number.isInteger(sender.tab.id) || sender.tab.id < 0
+        || !Number.isInteger(sender.frameId) || sender.frameId < 0
+        || (sender.documentLifecycle && sender.documentLifecycle !== 'active')
+        || !CONTENT_MESSAGES.has(message?.type)
+        || Object.hasOwn(message, 'tabId') || Object.hasOwn(message, 'pageKey')) {
+        throw new Error('Сообщение недоступно плееру');
+      }
+      validateContentSize(message);
+      return true;
+    }
+    throw new Error('Сообщение доступно только окну расширения');
   }
 
   #pageKey(message, sender) {
     const tabId = message?.tabId ?? sender?.tab?.id;
     const raw = message?.pageKey || sender?.tab?.url || this.#tabPageKeys.get(tabId) || `https://local.invalid/tab/${tabId ?? 'unknown'}`;
     return canonicalPageKey(raw);
+  }
+
+  async #contentPageKey(message, sender) {
+    const currentTab = this.#chrome.tabs.get ? await this.#chrome.tabs.get(sender.tab.id) : sender.tab;
+    if (currentTab.url && sender.tab.url && canonicalPageKey(currentTab.url) !== canonicalPageKey(sender.tab.url)) {
+      throw new Error('Страница плеера изменилась');
+    }
+    return currentTab.url ? canonicalPageKey(currentTab.url) : this.#pageKey(message, sender);
   }
 
   async #adoptPage(tabId, pageKey) {
@@ -204,42 +293,77 @@ export class BackgroundController {
 
   async #discover(tabId, pageKey) {
     if (!Number.isInteger(tabId)) throw new Error('Invalid tab id');
-    await this.#adoptPage(tabId, pageKey);
+    await this.#enqueue(tabId, () => this.#adoptPage(tabId, pageKey));
     await this.#ensureContentRegistration();
+    const previousPlayers = this.players(tabId);
     this.#registry.clear(tabId);
     await this.#chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       files: ['content-runtime.js', 'content.js'],
     });
-    return this.#registry.waitForPlayers(tabId, this.#discoveryTimeoutMs, this.#discoveryQuietMs);
+    await this.#registry.waitForPlayers(tabId, this.#discoveryTimeoutMs, this.#discoveryQuietMs);
+    return this.#enqueue(tabId, async () => {
+      if (this.#tabPageKeys.get(tabId) !== pageKey) return this.players(tabId);
+      const state = await this.#store.get(pageKey);
+      const replacement = !this.#selectedPlayer(tabId, state)
+        && this.players(tabId).find((player) => player.key === state.settings.selectedPlayerKey);
+      if (replacement) {
+        // A frame ID may change on recreation, but only fall back after discovery settles.
+        const previous = previousPlayers.find((player) => player.frameId === state.settings.selectedPlayerFrameId);
+        const next = await this.#store.patchSettingsWithPlayerFallbacks(pageKey,
+          { selectedPlayerFrameId: replacement.frameId }, [replacement]);
+        if (previous) {
+          try {
+            await this.#chrome.tabs.sendMessage(tabId, { type: MESSAGE.CONTENT_RESET }, {
+              frameId: previous.frameId, ...(previous.documentId ? { documentId: previous.documentId } : {}),
+            });
+          } catch { /* The replaced document may already be gone. */ }
+        }
+        await this.#send(tabId, replacement.frameId, {
+          type: MESSAGE.CONTENT_FULL_STATE, settings: next.settings, externalTracks: next.externalTracks,
+        });
+      }
+      return this.players(tabId);
+    });
   }
 
-  async #ensureContentRegistration() {
+  async #ensureContentRegistration(onlyExisting = false) {
     const scripting = this.#chrome.scripting;
     if (!scripting.getRegisteredContentScripts || !scripting.registerContentScripts) return;
-    if (!this.#contentRegistration) {
-      this.#contentRegistration = (async () => {
+    const operation = (this.#contentRegistration ?? Promise.resolve()).catch(() => undefined).then(async () => {
         const existing = await scripting.getRegisteredContentScripts({ ids: [CONTENT_SCRIPT_ID] });
-        if (existing.length) return;
-        await scripting.registerContentScripts([{
+        if (onlyExisting && !existing.length) return;
+        const permissions = await this.#chrome.permissions.getAll();
+        const required = new Set(this.#chrome.runtime.getManifest().host_permissions ?? []);
+        const matches = [...new Set((permissions.origins ?? []).filter((origin) => !required.has(origin))
+          .flatMap((origin) => origin === '<all_urls>' ? ['http://*/*', 'https://*/*'] : [origin])
+          .filter((origin) => /^(https?|\*):\/\//.test(origin)))].sort();
+        if (!matches.length) {
+          if (existing.length) await scripting.unregisterContentScripts({ ids: [CONTENT_SCRIPT_ID] });
+          return;
+        }
+        const desired = {
           id: CONTENT_SCRIPT_ID,
-          matches: ['http://*/*', 'https://*/*'],
+          matches,
           js: ['content-runtime.js', 'content.js'],
           allFrames: true,
           matchOriginAsFallback: true,
           persistAcrossSessions: true,
           runAt: 'document_idle',
-        }]);
-      })().catch((error) => {
-        this.#contentRegistration = null;
-        throw error;
-      });
-    }
-    await this.#contentRegistration;
+        };
+        if (!existing.length) await scripting.registerContentScripts([desired]);
+        else if (Object.entries(desired).some(([key, value]) => JSON.stringify(existing[0][key]) !== JSON.stringify(value))) {
+          await scripting.updateContentScripts([desired]);
+        }
+    });
+    this.#contentRegistration = operation;
+    await operation;
   }
 
-  async #getPlayers(tabId, pageKey) {
-    await this.#adoptPage(tabId, pageKey);
+  async #getPlayers(tabId, pageKey, cachedOnly = false) {
+    if (!Number.isInteger(tabId) || tabId < 0) throw new Error('Invalid tab id');
+    if (cachedOnly) return this.#tabPageKeys.get(tabId) === pageKey ? this.players(tabId) : [];
+    await this.#enqueue(tabId, () => this.#adoptPage(tabId, pageKey));
     const cached = this.players(tabId);
     try {
       return await this.#discover(tabId, pageKey);
@@ -249,12 +373,31 @@ export class BackgroundController {
   }
 
   async #reportPlayer(tabId, frameId, playerData, message, sender) {
-    const pageKey = this.#pageKey(message, sender);
+    if (!playerData || typeof playerData !== 'object' || Array.isArray(playerData)
+      || !Number.isInteger(playerData.videoIndex) || playerData.videoIndex < 0 || playerData.videoIndex > 10_000
+      || !Array.isArray(playerData.tracks) || playerData.tracks.length > 128
+      || !sender.url || playerData.frameUrl !== sender.url) throw new Error('Некорректный отчёт плеера');
+    const report = {
+      frameUrl: boundedString(sender.url, 8192),
+      title: boundedString(playerData.title, 512),
+      sourceName: boundedString(playerData.sourceName, 240),
+      duration: Number.isFinite(playerData.duration) && playerData.duration >= 0 ? playerData.duration : null,
+      videoIndex: playerData.videoIndex,
+      tracks: playerData.tracks.map((track) => ({
+        id: boundedString(track?.id, 4096),
+        legacyId: boundedString(track?.legacyId, 64),
+        fallbackId: boundedString(track?.fallbackId, 64),
+        label: boundedString(track?.label, 512),
+        language: boundedString(track?.language, 64),
+      })),
+      documentId: sender.documentId,
+    };
+    const pageKey = await this.#contentPageKey(message, sender);
     await this.#adoptPage(tabId, pageKey);
     const previousPlayer = this.players(tabId).find((item) => item.frameId === frameId);
     const player = this.#registry.report(tabId, frameId, {
-      ...playerData,
-      tabTitle: sender.tab?.title || playerData?.tabTitle || '',
+      ...report,
+      tabTitle: String(sender.tab?.title || '').slice(0, 512),
     });
     let state = await this.#store.reconcileBuiltInTrackFallbacks(pageKey, player.key, player.tracks);
     state = await this.#store.adoptSelectedPlayerReplacement(pageKey, {
@@ -262,7 +405,7 @@ export class BackgroundController {
       frameId,
       player,
     });
-    const selected = player.key === state.settings.selectedPlayerKey;
+    const selected = this.#selectedPlayer(tabId, state)?.frameId === frameId;
     const restored = selected
       ? await this.#send(tabId, frameId, {
         type: MESSAGE.CONTENT_FULL_STATE,
@@ -277,11 +420,18 @@ export class BackgroundController {
     await this.#adoptPage(message.tabId, pageKey);
     const player = this.players(message.tabId).find((item) => item.frameId === message.frameId && item.key === message.playerKey);
     if (!player) throw new Error('Выбранный плеер больше недоступен');
+    const previous = await this.#store.get(pageKey);
     const state = await this.#store.patchSettingsWithPlayerFallbacks(
       pageKey,
       { selectedPlayerKey: player.key, selectedPlayerFrameId: player.frameId },
       [player],
     );
+    const previousFrame = previous.settings.selectedPlayerFrameId >= 0
+      ? previous.settings.selectedPlayerFrameId
+      : this.players(message.tabId).find((item) => item.key === previous.settings.selectedPlayerKey)?.frameId;
+    if (Number.isInteger(previousFrame) && previousFrame !== player.frameId) {
+      await this.#send(message.tabId, previousFrame, { type: MESSAGE.CONTENT_RESET });
+    }
     const delivered = await this.#send(message.tabId, player.frameId, {
       type: MESSAGE.CONTENT_FULL_STATE,
       settings: state.settings,
@@ -307,14 +457,7 @@ export class BackgroundController {
   async #updateCaptionPosition(message, sender) {
     const tabId = sender?.tab?.id;
     const frameId = sender?.frameId ?? 0;
-    if (!Number.isInteger(tabId)) throw new Error('Caption position has no tab');
-    const pageKey = this.#pageKey(message, sender);
-    await this.#adoptPage(tabId, pageKey);
-    const current = await this.#store.get(pageKey);
-    const player = this.players(tabId).find((item) => (
-      item.key === current.settings.selectedPlayerKey && item.frameId === frameId
-    ));
-    if (!player) throw new Error('Caption position came from an unselected player');
+    const { player, pageKey } = await this.#selectedSender(message, sender);
     const state = await this.#store.patchSettingsWithPlayerFallbacks(
       pageKey,
       { secondLeft: message.secondLeft, secondBottom: message.secondBottom },
@@ -339,15 +482,10 @@ export class BackgroundController {
   }
 
   async #cacheBuiltInTrack(message, sender) {
-    const tabId = message.tabId ?? sender?.tab?.id;
-    const pageKey = this.#pageKey(message, sender);
-    if (!Number.isInteger(tabId)) throw new Error('Invalid tab id');
-    const state = await this.#store.get(pageKey);
-    const selected = this.players(tabId).find((player) => (
-      player.key === state.settings.selectedPlayerKey && player.frameId === sender?.frameId
-    ));
+    const tabId = sender.tab.id;
+    const { state, pageKey } = await this.#selectedSender(message, sender);
     const expectedSource = `${state.settings.selectedPlayerKey}\u0000${state.settings.secondTrackId}`;
-    if (!selected || !state.settings.secondTrackId || state.settings.secondTrackId.startsWith('external:') || message.sourceKey !== expectedSource) {
+    if (!state.settings.secondTrackId || state.settings.secondTrackId.startsWith('external:') || message.sourceKey !== expectedSource) {
       throw new Error('Built-in subtitle cache is stale');
     }
     return this.#mutateTracks(tabId, pageKey, () => (
@@ -356,12 +494,61 @@ export class BackgroundController {
   }
 
 
+  async #recoverSelectedSender(message, sender) {
+    const tabId = sender.tab.id;
+    const pageKey = await this.#contentPageKey(message, sender);
+    const knownPage = this.#tabPageKeys.get(tabId);
+    if (knownPage && knownPage !== pageKey) throw new Error('Страница плеера изменилась');
+    if (this.players(tabId).some((player) => player.frameId === sender.frameId)) return;
+    const state = await this.#store.get(pageKey);
+    if (!state.settings.selectedPlayerKey || !sender.documentId
+      || (state.settings.selectedPlayerFrameId >= 0 && state.settings.selectedPlayerFrameId !== sender.frameId)) {
+      throw new Error('Сообщение от невыбранного или устаревшего плеера');
+    }
+    const key = `${tabId}:${sender.frameId}`;
+    let recovery = this.#playerRecoveries.get(key);
+    if (!recovery) {
+      let timer;
+      recovery = Promise.race([
+        // Target the current frame, NOT the document claimed by the original action.
+        Promise.resolve().then(() => this.#chrome.tabs.sendMessage(tabId,
+          { type: MESSAGE.PLAYER_DISCOVER }, { frameId: sender.frameId })),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Плеер не ответил. Повторите действие')), this.#discoveryTimeoutMs);
+        }),
+      ]).finally(() => {
+        clearTimeout(timer);
+        if (this.#playerRecoveries.get(key) === recovery) this.#playerRecoveries.delete(key);
+      });
+      this.#playerRecoveries.set(key, recovery);
+    }
+    await recovery;
+    const player = this.players(tabId).find((item) => item.frameId === sender.frameId);
+    if (!player || player.key !== state.settings.selectedPlayerKey
+      || player.documentId !== sender.documentId || player.frameUrl !== sender.url) {
+      throw new Error('Сообщение от невыбранного или устаревшего плеера');
+    }
+  }
+
+  async #selectedSender(message, sender) {
+    const tabId = sender.tab.id;
+    const pageKey = await this.#contentPageKey(message, sender);
+    if (this.#tabPageKeys.get(tabId) !== pageKey) throw new Error('Страница плеера изменилась');
+    const state = await this.#store.get(pageKey);
+    const player = this.#selectedPlayer(tabId, state);
+    if (!player || player.frameId !== sender.frameId
+      || (player.documentId ? player.documentId !== sender.documentId : player.frameUrl !== sender.url)) {
+      throw new Error('Сообщение от невыбранного или устаревшего плеера');
+    }
+    return { state, player, pageKey };
+  }
+
   async #translateCaption(message) {
     if (!this.#deepSeek) throw new Error('DeepSeek пока недоступен');
-    const text = typeof message?.text === 'string' ? message.text.trim().slice(0, 500) : '';
+    const text = boundedString(message.text, 500).trim();
+    const displayText = boundedString(message.displayText, 500).trim();
     if (!text) return { items: [] };
     if (message?.language === 'zh') {
-      const displayText = typeof message?.displayText === 'string' ? message.displayText.trim().slice(0, 500) : '';
       if (!displayText) return { items: [] };
       const translation = await this.#deepSeek.translateChineseCaption(text, displayText);
       return {
@@ -380,13 +567,21 @@ export class BackgroundController {
     };
   }
 
+  #selectedPlayer(tabId, state) {
+    const matches = this.players(tabId).filter((item) => item.key === state.settings.selectedPlayerKey);
+    return state.settings.selectedPlayerFrameId >= 0
+      ? matches.find((item) => item.frameId === state.settings.selectedPlayerFrameId)
+      : matches[0];
+  }
+
   async #sendToSelected(tabId, state, payload) {
-    const player = this.players(tabId).find((item) => item.key === state.settings.selectedPlayerKey);
+    const player = this.#selectedPlayer(tabId, state);
     return player ? this.#send(tabId, player.frameId, payload) : false;
   }
 
   async #request(tabId, frameId, payload) {
-    return this.#chrome.tabs.sendMessage(tabId, payload, { frameId });
+    const documentId = this.players(tabId).find((player) => player.frameId === frameId)?.documentId;
+    return this.#chrome.tabs.sendMessage(tabId, payload, { frameId, ...(documentId ? { documentId } : {}) });
   }
 
   async #send(tabId, frameId, payload) {

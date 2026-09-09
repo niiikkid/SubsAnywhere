@@ -1,0 +1,33 @@
+# Optional: import a user-exported Netscape file through stdin, never a profile.
+# Host file permissions/UIDs do not cross the container boundary.
+services:
+  subtitles:
+    environment:
+      SUBSANYWHERE_COOKIES_FILE: /run/cookies/youtube.txt
+    volumes:
+      - cookies:/run/cookies:ro
+
+  cookie-import:
+    image: subsanywhere-server:0.9.0
+    profiles: [tools]
+    user: "10001:10001"
+    init: true
+    restart: "no"
+    network_mode: none
+    read_only: true
+    stdin_open: true
+    volumes:
+      - cookies:/run/cookies
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    mem_limit: 128m
+    cpus: 1
+    healthcheck:
+      disable: true
+    logging:
+      driver: none
+    command: [python, import_cookies.py]
+
+volumes:
+  cookies:

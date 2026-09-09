@@ -16,56 +16,24 @@ export function choosePlayer(players = [], selectedPlayerKey = '', currentFrameI
     ?? null;
 }
 
-export function createSerialTaskQueue() {
-  let tail = Promise.resolve();
-  return (task) => {
-    const operation = tail.then(task);
-    tail = operation.catch(() => undefined);
-    return operation;
+export async function loadPopupSnapshot(request, tabId, pageKey, observers = {}) {
+  const snapshot = { state: normalizeState({}), players: [], hasApiKey: false, aiModel: 'deepseek-v4-flash' };
+  const read = async (name, operation, apply) => {
+    try {
+      apply(await operation);
+      observers[name]?.(snapshot);
+    } catch (error) {
+      if (!observers.onError) throw error;
+      observers.onError(name, error);
+    }
   };
-}
-
-export function createDebouncedPatchCommit(commit, delayMs = 120, onError = () => {}) {
-  let pending = {};
-  let timer;
-  let tail = Promise.resolve();
-
-  const flush = () => {
-    clearTimeout(timer);
-    timer = undefined;
-    if (!Object.keys(pending).length) return tail;
-    const patch = pending;
-    pending = {};
-    const operation = tail.then(() => commit(patch));
-    tail = operation.catch(() => undefined);
-    return operation;
-  };
-
-  return {
-    schedule(patch) {
-      Object.assign(pending, patch);
-      clearTimeout(timer);
-      timer = setTimeout(() => { flush().catch(onError); }, delayMs);
-    },
-    flush,
-    cancel() {
-      clearTimeout(timer);
-      timer = undefined;
-      pending = {};
-    },
-  };
-}
-
-export async function loadPopupSnapshot(request, tabId, pageKey) {
-  const [stateData, playerData, aiData] = await Promise.all([
-    request(MESSAGE.STATE_GET, { tabId, pageKey }),
-    request(MESSAGE.PLAYER_GET, { tabId, pageKey }),
-    request(MESSAGE.AI_CONFIG_GET),
+  await Promise.all([
+    read('onState', request(MESSAGE.STATE_GET, { tabId, pageKey }), (data) => { snapshot.state = normalizeState(data.state); }),
+    read('onPlayers', observers.connectable === false ? Promise.resolve({ players: [] }) : request(MESSAGE.PLAYER_GET, { tabId, pageKey, cachedOnly: true }), (data) => { snapshot.players = Array.isArray(data.players) ? data.players : []; }),
+    read('onAi', observers.aiPromise ?? request(MESSAGE.AI_CONFIG_GET), (data) => {
+      snapshot.hasApiKey = Boolean(data.hasApiKey);
+      snapshot.aiModel = data.model === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
+    }),
   ]);
-  return {
-    state: normalizeState(stateData.state),
-    players: Array.isArray(playerData.players) ? playerData.players : [],
-    hasApiKey: Boolean(aiData.hasApiKey),
-    aiModel: aiData.model === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
-  };
+  return snapshot;
 }

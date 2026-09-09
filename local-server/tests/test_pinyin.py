@@ -3,12 +3,24 @@ import json
 import subprocess
 import sys
 import unittest
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import pinyin
 
 
 class PinyinSubtitleTests(unittest.TestCase):
+    def test_portable_pinyin_uses_python_without_starting_swift(self):
+        backend = Mock()
+        backend.Style.TONE = "tone"
+        backend.lazy_pinyin.side_effect = [["nǐ", "hǎo"], ["zài", "jiàn"]]
+        command = Mock(side_effect=AssertionError("Must not start Swift"))
+        with patch.dict(sys.modules, {"pypinyin": backend}):
+            converted = pinyin.convert_many_to_pinyin(["<i>你好</i>", "再见"], run_command=command)
+        self.assertEqual(converted, ["nǐ hǎo", "zài jiàn"])
+        self.assertEqual(backend.lazy_pinyin.call_args_list[0].args, ("你好",))
+        command.assert_not_called()
+
     def test_bilingual_srt_places_pinyin_before_its_source_characters(self):
         source = "1\n00:00:01,000 --> 00:00:03,000\n你好，世界！\n"
 
@@ -88,7 +100,8 @@ class PinyinSubtitleTests(unittest.TestCase):
             calls.append((command, kwargs))
             return subprocess.CompletedProcess(command, 0, json.dumps(["nǐ hǎo", "zài jiàn"]), "")
 
-        converted = pinyin.convert_many_to_pinyin(["你好", "再见"], run_command=run)
+        with patch.dict(sys.modules, {"pypinyin": None}), patch.object(sys, "platform", "darwin"):
+            converted = pinyin.convert_many_to_pinyin(["你好", "再见"], run_command=run)
 
         self.assertEqual(converted, ["nǐ hǎo", "zài jiàn"])
         self.assertEqual(len(calls), 1)

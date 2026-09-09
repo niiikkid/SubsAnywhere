@@ -1,0 +1,203 @@
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import { resolve, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// A real, isolated Chrome profile. No user cookies, API keys or permissions.
+const root = fileURLToPath(new URL('../', import.meta.url));
+const browser = process.env.CHROME_PATH || (process.platform === 'darwin'
+  ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+  : '/usr/bin/google-chrome');
+const profile = await mkdtemp(join(tmpdir(), 'subsanywhere-browser-'));
+const chrome = spawn(browser, [
+  '--headless=new', '--enable-unsafe-extension-debugging', '--disable-gpu',
+  '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0',
+  `--user-data-dir=${profile}`, 'about:blank',
+], { stdio: ['ignore', 'ignore', 'pipe'] });
+let socket;
+const pending = new Map();
+let sequence = 0;
+const errors = [];
+let fixtureServer;
+
+try {
+  const endpoint = await new Promise((resolveEndpoint, reject) => {
+    const timer = setTimeout(() => reject(new Error('Chrome did not expose DevTools within 15 seconds')), 15000);
+    let log = '';
+    chrome.once('error', (error) => { clearTimeout(timer); reject(error); });
+    chrome.once('exit', (code) => { clearTimeout(timer); reject(new Error(`Chrome exited: ${code}`)); });
+    chrome.stderr.on('data', (chunk) => {
+      log += chunk;
+      const match = log.match(/DevTools listening on (ws:\/\/[^\s]+)/);
+      if (match) { clearTimeout(timer); resolveEndpoint(match[1]); }
+    });
+  });
+  socket = new WebSocket(endpoint);
+  await once(socket, 'open');
+  socket.addEventListener('message', ({ data }) => {
+    const message = JSON.parse(data);
+    if (message.method === 'Runtime.exceptionThrown') errors.push(message.params.exceptionDetails.text);
+    if (!message.id) return;
+    const request = pending.get(message.id);
+    if (!request) return;
+    pending.delete(message.id);
+    clearTimeout(request.timer);
+    if (message.error) request.reject(new Error(JSON.stringify(message.error)));
+    else request.resolve(message.result);
+  });
+  const cdp = (method, params = {}, sessionId) => new Promise((resolveRequest, reject) => {
+    const id = ++sequence;
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP timeout: ${method}`)); }, 10000);
+    pending.set(id, { resolve: resolveRequest, reject, timer });
+    socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+  });
+  const { id: extensionId } = await cdp('Extensions.loadUnpacked', { path: root });
+  assert.match(extensionId, /^[a-p]{32}$/);
+  const openPopup = async () => {
+    const { targetId } = await cdp('Target.createTarget', {
+      url: `chrome-extension://${extensionId}/popup.html`, background: true,
+    });
+    const { sessionId } = await cdp('Target.attachToTarget', { targetId, flatten: true });
+    await cdp('Runtime.enable', {}, sessionId);
+    await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 740, deviceScaleFactor: 1, mobile: false }, sessionId);
+    const evaluate = async (expression) => {
+      const result = await cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId);
+      if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+      return result.result.value;
+    };
+    const until = async (expression) => {
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        if (await evaluate(expression)) return;
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+      }
+      throw new Error(`Browser assertion timed out: ${expression}`);
+    };
+    await until(`document.getElementById('controls') && !document.getElementById('controls').hidden`);
+    await until(`Boolean(document.getElementById('fontSizeValue')?.value)`);
+    await until(`!document.getElementById('fontSize').disabled`);
+    return { targetId, sessionId, evaluate, until };
+  };
+  const popup = await openPopup();
+
+  await popup.evaluate(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Внешний вид')?.click()`);
+  await popup.until(`document.getElementById('fontSize').getBoundingClientRect().width > 0`);
+  await popup.evaluate(`(() => {
+    const input = document.getElementById('fontSize');
+    input.value = '31';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  // No change/blur event: the input event itself must leave the ephemeral popup.
+  await popup.until(`document.getElementById('fontSizeValue').value === '31px'`);
+  await cdp('Target.closeTarget', { targetId: popup.targetId });
+  const reopened = await openPopup();
+
+  await reopened.until(`document.getElementById('fontSize').value === '31'`);
+  await reopened.evaluate(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Внешний вид')?.click()`);
+  assert.equal(await reopened.evaluate(`document.querySelectorAll('[data-subsanywhere-overlay]').length`), 0);
+  assert.equal(await reopened.evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
+  const { data: screenshot } = await cdp('Page.captureScreenshot', { format: 'png' }, reopened.sessionId);
+  const artifacts = resolve(root, 'artifacts');
+  await mkdir(artifacts, { recursive: true });
+  await writeFile(join(artifacts, 'appearance-smoke.png'), Buffer.from(screenshot, 'base64'));
+  const playerFixture = await readFile(join(root, 'tests/fixtures/player.html'));
+  fixtureServer = createServer((request, response) => {
+    response.setHeader('Content-Type', 'text/html; charset=utf-8');
+    response.end(request.url === '/player' ? playerFixture
+      : '<!doctype html><title>Local iframe test</title><iframe src="/player" width="660" height="380"></iframe>');
+  });
+  fixtureServer.listen(0, '127.0.0.1');
+  await once(fixtureServer, 'listening');
+  const fixtureUrl = `http://127.0.0.1:${fixtureServer.address().port}/`;
+  const { targetId: videoTarget } = await cdp('Target.createTarget', { url: fixtureUrl });
+  const { sessionId: videoSession } = await cdp('Target.attachToTarget', { targetId: videoTarget, flatten: true });
+  await cdp('Runtime.enable', {}, videoSession);
+  const inspectVideo = async (expression) => {
+    const result = await cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, videoSession);
+    if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+    return result.result.value;
+  };
+  const videoDeadline = Date.now() + 8000;
+  while (!await inspectVideo(`document.querySelector('iframe')?.contentDocument?.querySelector('video')?.readyState >= 2`)) {
+    if (Date.now() > videoDeadline) throw new Error('Local video fixture did not become ready');
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+  await cdp('Target.activateTarget', { targetId: videoTarget });
+  // This is Chrome's actual action gesture, not a mocked host permission.
+  const { targetInfos: browserTabs } = await cdp('Target.getTargets', { filter: [{ type: 'tab' }, { exclude: true }] });
+  const videoTab = browserTabs.find(tab => tab.url === fixtureUrl);
+  assert.ok(videoTab, 'Chrome must expose the fixture tab target');
+  await cdp('Extensions.triggerAction', { id: extensionId, targetId: videoTab.targetId });
+  const connection = await reopened.evaluate(`(async () => {
+    const { MESSAGE } = await import('./protocol.js');
+    const tabs = await chrome.tabs.query({});
+    const tab = tabs.find(t => t.url === ${JSON.stringify(fixtureUrl)});
+    if (!tab) throw new Error('activeTab access was not granted');
+    const request = async (type, extra = {}) => {
+      const result = await chrome.runtime.sendMessage({ type, tabId: tab.id, pageKey: tab.url, ...extra });
+      if (!result.ok) throw new Error(result.error);
+      return result.data;
+    };
+    const { players } = await request(MESSAGE.PLAYER_DISCOVER);
+    const player = players.find(p => p.frameId > 0 && p.tracks.length);
+    if (!player) throw new Error('Iframe player with native track was not discovered');
+    await request(MESSAGE.PLAYER_SELECT, { frameId: player.frameId, playerKey: player.key });
+    await request(MESSAGE.STATE_PATCH, { patch: { secondTrackId: player.tracks[0].id } });
+    await request(MESSAGE.PLAYER_DISCOVER);
+    return { frameId: player.frameId };
+  })()`);
+  assert.ok(connection.frameId > 0);
+  const overlay = await inspectVideo(`(() => {
+    const frame = document.querySelector('iframe').contentDocument;
+    return { count: frame.querySelectorAll('#dual-captions-overlay').length,
+      text: frame.querySelector('.subs-anywhere-original')?.textContent };
+  })()`);
+  assert.equal(overlay.count, 1, 'Reinjection must not duplicate overlays');
+  assert.equal(overlay.text, 'Hello from a local video.');
+  const { data: playerScreenshot } = await cdp('Page.captureScreenshot', { format: 'png' }, videoSession);
+  await writeFile(join(artifacts, 'player-smoke.png'), Buffer.from(playerScreenshot, 'base64'));
+  const positionExpression = `(async () => {
+    const { canonicalPageKey } = await import('./page-context.js');
+    const stored = await chrome.storage.local.get('dualCaptionsState');
+    return stored.dualCaptionsState.pages[canonicalPageKey(${JSON.stringify(fixtureUrl)})].settings.secondLeft;
+  })()`;
+  const initialPosition = await reopened.evaluate(positionExpression);
+  assert.notEqual(initialPosition, 72);
+  // Stop only this disposable profile's workers. Do not wake it via popup APIs.
+  await cdp('ServiceWorker.enable', {}, videoSession);
+  await cdp('ServiceWorker.stopAllWorkers', {}, videoSession);
+  const { targetInfos: stoppedTargets } = await cdp('Target.getTargets');
+  assert.equal(stoppedTargets.some(target => target.type === 'service_worker'
+    && target.url.startsWith(`chrome-extension://${extensionId}/`)), false, 'Worker must actually stop');
+  // Exercise Chrome's real content sender/document identity without discovery.
+  // This tests worker recovery, not pointer capture (verified separately by hand).
+  const handoff = await reopened.evaluate(`(async () => {
+    const tabs = await chrome.tabs.query({});
+    const tab = tabs.find(t => t.url === ${JSON.stringify(fixtureUrl)});
+    return chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [${connection.frameId}] }, world: 'ISOLATED',
+      func: async () => chrome.runtime.sendMessage({
+        type: 'dualCaptions.content.positionPatch', secondLeft: 72, secondBottom: 27,
+      }),
+    });
+  })()`);
+  assert.equal(handoff[0]?.result?.ok, true, 'Cold worker must accept the current selected content document');
+  await reopened.until(`(${positionExpression}).then(value => value === 72)`);
+  assert.deepEqual(errors, [], 'Chrome must not report runtime exceptions');
+  console.log('PASS: actual unpacked extension loads; appearance works without a player; input survives popup close/reopen; real iframe video/native captions render; reinjection creates no duplicate overlay; real content position message persists after actual service-worker shutdown without reconnecting; no page exceptions or horizontal overflow.');
+  console.log(`Screenshot: ${join(artifacts, 'appearance-smoke.png')}`);
+} finally {
+  fixtureServer?.closeAllConnections();
+  fixtureServer?.close();
+  for (const request of pending.values()) clearTimeout(request.timer);
+  socket?.close();
+  const exited = once(chrome, 'exit').catch(() => undefined);
+  chrome.kill('SIGTERM');
+  await Promise.race([exited, new Promise((resolveDelay) => setTimeout(resolveDelay, 2000))]);
+  if (chrome.exitCode === null) chrome.kill('SIGKILL');
+  await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+}

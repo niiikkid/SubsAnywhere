@@ -1,4 +1,5 @@
 import pathlib
+import os
 import sys
 import tempfile
 import unittest
@@ -9,6 +10,16 @@ import transcribe
 
 
 class TranscribeOutputTests(unittest.TestCase):
+    def test_model_directory_can_be_mounted_outside_a_user_home(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            model = root / "SenseVoiceSmall"
+            vad = root / "speech_fsmn_vad_zh-cn-16k-common-pytorch"
+            model.mkdir()
+            vad.mkdir()
+            with patch.dict(os.environ, {"SUBSANYWHERE_MODELS_DIR": str(root)}):
+                self.assertEqual(transcribe.cached_model_paths(), (model, vad))
+
     def test_progress_tracking_counts_vad_segments_and_processed_audio(self):
         vad_model = object()
         asr_model = object()

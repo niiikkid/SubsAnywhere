@@ -149,7 +149,7 @@ class SubtitleServiceTests(unittest.TestCase):
                 if "--write-auto-subs" in command:
                     paths = server.output_paths(root, "rwnyaH6cTDE")
                     paths.directory.mkdir(parents=True, exist_ok=True)
-                    paths.directory.joinpath("youtube-rwnyaH6cTDE-youtube.zh-Hans.srt").write_text(
+                    pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", "zh-Hans.srt")).write_text(
                         "1\n00:00:00,000 --> 00:00:01,000\n你好\n",
                         encoding="utf-8",
                     )
@@ -188,7 +188,7 @@ class SubtitleServiceTests(unittest.TestCase):
                 elif command[0] != "/local/funasr/python":
                     paths = server.output_paths(root, "rwnyaH6cTDE")
                     paths.directory.mkdir(parents=True, exist_ok=True)
-                    paths.youtube_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\n你好\n", encoding="utf-8")
+                    pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", "zh-Hans.srt")).write_text("1\n00:00:00,000 --> 00:00:01,000\n你好\n", encoding="utf-8")
                 else:
                     pathlib.Path(command[command.index("--srt") + 1]).write_text("1\n00:00:00,000 --> 00:00:01,000\n你好\n", encoding="utf-8")
                     pathlib.Path(command[command.index("--text") + 1]).write_text("你好\n", encoding="utf-8")
@@ -284,7 +284,9 @@ class HttpServerTests(unittest.TestCase):
             )
         try:
             with urllib.request.urlopen(f"{base}/health") as response:
-                self.assertEqual(json.load(response), {"ok": True})
+                health = json.load(response)
+                self.assertEqual(health["ok"], True)
+                self.assertEqual((health["service"], health["api_version"]), ("subsanywhere", 1))
             with urllib.request.urlopen(api_request("/api/subtitles/existing?video_id=rwnyaH6cTDE")) as response:
                 self.assertEqual(json.load(response)["status"], "missing")
             request = api_request("/api/subtitles/generate?video_id=rwnyaH6cTDE", method="POST")

@@ -1,5 +1,18 @@
 const DEFAULT_BASE_URL = 'http://127.0.0.1:43817';
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+const SERVER_ERRORS = Object.freeze({
+  interrupted: 'Сервер перезапущен. Запустите создание субтитров заново; прежние файлы сохранены',
+  start_failed: 'Не удалось запустить задание. Попробуйте ещё раз',
+  timeout: 'Превышено время обработки. Повторите запрос или выберите более короткое видео',
+  dependency_missing: 'Не найдены зависимости сервера. Проверьте окружение Docker и наличие моделей',
+  command_failed: 'Не удалось обработать видео. Проверьте доступность ролика, авторизацию YouTube и окружение сервера',
+  generation_failed: 'Не удалось создать субтитры. Прежние файлы сохранены',
+  storage_error: 'Не удалось сохранить файлы. Проверьте свободное место и права на папку сервера',
+  busy: 'Сервер занят другим заданием. Повторите попытку немного позже',
+  cancelled: 'Создание остановлено. Прежние файлы сохранены',
+  invalid_output: 'Обработка не дала корректных субтитров. Попробуйте другой ролик',
+  too_large: 'Файл превышает ограничение сервера. Выберите более короткое видео или меньший SRT',
+});
 
 function assertVideoId(videoId) {
   if (!VIDEO_ID_PATTERN.test(String(videoId ?? ''))) {
@@ -95,16 +108,22 @@ export class LocalSubtitleClient {
   async #request(path, videoId, method = 'GET') {
     const safeId = assertVideoId(videoId);
     const url = `${this.#baseUrl}${path}?video_id=${encodeURIComponent(safeId)}`;
+    const signal = AbortSignal.timeout(25_000);
     let response;
     try {
       response = await this.#fetch(url, {
         method,
+        signal,
+        redirect: 'error',
+        credentials: 'omit',
+        cache: 'no-store',
         headers: {
           Accept: 'application/json',
           'X-SubsAnywhere-Client': 'extension-v1',
         },
       });
     } catch {
+      if (signal.aborted) throw new Error('Сервер не ответил вовремя. Повторите проверку — задание не отменено');
       throw new Error('Локальный сервер субтитров не запущен');
     }
     let payload;
@@ -114,7 +133,11 @@ export class LocalSubtitleClient {
       throw new Error('Локальный сервер вернул неверный ответ');
     }
     if (!response.ok || payload?.error) {
-      throw new Error(payload?.error || `Локальный сервер вернул ошибку ${response.status}`);
+      throw new Error(SERVER_ERRORS[payload?.error_code] || payload?.error || `Локальный сервер вернул ошибку ${response.status}`);
+    }
+    if (!payload || !['ready', 'running', 'missing', 'error'].includes(payload.status)
+      || (payload.status === 'ready' && (typeof payload.srt !== 'string' || !payload.srt.trim()))) {
+      throw new Error('Локальный сервер вернул неверный ответ');
     }
     return payload;
   }

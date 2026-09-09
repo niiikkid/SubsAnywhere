@@ -1,10 +1,11 @@
-"""Local Chinese pinyin conversion for subtitle files on macOS."""
+"""Offline Chinese pinyin conversion, portable with pypinyin."""
 
 from __future__ import annotations
 
 import json
 import re
 import subprocess
+import sys
 
 HAN_PATTERN = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
 TAG_PATTERN = re.compile(r"<[^>]*>")
@@ -50,6 +51,17 @@ def convert_many_to_pinyin(values: list[str], run_command=subprocess.run) -> lis
     sources = [clean_caption(value) for value in values]
     if not sources:
         return []
+    try:
+        from pypinyin import Style, lazy_pinyin
+    except ImportError as error:
+        if sys.platform != "darwin":
+            raise RuntimeError("Pinyin dependency is missing. Rebuild the subtitle server image.") from error
+    else:
+        return [
+            " ".join(" ".join(lazy_pinyin(source, style=Style.TONE, errors=lambda text: [text])).split())
+            for source in sources
+        ]
+    # Preserve the existing dependency-free native macOS launch.
     result = run_command(
         ["/usr/bin/swift", "-e", SWIFT_TRANSLITERATOR],
         input=json.dumps(sources, ensure_ascii=False),

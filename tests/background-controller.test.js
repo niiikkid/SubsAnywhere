@@ -1,8 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BackgroundController, PlayerRegistry, stablePlayerKey } from '../background-controller.js';
-import { MESSAGE } from '../protocol.js';
+import fs from 'node:fs/promises';
+import vm from 'node:vm';
+import { BackgroundController as RuntimeBackgroundController, PlayerRegistry, stablePlayerKey } from '../background-controller.js';
+import { MESSAGE, failure } from '../protocol.js';
+import { StateStore } from '../state-store.js';
 import { builtInTrackFallbackPatch, normalizeState, patchSettings as patchState } from '../state-core.js';
+
+const EXTENSION_ID = 'fixture-extension';
+const POPUP = { id: EXTENSION_ID, url: `chrome-extension://${EXTENSION_ID}/popup.html` };
+
+// Supply the sender metadata Chrome populates, not content-controlled fields.
+class BackgroundController extends RuntimeBackgroundController {
+  handle(message, sender = {}) {
+    return super.handle(message, Object.keys(sender).length ? {
+      id: EXTENSION_ID,
+      frameId: 0,
+      url: message?.player?.frameUrl || 'https://player.example/embed',
+      ...sender,
+    } : POPUP);
+  }
+}
 
 class FakeStore {
   constructor() {
@@ -29,10 +47,11 @@ class FakeStore {
     return this.patchSettingsWithPlayerFallbacks(pageKey, {}, [{ key: playerKey, tracks: playerTracks }]);
   }
   async adoptSelectedPlayerReplacement(pageKey, { previousPlayerKey, frameId, player }) {
-    if (
-      this.state.settings.selectedPlayerKey !== previousPlayerKey
-      && this.state.settings.selectedPlayerFrameId !== frameId
-    ) return this.get();
+    if (this.state.settings.selectedPlayerKey === player.key) return this.get();
+    const selectedSameFrame = this.state.settings.selectedPlayerFrameId === frameId;
+    const selectedPrevious = this.state.settings.selectedPlayerFrameId < 0 && previousPlayerKey
+      && this.state.settings.selectedPlayerKey === previousPlayerKey;
+    if (!selectedSameFrame && !selectedPrevious) return this.get();
     return this.patchSettingsWithPlayerFallbacks(pageKey, {
       selectedPlayerKey: player.key,
       selectedPlayerFrameId: frameId,
@@ -60,6 +79,12 @@ class FakeStore {
 function makeChrome() {
   const sent = [];
   const api = {
+    runtime: {
+      id: EXTENSION_ID,
+      getURL: (path) => `chrome-extension://${EXTENSION_ID}/${path}`,
+      getManifest: () => ({ host_permissions: ['https://api.deepseek.com/*', 'http://127.0.0.1:43817/*'] }),
+    },
+    permissions: { getAll: async () => ({ origins: ['<all_urls>'] }) },
     sent,
     onSend: null,
     scripting: { executeScript: async () => [] },
@@ -72,6 +97,90 @@ function makeChrome() {
   };
   return api;
 }
+
+test('content cannot invoke popup-only credential, state, discovery or local-job commands', async () => {
+  const store = new FakeStore();
+  let accesses = 0;
+  const credentialStore = {
+    async publicInfo() { accesses += 1; return { hasApiKey: true }; },
+    async patch() { accesses += 1; return {}; },
+  };
+  const controller = new BackgroundController(makeChrome(), store, { credentialStore });
+  const before = structuredClone(store.state);
+  for (const type of [MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.STATE_GET, MESSAGE.STATE_PATCH,
+    MESSAGE.PLAYER_GET, MESSAGE.PLAYER_DISCOVER, MESSAGE.LOCAL_SUBTITLE_GENERATE, MESSAGE.TRACK_REMOVE]) {
+    const response = await controller.handle({ type, tabId: 77, pageKey: 'https://private.example/', patch: { fontSize: 48 }, apiKey: 'not-a-real-key' }, { tab: { id: 3 }, frameId: 8 });
+    assert.equal(response.ok, false, type);
+  }
+  assert.equal(accesses, 0);
+  assert.deepEqual(store.state, before);
+  assert.equal((await controller.handle({ type: MESSAGE.AI_CONFIG_GET })).ok, true);
+  assert.equal(accesses, 1);
+});
+
+test('the own popup page remains trusted when Chrome hosts it in an extension tab', async () => {
+  const store = new FakeStore();
+  const controller = new RuntimeBackgroundController(makeChrome(), store);
+  const sender = { ...POPUP, tab: { id: 100, url: POPUP.url }, frameId: 0 };
+  const result = await controller.handle({ type: MESSAGE.STATE_PATCH, tabId: 3,
+    pageKey: 'https://video.example/', patch: { fontSize: 31 } }, sender);
+  assert.equal(result.ok, true);
+  assert.equal(store.state.settings.fontSize, 31);
+});
+
+test('unknown extension and missing sender identities cannot read state', async () => {
+  const controller = new RuntimeBackgroundController(makeChrome(), new FakeStore());
+  for (const sender of [{}, { ...POPUP, id: 'other-extension' }, { id: EXTENSION_ID, url: 'https://untrusted.example/' }]) {
+    assert.equal((await controller.handle({ type: MESSAGE.STATE_GET }, sender)).ok, false);
+  }
+});
+
+async function backgroundHarness(setAccessLevel) {
+  const source = await fs.readFile(new URL('../background.js', import.meta.url), 'utf8');
+  const chrome = makeChrome();
+  const handlers = [];
+  const event = { addListener() {} };
+  chrome.storage = { local: { setAccessLevel } };
+  chrome.runtime.onMessage = { addListener(handler) { handlers.push(handler); } };
+  chrome.tabs.onUpdated = event;
+  chrome.tabs.onRemoved = event;
+  const handled = [];
+  const sandbox = {
+    chrome, MESSAGE, failure, console, fetch() { throw new Error('No network in bootstrap tests'); },
+    StateStore: class {}, AiCredentialStore: class {}, DeepSeekClient: class {}, LocalSubtitleClient: class {},
+    BackgroundController: class {
+      async handle(message) { handled.push(message); return { ok: true }; }
+      async initialize() {}
+    },
+  };
+  vm.runInNewContext(source.replace(/^import .*;$/gm, ''), sandbox);
+  return { handled, request: (type) => new Promise((resolve) => handlers[0]({ type }, POPUP, resolve)) };
+}
+
+test('background waits for trusted-only storage access before handling AI credentials', async () => {
+  let release;
+  const harness = await backgroundHarness((options) => {
+    assert.equal(options.accessLevel, 'TRUSTED_CONTEXTS');
+    return new Promise((resolve) => { release = resolve; });
+  });
+  const pending = harness.request(MESSAGE.AI_CONFIG_PATCH);
+  for (let index = 0; index < 4; index += 1) await Promise.resolve();
+  assert.equal(harness.handled.length, 0);
+  release();
+  assert.equal((await pending).ok, true);
+  assert.equal(harness.handled.length, 1);
+});
+
+test('storage access protection failures fail closed for AI without crashing the worker', async () => {
+  for (const setter of [undefined, () => { throw new Error('Unsupported'); }, () => Promise.reject(new Error('Denied'))]) {
+    const harness = await backgroundHarness(setter);
+    for (const type of [MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.CAPTION_TRANSLATE]) {
+      assert.equal((await harness.request(type)).ok, false);
+    }
+    assert.equal(harness.handled.length, 0);
+    assert.equal((await harness.request(MESSAGE.PLAYER_GET)).ok, true);
+  }
+});
 
 test('stablePlayerKey ignores temporary query tokens but distinguishes video index', () => {
   assert.equal(
@@ -269,6 +378,20 @@ test('player get rebuilds an empty cache so popup reopen recovers automatically'
   assert.equal(result.data.players[0].title, 'Rehydrated');
 });
 
+test('cached-only player get returns immediately without injection or registration', async () => {
+  const chrome = makeChrome();
+  let discoveryCalls = 0;
+  chrome.scripting.executeScript = async () => { discoveryCalls += 1; };
+  chrome.scripting.getRegisteredContentScripts = async () => { discoveryCalls += 1; return []; };
+  const controller = new BackgroundController(chrome, new FakeStore());
+  const empty = await controller.handle({ type: MESSAGE.PLAYER_GET, tabId: 3, cachedOnly: true });
+  assert.deepEqual(empty, { ok: true, data: { players: [] } });
+  await selectTranslationPlayer(controller);
+  const cached = await controller.handle({ type: MESSAGE.PLAYER_GET, tabId: 3, cachedOnly: true });
+  assert.equal(cached.data.players.length, 1);
+  assert.equal(discoveryCalls, 0);
+});
+
 test('player get refresh removes stale iframe entries before popup hydration', async () => {
   const chrome = makeChrome();
   const store = new FakeStore();
@@ -310,6 +433,78 @@ test('explicit discovery registers idempotent all-frame scripts for later iframe
   assert.deepEqual(registrations[0].js, ['content-runtime.js', 'content.js']);
   assert.equal(registrations[0].allFrames, true);
   assert.equal(registrations[0].persistAcrossSessions, true);
+});
+
+test('stale wildcard discovery registration is narrowed and removed after optional permission revocation', async () => {
+  const chrome = makeChrome();
+  const id = 'dual-captions-player-discovery-v1';
+  let scripts = [{ id, matches: ['http://*/*', 'https://*/*'], js: ['old-content.js'] }];
+  let origins = ['https://video.example/*', 'https://api.deepseek.com/*', 'http://127.0.0.1:43817/*'];
+  chrome.permissions.getAll = async () => ({ origins });
+  chrome.scripting.getRegisteredContentScripts = async () => structuredClone(scripts);
+  chrome.scripting.registerContentScripts = async (values) => { scripts.push(...values); };
+  chrome.scripting.updateContentScripts = async (values) => { scripts = values; };
+  chrome.scripting.unregisterContentScripts = async () => { scripts = []; };
+  const controller = new BackgroundController(chrome, new FakeStore(), { discoveryTimeoutMs: 1 });
+
+  await controller.handle({ type: MESSAGE.PLAYER_DISCOVER, tabId: 3 });
+  assert.deepEqual(scripts[0].matches, ['https://video.example/*']);
+  assert.deepEqual(scripts[0].js, ['content-runtime.js', 'content.js']);
+
+  origins = ['https://api.deepseek.com/*', 'http://127.0.0.1:43817/*'];
+  await controller.handle({ type: MESSAGE.PLAYER_DISCOVER, tabId: 3 });
+  assert.deepEqual(scripts, []);
+});
+
+test('selecting a second player resets the previously active frame before activation', async () => {
+  const chrome = makeChrome();
+  const controller = new BackgroundController(chrome, new FakeStore());
+  await selectTranslationPlayer(controller);
+  await controller.handle({ type: MESSAGE.PLAYER_REPORT, player: {
+    title: 'Second', frameUrl: 'https://second.example/embed', videoIndex: 0, tracks: [],
+  } }, { tab: { id: 3 }, frameId: 8 });
+  const second = controller.players(3).find((player) => player.frameId === 8);
+  chrome.sent.length = 0;
+
+  const response = await controller.handle({ type: MESSAGE.PLAYER_SELECT, tabId: 3, frameId: 8, playerKey: second.key });
+
+  assert.equal(response.ok, true);
+  assert.deepEqual(chrome.sent.map(({ message, options }) => [message.type, options.frameId]), [
+    [MESSAGE.CONTENT_RESET, 0], [MESSAGE.CONTENT_FULL_STATE, 8],
+  ]);
+});
+
+test('a delayed player report cannot reactivate an old frame after a newer selection', async () => {
+  const chrome = makeChrome();
+  const store = new FakeStore();
+  const controller = new BackgroundController(chrome, store);
+  const sender = await selectTranslationPlayer(controller);
+  const [first] = controller.players(3);
+  await controller.handle({ type: MESSAGE.PLAYER_REPORT, player: {
+    title: 'Second', frameUrl: 'https://second.example/embed', videoIndex: 0, tracks: [],
+  } }, { tab: { id: 3 }, frameId: 8 });
+  const second = controller.players(3).find((player) => player.frameId === 8);
+  const adopt = store.adoptSelectedPlayerReplacement.bind(store);
+  let release;
+  let started;
+  const waiting = new Promise((resolve) => { started = resolve; });
+  store.adoptSelectedPlayerReplacement = async (...args) => {
+    const snapshot = await adopt(...args);
+    started();
+    await new Promise((resolve) => { release = resolve; });
+    return snapshot;
+  };
+  chrome.sent.length = 0;
+  const report = controller.handle({ type: MESSAGE.PLAYER_REPORT, player: first }, sender);
+  await waiting;
+  const selection = controller.handle({ type: MESSAGE.PLAYER_SELECT, tabId: 3, frameId: 8, playerKey: second.key });
+  for (let index = 0; index < 10; index += 1) await Promise.resolve();
+  release();
+  await Promise.all([report, selection]);
+
+  assert.equal(store.state.settings.selectedPlayerKey, second.key);
+  assert.equal(chrome.sent.filter(({ options }) => options.frameId === 0).at(-1).message.type, MESSAGE.CONTENT_RESET);
+  assert.equal(chrome.sent.at(-1).options.frameId, 8);
 });
 
 test('settings patch sends only lightweight settings to the selected player frame', async () => {
@@ -365,6 +560,61 @@ test('the selected player persists a dragged subtitle position on both axes', as
   assert.deepEqual(chrome.sent[0].message.settings.secondBottom, 27);
 });
 
+async function selectTranslationPlayer(controller) {
+  const sender = { tab: { id: 3 }, frameId: 0, url: 'https://player.example/embed', documentId: 'current-document' };
+  await controller.handle({ type: MESSAGE.PLAYER_REPORT, player: {
+    title: 'Player', frameUrl: sender.url, videoIndex: 0, tracks: [],
+  } }, sender);
+  const [player] = controller.players(3);
+  await controller.handle({ type: MESSAGE.PLAYER_SELECT, tabId: 3, frameId: 0, playerKey: player.key });
+  return sender;
+}
+
+test('only the selected current frame document can spend a translation request', async () => {
+  let calls = 0;
+  const controller = new BackgroundController(makeChrome(), new FakeStore(), {
+    deepSeek: { async translateCaption() { calls += 1; return []; } },
+  });
+  const sender = await selectTranslationPlayer(controller);
+  const message = { type: MESSAGE.CAPTION_TRANSLATE, text: 'Hello' };
+  for (const untrusted of [{ ...sender, frameId: 4 }, { ...sender, tab: { id: 9 } },
+    { ...sender, documentId: 'old-document' }, { ...sender, documentLifecycle: 'prerender' }]) {
+    assert.equal((await controller.handle(message, untrusted)).ok, false);
+  }
+  assert.equal(calls, 0);
+  assert.equal((await controller.handle(message, sender)).ok, true);
+  assert.equal(calls, 1);
+});
+
+test('player reports reject spoofed frame identity and excessive track metadata before registration', async () => {
+  const controller = new BackgroundController(makeChrome(), new FakeStore());
+  const player = { title: 'Player', frameUrl: 'https://player.example/embed', videoIndex: 0, tracks: [] };
+  for (const [data, sender] of [
+    [{ ...player, frameUrl: 'https://private.example/' }, { url: player.frameUrl }],
+    [{ ...player, tracks: Array.from({ length: 129 }, () => ({ id: 'en' })) }, {}],
+    [{ ...player, title: 'x'.repeat(100_000) }, {}],
+    [player, { frameId: -1 }],
+    [player, { documentLifecycle: 'cached' }],
+  ]) {
+    const response = await controller.handle({ type: MESSAGE.PLAYER_REPORT, player: data }, { tab: { id: 3 }, frameId: 0, ...sender });
+    assert.equal(response.ok, false);
+    assert.deepEqual(controller.players(3), []);
+  }
+});
+
+test('oversized translation messages are rejected rather than silently truncated or forwarded', async () => {
+  let calls = 0;
+  const controller = new BackgroundController(makeChrome(), new FakeStore(), {
+    deepSeek: { async translateCaption() { calls += 1; return []; } },
+  });
+  const sender = await selectTranslationPlayer(controller);
+  for (const extra of [{ text: 'x'.repeat(501) }, { text: 'Hi', displayText: 'x'.repeat(501) },
+    { text: 'Hi', ignored: 'x'.repeat(100_000) }]) {
+    assert.equal((await controller.handle({ type: MESSAGE.CAPTION_TRANSLATE, ...extra }, sender)).ok, false);
+  }
+  assert.equal(calls, 0);
+});
+
 test('caption translation sends only the current short caption to DeepSeek', async () => {
   const calls = [];
   const deepSeek = {
@@ -379,7 +629,7 @@ test('caption translation sends only the current short caption to DeepSeek', asy
     type: 'dualCaptions.caption.translate',
     text: 'Wait for me.',
     aiOptions: { model: 'deepseek-v4-flash', reasoningEffort: 'low' },
-  }, { tab: { id: 3 } });
+  }, await selectTranslationPlayer(controller));
 
   assert.equal(result.ok, true);
   assert.deepEqual(result.data.items, [{ start: 0, end: 4, text: 'Wait', dictionary: 'ждать', context: 'подожди' }]);
@@ -407,7 +657,7 @@ test('Chinese pinyin click translates its linked characters in one request', asy
     language: 'zh',
     text: '你好，世界',
     displayText: 'nǐ hǎo, shì jiè',
-  }, { tab: { id: 3 } });
+  }, await selectTranslationPlayer(controller));
 
   assert.equal(result.ok, true);
   assert.deepEqual(calls, [{ text: '你好，世界', pinyin: 'nǐ hǎo, shì jiè' }]);
@@ -548,6 +798,245 @@ test('reselecting the same player preserves a legacy fallback after context recr
 
   assert.equal(result.ok, true);
   assert.equal(store.state.settings.secondTrackFallbackId, 'caption-0');
+});
+
+test('late reports from the previous top page cannot readopt its state after navigation', async () => {
+  const chrome = makeChrome();
+  let currentUrl = 'https://site.example/episode-1';
+  chrome.tabs.get = async () => ({ id: 3, url: currentUrl });
+  const controller = new BackgroundController(chrome, new FakeStore());
+  const sender = { tab: { id: 3, url: currentUrl }, frameId: 8, documentId: 'old-document' };
+  const message = { type: MESSAGE.PLAYER_REPORT, player: {
+    title: 'Old', frameUrl: 'https://player.example/embed', videoIndex: 0, tracks: [],
+  } };
+  await controller.handle(message, sender);
+  currentUrl = 'https://site.example/episode-2';
+  await controller.handleTabNavigation(3, currentUrl);
+  chrome.sent.length = 0;
+
+  assert.equal((await controller.handle(message, sender)).ok, false);
+  assert.deepEqual(controller.players(3), []);
+  assert.deepEqual(chrome.sent, []);
+});
+
+test('two identical iframe URLs do not activate or receive settings in the unselected frame', async () => {
+  const chrome = makeChrome();
+  const controller = new BackgroundController(chrome, new FakeStore());
+  const sender = await selectTranslationPlayer(controller);
+  const [player] = controller.players(3);
+  await controller.handle({ type: MESSAGE.PLAYER_REPORT, player }, { ...sender, frameId: 8, documentId: 'second-document' });
+  await controller.handle({ type: MESSAGE.PLAYER_SELECT, tabId: 3, frameId: 8, playerKey: player.key });
+  chrome.sent.length = 0;
+  await controller.handle({ type: MESSAGE.PLAYER_REPORT, player }, sender);
+  await controller.handle({ type: MESSAGE.STATE_PATCH, tabId: 3, patch: { fontSize: 31 } });
+  assert.deepEqual(chrome.sent.map(({ message, options }) => [message.type, options.frameId]), [[MESSAGE.CONTENT_SETTINGS, 8]]);
+});
+
+async function persistedSelectedPlayer() {
+  const storage = {
+    data: {},
+    async get() { return structuredClone(this.data); },
+    async set(values) { Object.assign(this.data, structuredClone(values)); },
+  };
+  const chrome = makeChrome();
+  const pageKey = 'https://site.example/episode-1';
+  const sender = { id: EXTENSION_ID, tab: { id: 3, url: pageKey }, frameId: 8,
+    url: 'https://player.example/embed', documentId: 'selected-document', documentLifecycle: 'active' };
+  chrome.tabs.get = async () => ({ ...sender.tab });
+  const registry = new PlayerRegistry();
+  const controller = new RuntimeBackgroundController(chrome, new StateStore(storage), { registry });
+  const report = { type: MESSAGE.PLAYER_REPORT, player: { title: 'Selected', frameUrl: sender.url,
+    videoIndex: 0, tracks: [{ id: 'track-0', fallbackId: 'caption-0', language: 'en' }] } };
+  assert.equal((await controller.handle(report, sender)).ok, true);
+  const [player] = controller.players(sender.tab.id);
+  assert.equal((await controller.handle({ type: MESSAGE.PLAYER_SELECT, tabId: sender.tab.id,
+    pageKey, frameId: sender.frameId, playerKey: player.key }, POPUP)).ok, true);
+  assert.equal((await controller.handle({ type: MESSAGE.STATE_PATCH, tabId: sender.tab.id,
+    pageKey, patch: { secondTrackId: 'track-0', fontSize: 31 } }, POPUP)).ok, true);
+  const persisted = await new StateStore(storage).get(pageKey);
+  assert.equal(persisted.settings.selectedPlayerFrameId, sender.frameId);
+  assert.equal(persisted.settings.selectedPlayerKey, player.key);
+  chrome.sent.length = 0;
+  return { chrome, storage, registry, controller, pageKey, sender, player, report };
+}
+
+test('rediscovery never activates an identical-URL frame before the persisted frame reports', async () => {
+  for (const reset of ['worker-restart', 'registry-clear', 'explicit-discovery']) {
+    for (const order of [[0, 8], [8, 0]]) {
+      const fixture = await persistedSelectedPlayer();
+      const { chrome, storage, pageKey, sender, report } = fixture;
+      const controller = reset === 'worker-restart'
+        ? new RuntimeBackgroundController(chrome, new StateStore(storage)) : fixture.controller;
+      if (reset === 'registry-clear') fixture.registry.clear(sender.tab.id);
+      const reportPlayers = async () => {
+        for (const frameId of order) {
+          const response = await controller.handle(report, { ...sender, frameId,
+            documentId: frameId === sender.frameId ? sender.documentId : 'unselected-document' });
+          assert.equal(response.ok, true);
+          assert.equal(response.data.restored, frameId === sender.frameId, `${reset}: frame ${frameId}`);
+          await controller.handle({ type: MESSAGE.STATE_PATCH, tabId: sender.tab.id,
+            pageKey, patch: { fontSize: 32 } }, POPUP);
+        }
+      };
+      if (reset === 'explicit-discovery') {
+        chrome.scripting.executeScript = reportPlayers;
+        assert.equal((await controller.handle({ type: MESSAGE.PLAYER_DISCOVER, tabId: sender.tab.id, pageKey }, POPUP)).ok, true);
+      } else await reportPlayers();
+      assert.ok(chrome.sent.length > 0);
+      assert.ok(chrome.sent.every(({ options }) => options.frameId === sender.frameId), reset);
+      assert.equal((await new StateStore(storage).get(pageKey)).settings.selectedPlayerFrameId, sender.frameId);
+    }
+  }
+});
+
+test('completed discovery restores a same-URL replacement only after the stored frame is absent', async () => {
+  for (const restart of [false, true]) {
+    const fixture = await persistedSelectedPlayer();
+    const { chrome, storage, pageKey, sender, report } = fixture;
+    const controller = restart
+      ? new RuntimeBackgroundController(chrome, new StateStore(storage), { discoveryQuietMs: 1, discoveryTimeoutMs: 50 })
+      : fixture.controller;
+    const replacement = { ...sender, frameId: 12, documentId: 'replacement-document' };
+    chrome.scripting.executeScript = async () => {
+      const response = await controller.handle(report, replacement);
+      assert.equal(response.ok, true);
+      assert.equal(response.data.restored, false, 'Do not activate before discovery settles');
+      assert.equal((await new StateStore(storage).get(pageKey)).settings.selectedPlayerFrameId, sender.frameId);
+    };
+    const response = await controller.handle({ type: MESSAGE.PLAYER_DISCOVER, tabId: sender.tab.id, pageKey }, POPUP);
+    assert.equal(response.ok, true);
+    assert.equal((await new StateStore(storage).get(pageKey)).settings.selectedPlayerFrameId, replacement.frameId);
+    assert.equal(chrome.sent.at(-1).message.type, MESSAGE.CONTENT_FULL_STATE);
+    assert.deepEqual(chrome.sent.at(-1).options, { frameId: replacement.frameId, documentId: replacement.documentId });
+    if (!restart) {
+      assert.equal(chrome.sent[0].message.type, MESSAGE.CONTENT_RESET);
+      assert.deepEqual(chrome.sent[0].options, { frameId: sender.frameId, documentId: sender.documentId });
+    }
+  }
+});
+
+test('the first selected action after a worker restart re-registers before authorization', async () => {
+  for (const type of [MESSAGE.CAPTION_TRANSLATE, MESSAGE.CONTENT_POSITION_PATCH, MESSAGE.TRACK_CACHE_BUILTIN]) {
+    const { chrome, storage, pageKey, sender, player, report } = await persistedSelectedPlayer();
+    let translations = 0;
+    const controller = new RuntimeBackgroundController(chrome, new StateStore(storage), {
+      discoveryTimeoutMs: 50,
+      deepSeek: { async translateCaption() { translations += 1; return []; } },
+    });
+    let handshakes = 0;
+    chrome.onSend = async (tabId, message, options) => {
+      if (message.type !== MESSAGE.PLAYER_DISCOVER) return { ok: true };
+      handshakes += 1;
+      assert.equal(tabId, sender.tab.id);
+      assert.deepEqual(options, { frameId: sender.frameId });
+      return controller.handle(report, sender);
+    };
+    const action = { type, text: 'After restart', secondLeft: 72, secondBottom: 27,
+      sourceKey: `${player.key}\u0000track-0`,
+      track: { id: 'builtin-cache-snapshot', sourceType: 'builtin-cache', name: 'English',
+        cues: [{ start: 1, end: 2, text: 'Saved caption' }] } };
+    // No PLAYER_REPORT, popup request or navigation primes this new controller.
+    const response = await controller.handle(action, sender);
+    assert.equal(response.ok, true, `${type}: ${response.error}`);
+    assert.equal(handshakes, 1);
+    assert.equal(controller.players(sender.tab.id)[0].documentId, sender.documentId);
+    const state = await new StateStore(storage).get(pageKey);
+    assert.equal(state.settings.selectedPlayerFrameId, sender.frameId);
+    assert.equal(state.settings.selectedPlayerKey, player.key);
+    assert.equal(state.settings.fontSize, 31);
+    assert.equal(translations, type === MESSAGE.CAPTION_TRANSLATE ? 1 : 0);
+    if (type === MESSAGE.CONTENT_POSITION_PATCH) {
+      assert.equal(state.settings.secondLeft, 72);
+      assert.equal(state.settings.secondBottom, 27);
+    }
+    if (type === MESSAGE.TRACK_CACHE_BUILTIN) {
+      assert.equal(state.settings.secondTrackCacheSource, action.sourceKey);
+      assert.equal(state.externalTracks[0].cues[0].text, 'Saved caption');
+    }
+  }
+});
+
+test('cold-worker recovery still rejects an unselected or stale action without spending or saving', async () => {
+  for (const scenario of ['wrong-frame', 'wrong-document', 'wrong-url', 'missing-document', 'inactive-document',
+    'wrong-page', 'different-current-player', 'ack-without-report']) {
+    const { chrome, storage, pageKey, sender, report } = await persistedSelectedPlayer();
+    let translations = 0;
+    const controller = new RuntimeBackgroundController(chrome, new StateStore(storage), {
+      discoveryTimeoutMs: 50, deepSeek: { async translateCaption() { translations += 1; return []; } },
+    });
+    let actionSender = { ...sender };
+    if (scenario === 'wrong-frame') actionSender.frameId = 0;
+    if (scenario === 'wrong-document') actionSender.documentId = 'old-document';
+    if (scenario === 'wrong-url') actionSender.url = 'https://other.example/embed';
+    if (scenario === 'missing-document') delete actionSender.documentId;
+    if (scenario === 'inactive-document') actionSender.documentLifecycle = 'cached';
+    if (scenario === 'wrong-page') actionSender.tab = { ...sender.tab, url: 'https://site.example/episode-0' };
+    chrome.onSend = async (_tabId, message) => {
+      if (message.type !== MESSAGE.PLAYER_DISCOVER || scenario === 'ack-without-report') return { ok: true };
+      const currentSender = scenario === 'different-current-player'
+        ? { ...sender, url: 'https://other.example/embed' } : sender;
+      return controller.handle({ ...report, player: { ...report.player, frameUrl: currentSender.url } }, currentSender);
+    };
+    const response = await controller.handle({ type: MESSAGE.CAPTION_TRANSLATE, text: 'Do not spend' }, actionSender);
+    assert.equal(response.ok, false, scenario);
+    assert.equal(translations, 0, scenario);
+    assert.equal((await new StateStore(storage).get(pageKey)).settings.secondLeft, 50, scenario);
+  }
+});
+
+test('cold-worker recovery coalesces concurrent actions and times out without blocking a later retry', async (t) => {
+  const { chrome, storage, sender, report } = await persistedSelectedPlayer();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let translations = 0;
+  const controller = new RuntimeBackgroundController(chrome, new StateStore(storage), {
+    discoveryTimeoutMs: 50, deepSeek: { async translateCaption() { translations += 1; return []; } },
+  });
+  let handshakes = 0;
+  let started;
+  const waiting = new Promise((resolve) => { started = resolve; });
+  chrome.onSend = async (_tabId, message) => {
+    if (message.type !== MESSAGE.PLAYER_DISCOVER) return { ok: true };
+    handshakes += 1;
+    started();
+    return new Promise(() => {});
+  };
+  const requests = [
+    controller.handle({ type: MESSAGE.CAPTION_TRANSLATE, text: 'Hello' }, sender),
+    controller.handle({ type: MESSAGE.CONTENT_POSITION_PATCH, secondLeft: 72 }, sender),
+  ];
+  await waiting;
+  t.mock.timers.tick(50);
+  for (const response of await Promise.all(requests)) {
+    assert.equal(response.ok, false);
+    assert.match(response.error, /Плеер не ответил/);
+  }
+  assert.equal(handshakes, 1);
+  assert.equal(translations, 0);
+  chrome.onSend = (_tabId, message) => message.type === MESSAGE.PLAYER_DISCOVER
+    ? controller.handle(report, sender) : { ok: true };
+  assert.equal((await controller.handle({ type: MESSAGE.CAPTION_TRANSLATE, text: 'Retry' }, sender)).ok, true);
+  assert.equal(translations, 1);
+});
+
+test('navigation during recovery cannot authorize an action from the previous page', async () => {
+  const { chrome, storage, pageKey, sender, report } = await persistedSelectedPlayer();
+  const controller = new RuntimeBackgroundController(chrome, new StateStore(storage));
+  chrome.onSend = async (_tabId, message) => {
+    if (message.type !== MESSAGE.PLAYER_DISCOVER) return { ok: true };
+    const response = await controller.handle(report, sender);
+    chrome.tabs.get = async () => ({ ...sender.tab, url: 'https://site.example/episode-2' });
+    await controller.handleTabNavigation(sender.tab.id, 'https://site.example/episode-2');
+    return response;
+  };
+  assert.equal((await controller.handle({ type: MESSAGE.CONTENT_POSITION_PATCH, secondLeft: 72 }, sender)).ok, false);
+  assert.equal((await new StateStore(storage).get(pageKey)).settings.secondLeft, 50);
+});
+
+test('state delivery targets the registered document rather than a reused frame slot', async () => {
+  const chrome = makeChrome();
+  const controller = new BackgroundController(chrome, new FakeStore());
+  await selectTranslationPlayer(controller);
+  assert.deepEqual(chrome.sent.at(-1).options, { frameId: 0, documentId: 'current-document' });
 });
 
 test('top-page navigation resets the old frame before a new page can reuse its subtitles', async () => {

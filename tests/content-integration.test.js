@@ -146,6 +146,30 @@ test('production bootstrap re-reports after reinjection without duplicate contro
   assert.equal(harness.document.videos[0].listenerCount(), firstListenerCount);
 });
 
+test('worker recovery replies only after the current player report is acknowledged', async () => {
+  const harness = await makeHarness();
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  let acknowledge;
+  harness.context.chrome.runtime.sendMessage = (message) => {
+    harness.reports.push(structuredClone(message));
+    return new Promise((resolve) => { acknowledge = resolve; });
+  };
+  const replies = [];
+  const keepChannelOpen = listener({ type: 'dualCaptions.player.discover' }, {}, (response) => replies.push(response));
+  assert.equal(keepChannelOpen, true);
+  assert.equal(harness.reports.at(-1).type, 'dualCaptions.player.report');
+  assert.equal(harness.reports.at(-1).player.videoIndex, 0);
+  assert.equal(harness.reports.at(-1).player.frameUrl, harness.context.location.href);
+  assert.equal(replies.length, 0);
+  acknowledge({ ok: true });
+  for (let index = 0; index < 4; index += 1) await Promise.resolve();
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].ok, true);
+  assert.equal(harness.onMessage.listeners.size, 1);
+});
+
 test('production content message renders only the selected original track safely', async () => {
   const harness = await makeHarness();
   vm.runInContext(harness.runtimeSource, harness.context);
@@ -596,6 +620,22 @@ test('production overlay moves inside a fullscreen player container and returns 
   assert.equal(overlay.parentElement, harness.document.documentElement);
 });
 
+test('restoring full state does not report the player back in an activation loop', async () => {
+  const harness = await makeHarness();
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  const reportCount = harness.reports.filter((message) => message.type === 'dualCaptions.player.report').length;
+
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'track-0' },
+    externalTracks: [],
+  }, {}, () => {});
+
+  assert.equal(harness.reports.filter((message) => message.type === 'dualCaptions.player.report').length, reportCount);
+});
+
 test('production overlay text changes do not trigger a discovery-report loop', async () => {
   const harness = await makeHarness();
   vm.runInContext(harness.runtimeSource, harness.context);
@@ -636,6 +676,39 @@ test('production mutation discovery detaches listeners from a replaced video', a
   assert.ok(second.listenerCount() > 0);
 });
 
+
+test('reset and destroy stop queued translation work and late responses cannot revive the overlay', async () => {
+  for (const action of ['reset', 'destroy']) {
+    const harness = await makeHarness();
+    let finishTranslation;
+    harness.context.chrome.runtime.sendMessage = (message) => {
+      harness.reports.push(structuredClone(message));
+      if (message.type === 'dualCaptions.caption.translate') return new Promise((resolve) => { finishTranslation = resolve; });
+      return Promise.resolve({ ok: true });
+    };
+    vm.runInContext(harness.runtimeSource, harness.context);
+    vm.runInContext(harness.contentSource, harness.context);
+    const controller = harness.context.__dualCaptionsControllerV3;
+    controller.handle({ type: 'dualCaptions.content.fullState', settings: { secondTrackId: 'track-0' }, externalTracks: [] });
+    if (action === 'reset') controller.handle({ type: 'dualCaptions.content.reset' });
+    else controller.destroy();
+    finishTranslation({ ok: true, data: { items: [] } });
+    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+    for (const scheduled of harness.scheduled.splice(0)) scheduled();
+    assert.equal(harness.reports.filter((message) => message.type === 'dualCaptions.caption.translate').length, 1, action);
+    const overlays = harness.document.documentElement.children.filter((child) => child.id === 'dual-captions-overlay');
+    if (action === 'destroy') assert.equal(overlays.length, 0);
+    else assert.equal(overlays[0].style.display, 'none');
+  }
+});
+
+test('extension invalidation does not throw from discovery or late metadata listeners', async () => {
+  const harness = await makeHarness();
+  harness.context.chrome.runtime.sendMessage = () => { throw new Error('Extension context invalidated.'); };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  assert.doesNotThrow(() => vm.runInContext(harness.contentSource, harness.context));
+  assert.doesNotThrow(() => harness.document.videos[0].dispatch('loadedmetadata'));
+});
 
 test('production reset clears page subtitles and restores native track mode', async () => {
   const harness = await makeHarness();

@@ -13,6 +13,19 @@ test('popup exposes one original track and explicit local YouTube subtitle contr
   assert.doesNotMatch(html, /id="firstTrack"|id="secondTrack"/);
 });
 
+test('popup has accessible job navigation and an always-available appearance preview', async () => {
+  const html = await fs.readFile(new URL('../popup.html', import.meta.url), 'utf8');
+  assert.match(html, /role="tablist"/);
+  for (const name of ['player', 'appearance', 'settings']) {
+    assert.match(html, new RegExp(`id="${name}Tab"[^>]*role="tab"[^>]*aria-controls="${name}Panel"`));
+    assert.match(html, new RegExp(`id="${name}Panel"[^>]*role="tabpanel"`));
+  }
+  assert.match(html, /id="subtitlePreview"/);
+  assert.match(html, /id="saveStatus"[^>]*role="status"/);
+  assert.match(html, /id="retryYoutubeSubtitles"/);
+  assert.doesNotMatch(html, /id="controls" hidden/);
+});
+
 test('popup lets the user choose DeepSeek Flash or Pro', async () => {
   const html = await fs.readFile(new URL('../popup.html', import.meta.url), 'utf8');
 

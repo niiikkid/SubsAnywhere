@@ -5,6 +5,7 @@
   const CONTROLLER_KEY = '__dualCaptionsControllerV3';
   const MESSAGE = Object.freeze({
     PLAYER_REPORT: 'dualCaptions.player.report',
+    PLAYER_DISCOVER: 'dualCaptions.player.discover',
     CONTENT_FULL_STATE: 'dualCaptions.content.fullState',
     CONTENT_SETTINGS: 'dualCaptions.content.settings',
     CONTENT_TRACKS: 'dualCaptions.content.tracks',
@@ -13,6 +14,11 @@
 
     CONTENT_RESET: 'dualCaptions.content.reset',
   });
+  function sendMessage(message) {
+    try { return chrome.runtime.sendMessage(message); }
+    catch { return Promise.resolve({ ok: false }); }
+  }
+
   function createController() {
     const state = {
       active: false,
@@ -42,7 +48,17 @@
     const inFlightTranslationKeys = new Set();
     let lastTranslationAt = 0;
     let translationDispatchScheduled = false;
+    let translationTimer;
+    let lifecycle = 0;
+    let destroyed = false;
 
+    function cancelPendingWork() {
+      lifecycle += 1;
+      queuedTranslations.length = 0;
+      queuedTranslationSet.clear();
+      clearTimeout(translationTimer);
+      translationDispatchScheduled = false;
+    }
 
 
     function ensureOverlay() {
@@ -81,7 +97,7 @@
         dragHandle.releasePointerCapture?.(event.pointerId);
         dragHandle.style.cursor = 'grab';
         render();
-        chrome.runtime.sendMessage({
+        sendMessage({
           type: MESSAGE.CONTENT_POSITION_PATCH,
           secondLeft: state.settings.secondLeft,
           secondBottom: state.settings.secondBottom,
@@ -256,8 +272,10 @@
     }
 
     function pumpTranslations() {
-      if (translationInFlight || translationDispatchScheduled || !queuedTranslations.length) return;
+      if (!state.active || destroyed || translationInFlight || translationDispatchScheduled || !queuedTranslations.length) return;
+      const generation = lifecycle;
       const run = () => {
+        if (generation !== lifecycle || !state.active || destroyed) return;
         translationDispatchScheduled = false;
         if (translationInFlight) return;
         const next = queuedTranslations.shift();
@@ -266,19 +284,19 @@
         translationInFlight = true;
         inFlightTranslationKeys.add(next.key);
         lastTranslationAt = Date.now();
-        chrome.runtime.sendMessage({
+        sendMessage({
           type: 'dualCaptions.caption.translate',
           text: next.sourceText,
           displayText: next.displayText,
           language: next.language,
         })
           .then((response) => {
-            if (response?.ok === true && Array.isArray(response?.data?.items)) rememberTranslation(next.key, response.data.items);
+            if (generation === lifecycle && response?.ok === true && Array.isArray(response?.data?.items)) rememberTranslation(next.key, response.data.items);
           })
           .catch(() => undefined)
           .finally(() => {
             translationInFlight = false;
-            render();
+            if (generation === lifecycle && !destroyed) render();
             inFlightTranslationKeys.delete(next.key);
             pumpTranslations();
           });
@@ -286,7 +304,7 @@
       const delay = Math.max(0, 750 - (Date.now() - lastTranslationAt));
       if (delay) {
         translationDispatchScheduled = true;
-        setTimeout(run, delay);
+        translationTimer = setTimeout(run, delay);
       }
       else run();
     }
@@ -319,6 +337,8 @@
     }
 
     function cacheSelectedBuiltInTrack(id, fallbackId, video) {
+      if (!state.active || destroyed || video !== manager.current().video || id !== state.settings.secondTrackId) return;
+      const generation = lifecycle;
       const selectionKey = `${state.settings.selectedPlayerKey}\u0000${id}`;
       if (!id || id.startsWith('external:') || cachedBuiltInSelections.has(selectionKey) || cachingBuiltInSelections.has(selectionKey)) return;
       if (state.settings.secondTrackCacheSource === selectionKey && state.settings.secondTrackCacheId) return;
@@ -353,18 +373,22 @@
         timeScale: 1,
       };
       localBuiltInTracks.set(selectionKey, snapshot);
-      chrome.runtime.sendMessage({
+      sendMessage({
         type: MESSAGE.TRACK_CACHE_BUILTIN,
         sourceKey: selectionKey,
         track: snapshot,
       }).then((response) => {
+        if (generation !== lifecycle) return;
         if (response?.ok === true) cachedBuiltInSelections.add(selectionKey);
         else throw new Error('Built-in subtitle cache was rejected');
       }).catch(() => {
+        if (generation !== lifecycle || destroyed) return;
         const retries = (state.builtInCacheRetries?.get(selectionKey) ?? 0) + 1;
         state.builtInCacheRetries ??= new Map();
         state.builtInCacheRetries.set(selectionKey, retries);
-        if (retries < 3) setTimeout(() => cacheSelectedBuiltInTrack(id, fallbackId, video), 1_000);
+        if (retries < 3) setTimeout(() => {
+          if (generation === lifecycle) cacheSelectedBuiltInTrack(id, fallbackId, video);
+        }, 1_000);
       }).finally(() => cachingBuiltInSelections.delete(selectionKey));
     }
 
@@ -494,7 +518,7 @@
 
     function render() {
       const { video } = manager.current();
-      if (!video || !state.active) {
+      if (!video || !state.active || destroyed) {
         if (state.root) state.root.style.display = 'none';
         return;
       }
@@ -530,7 +554,7 @@
       try {
         sourceName = decodeURIComponent(new URL(video.currentSrc || video.src || '', location.href).pathname.split('/').pop() || '');
       } catch { /* source name stays empty */ }
-      chrome.runtime.sendMessage({
+      return sendMessage({
         type: MESSAGE.PLAYER_REPORT,
         player: {
           title: document.title,
@@ -540,7 +564,7 @@
           sourceName: sourceName.slice(0, 240),
           tracks: runtime.trackChoices(video.textTracks),
         },
-      }).catch(() => undefined);
+      }).catch(() => ({ ok: false }));
     }
 
     const manager = runtime.createVideoManager({ report, render, trackRemoved: restoreTrackMode });
@@ -553,11 +577,16 @@
     }
 
     function handle(message) {
+      if (message?.type === MESSAGE.PLAYER_DISCOVER) {
+        const { video, index } = manager.current();
+        return video && !destroyed ? report(video, index) : { ok: false };
+      }
       if (message?.type === MESSAGE.CONTENT_FULL_STATE) {
         state.settings = runtime.normalizeSettings(message.settings);
         state.externalTracks = Array.isArray(message.externalTracks) ? message.externalTracks : [];
         state.active = true;
-        discover();
+        // Reports restore state; reporting that restoration creates an endless handshake.
+        if (!manager.current().video) discover();
         render();
         return { ok: true };
       }
@@ -576,6 +605,7 @@
       }
 
       if (message?.type === MESSAGE.CONTENT_RESET) {
+        cancelPendingWork();
         const { video } = manager.current();
         restoreModes(video);
         state.settings = runtime.normalizeSettings();
@@ -593,6 +623,10 @@
 
     const messageListener = (message, _sender, reply) => {
       const result = handle(message);
+      if (result?.then) {
+        result.then(reply, () => reply({ ok: false }));
+        return true;
+      }
       if (result) reply(result);
     };
     chrome.runtime.onMessage.addListener(messageListener);
@@ -618,6 +652,9 @@
       discover,
       handle,
       destroy() {
+        destroyed = true;
+        state.active = false;
+        cancelPendingWork();
         restoreModes(manager.current().video);
         manager.destroy();
         for (const dispose of cleanup.splice(0).reverse()) dispose();

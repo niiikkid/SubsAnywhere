@@ -68,3 +68,29 @@ test('LocalSubtitleClient sends only validated video ids to the fixed local serv
   assert.equal(calls[0].options.headers['X-SubsAnywhere-Client'], 'extension-v1');
   await assert.rejects(() => client.generate('../escape'), /YouTube video ID/i);
 });
+
+test('local requests reject malformed success payloads rather than silently stopping polling', async () => {
+  const client = new LocalSubtitleClient(async () => ({ ok: true, json: async () => ({ status: 'unknown' }) }));
+  await assert.rejects(() => client.status('rwnyaH6cTDE'), /неверный ответ/);
+});
+
+test('local requests carry bounded abort signals and never follow redirects', async () => {
+  let captured;
+  const client = new LocalSubtitleClient(async (_url, options) => {
+    captured = options;
+    return { ok: true, json: async () => ({ status: 'missing' }) };
+  });
+  await client.status('rwnyaH6cTDE');
+  assert.ok(captured.signal instanceof AbortSignal);
+  assert.equal(captured.redirect, 'error');
+  assert.equal(captured.credentials, 'omit');
+  assert.equal(captured.cache, 'no-store');
+});
+
+test('server restart and resource failures explain recovery in Russian', async () => {
+  const client = new LocalSubtitleClient(async () => ({
+    ok: true,
+    json: async () => ({ status: 'error', error_code: 'interrupted', error: 'Generation interrupted by server restart; retry.' }),
+  }));
+  await assert.rejects(() => client.status('rwnyaH6cTDE'), /Сервер перезапущен.*запустите.*заново/i);
+});
