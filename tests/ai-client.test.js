@@ -112,25 +112,27 @@ test('DeepSeek prepares concise click translations for one caption only', async 
     { start: 0, end: 1, text: 'I', dictionary: 'я', context: 'я' },
     { start: 2, end: 9, text: 'gave up', dictionary: 'сдаваться', context: 'сдался' },
   ]);
-  assert.equal(request.max_tokens, 800);
+  assert.equal(request.max_tokens, 2400);
   assert.equal(request.model, 'deepseek-v4-pro');
   assert.deepEqual(request.thinking, { type: 'disabled' });
   assert.equal('reasoning_effort' in request, false);
-  assert.match(request.messages[0].content, /phrases/i);
+  assert.match(request.messages[0].content, /phrasal verbs, idioms and fixed expressions/i);
   assert.match(request.messages[0].content, /every English word exactly once/i);
   assert.match(request.messages[0].content, /multi-word/i);
-  assert.match(request.messages[0].content, /2-3 short Russian variants/i);
+  assert.match(request.messages[0].content, /articles, pronouns, auxiliaries/i);
+  assert.match(request.messages[0].content, /Before returning JSON/i);
+  assert.match(request.messages[0].content, /Example input:/);
+  assert.deepEqual(JSON.parse(request.messages[1].content), { caption: 'I gave up.' });
   assert.match(request.messages[1].content, /I gave up\./);
 });
 
-test('DeepSeek repairs an incomplete response so every English word is translated', async () => {
+test('DeepSeek keeps valid partial translations without a repair request', async () => {
   const storage = new MemoryStorage();
   const credentials = new AiCredentialStore(storage);
   await credentials.patch({ apiKey: 'test-key' });
   const requests = [];
   const replies = [
     { items: [{ text: 'gave up', dictionary: 'сдаваться', context: 'сдался' }] },
-    { items: [{ text: 'I', dictionary: 'я', context: 'я' }] },
   ];
   const client = new DeepSeekClient(async (_url, options) => {
     requests.push(JSON.parse(options.body));
@@ -141,12 +143,10 @@ test('DeepSeek repairs an incomplete response so every English word is translate
 
   const result = await client.translateCaption('I gave up.');
 
+  assert.equal(requests.length, 1);
   assert.deepEqual(result, [
-    { start: 0, end: 1, text: 'I', dictionary: 'я', context: 'я' },
     { start: 2, end: 9, text: 'gave up', dictionary: 'сдаваться', context: 'сдался' },
   ]);
-  assert.equal(requests.length, 2);
-  assert.match(requests[1].messages[1].content, /I/);
 });
 
 test('DeepSeek translates a linked Chinese sentence in one request', async () => {
@@ -171,8 +171,11 @@ test('DeepSeek translates a linked Chinese sentence in one request', async () =>
       { pinyin: 'shì jiè', translation: 'мир' },
     ],
   });
-  assert.equal(request.max_tokens, 500);
+  assert.equal(request.max_tokens, 1600);
   assert.match(request.messages[0].content, /Chinese subtitle sentence/i);
+  assert.match(request.messages[0].content, /Before returning JSON/i);
+  assert.match(request.messages[0].content, /Example input:/);
+  assert.deepEqual(JSON.parse(request.messages[1].content), { caption: '你好，世界', pinyin: 'nǐ hǎo, shì jiè' });
   assert.match(request.messages[1].content, /你好，世界/);
   assert.match(request.messages[1].content, /nǐ hǎo, shì jiè/);
 });
