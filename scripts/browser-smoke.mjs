@@ -242,7 +242,10 @@ try {
         const box = cell.getBoundingClientRect();
         return box.left >= 0 && box.right <= innerWidth && cell.scrollWidth <= cell.clientWidth + 1
           && meaning.getBoundingClientRect().bottom <= source.getBoundingClientRect().top + 1
-          && parseFloat(getComputedStyle(meaning).fontSize) < parseFloat(getComputedStyle(source).fontSize);
+          && parseFloat(getComputedStyle(meaning).fontSize) < parseFloat(getComputedStyle(source).fontSize)
+          && getComputedStyle(meaning).whiteSpace === 'nowrap'
+          && meaning.scrollHeight <= meaning.clientHeight + 1
+          && meaning.title === meaning.textContent;
       });
     })()`);
     assert.equal(geometry, true, 'Translations stay above source, smaller and inside wrapping cells');
@@ -356,7 +359,7 @@ try {
   assert.ok(stressResults.some(result => result.scrollable), 'The height-overflow fallback must actually be exercised');
   assert.deepEqual(errors, [], 'Chrome must not report runtime exceptions');
   console.log(`PASS: balanced bookstore caption; edge positions and bounded tooltips; ${stressResults.length} short/long/empty-glossary/multiline cases; lossless tall-caption scrolling; cached mode toggles; paused player resize.`);
-  console.log('PASS: inline mode persists across popup reopen; English/pinyin glossary cells wrap long meanings above the source in real Chrome (offline fixtures).');
+  console.log('PASS: inline mode persists across popup reopen; English/pinyin glossary cells truncate long meanings and expose the full hover text in real Chrome (offline fixtures).');
   console.log('PASS: actual unpacked extension loads; appearance works without a player; input survives popup close/reopen; real iframe video/native captions render; reinjection creates no duplicate overlay; real content position message persists after actual service-worker shutdown without reconnecting; no page exceptions or horizontal overflow.');
   console.log(`Screenshot: ${join(artifacts, 'appearance-smoke.png')}`);
 } finally {

@@ -422,6 +422,7 @@
 
     function renderInlineCaption(target, text, items) {
       const segments = runtime.glossarySegments(text, items);
+      const hiddenPinyinParticles = ['de', 'le', 'zhe'];
       if (!segments.some((segment) => segment.item)) return false;
       const sentenceItem = items.find((item) => item?.isSentenceTranslation && typeof item.dictionary === 'string');
       const sentenceText = sentenceItem?.dictionary.trim();
@@ -472,8 +473,15 @@
           const cell = document.createElement('span');
           cell.style.cssText = 'display:inline-flex;vertical-align:bottom;flex-direction:column;align-items:center;min-width:0;width:max-content;max-width:calc(100% - .18em);box-sizing:border-box;margin:.12em .09em;padding:.12em .22em;border:1px solid rgba(255,255,255,.13);border-radius:6px;color:inherit;pointer-events:auto;cursor:pointer;overflow-wrap:anywhere;';
           const meaning = document.createElement('span');
-          meaning.textContent = segment.translation;
-          meaning.style.cssText = 'display:block;width:100%;max-width:18em;font-size:.58em;font-weight:400;line-height:1.3;opacity:.8;margin-bottom:.2em;white-space:normal;overflow-wrap:anywhere;';
+          const displayedParticle = segment.text.trim().toLowerCase();
+          const hidesParticleMeaning = hiddenPinyinParticles.includes(displayedParticle)
+            && Array.isArray(segment.item?.glossary)
+            && segment.item.glossary.some((term) => (
+              typeof term?.pinyin === 'string' && term.pinyin.trim().toLowerCase() === displayedParticle
+            ));
+          meaning.textContent = hidesParticleMeaning ? '' : segment.translation;
+          meaning.title = hidesParticleMeaning ? '' : segment.translation;
+          meaning.style.cssText = `display:${hidesParticleMeaning ? 'none' : 'block'};width:100%;max-width:18em;font-size:.4em;font-weight:400;line-height:1.3;opacity:.8;margin-bottom:.2em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
           const source = document.createElement('span');
           source.textContent = part;
           previousSource = source;

@@ -168,6 +168,10 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
     assert.match(sentenceTranslation.style.cssText, /font-size:\.58em/);
     assert.equal(cells.className, 'dual-captions-inline');
     assert.equal(cells.children[0].children[0].textContent, item.glossary[0].translation);
+    assert.match(cells.children[0].children[0].style.cssText, /font-size:\.4em/);
+    assert.match(cells.children[0].children[0].style.cssText, /white-space:nowrap/);
+    assert.match(cells.children[0].children[0].style.cssText, /text-overflow:ellipsis/);
+    assert.equal(cells.children[0].children[0].title, item.glossary[0].translation);
     assert.equal(cells.children[0].children[1].textContent, chinese ? 'nǐ hǎo,' : 'Hello,');
 
     if (chinese) assert.equal(caption.children[1].textContent, '你好，世界');
@@ -176,6 +180,31 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
     listener({ type: 'dualCaptions.content.settings', settings: { ...settings, inlineTranslations: false } }, {}, () => {});
     assert.notEqual(caption.children[0].className, 'dual-captions-inline');
     assert.equal(requests, 1);
+  }
+});
+
+test('inline pinyin cells hide grammatical meanings for untoned de, le and zhe', async () => {
+  for (const particle of ['de', 'le', 'zhe']) {
+    const harness = await makeHarness();
+    harness.context.chrome.runtime.sendMessage = async (message) => ({ ok: true, data: { items: [{
+      start: 0, end: message.displayText.length, dictionary: 'Учебный пример', isSentenceTranslation: true,
+      glossary: [{ pinyin: particle, translation: 'грамматическая частица' }],
+    }] } });
+    vm.runInContext(harness.runtimeSource, harness.context);
+    vm.runInContext(harness.contentSource, harness.context);
+    [...harness.onMessage.listeners][0]({ type: 'dualCaptions.content.fullState',
+      settings: { secondTrackId: 'external:mine', inlineTranslations: true },
+      externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: `\u2063wǒ ${particle} shū\n\u2064示例` }] }],
+    }, {}, () => {});
+    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+
+    const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+    const cells = overlay.children[0].children[0].children[1];
+    const particleCell = cells.children.find((cell) => cell.children.at(-1)?.textContent === particle);
+    assert.ok(particleCell);
+    assert.equal(particleCell.children[0].textContent, '');
+    assert.match(particleCell.children[0].style.cssText, /display:none/);
+    assert.equal(particleCell.children.at(-1).textContent, particle);
   }
 });
 
