@@ -48,7 +48,11 @@ class FakeElement extends FakeTarget {
     this.children = [];
     this.append(...children);
   }
-  getBoundingClientRect() { return { left: 10, top: 20, width: 800, height: 450 }; }
+  getBoundingClientRect() {
+    const width = this.className === 'subs-anywhere-original' ? 200 : 800;
+    const height = this.className === 'subs-anywhere-original' ? 60 : 450;
+    return { left: 10, top: 20, right: 10 + width, bottom: 20 + height, width, height };
+  }
   remove() {
     if (this.parentElement) {
       this.parentElement.children = this.parentElement.children.filter((item) => item !== this);
@@ -159,7 +163,7 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
     assert.equal(cells.className, 'dual-captions-inline');
     assert.equal(cells.children[0].children[0].textContent, item.glossary[0].translation);
     assert.equal(cells.children[0].children[1].textContent, chinese ? 'nǐ hǎo,' : 'Hello,');
-    assert.equal(caption.style.width, '92%');
+
     if (chinese) assert.equal(caption.children[1].textContent, '你好，世界');
     cells.children[0].dispatch('click', { stopPropagation() {} });
     assert.equal(overlay.children.length, 3);
@@ -167,6 +171,67 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
     assert.notEqual(caption.children[0].className, 'dual-captions-inline');
     assert.equal(requests, 1);
   }
+});
+
+test('empty cues and track switches hide the caption background in either display mode', async () => {
+  const harness = await makeHarness();
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  const video = harness.document.videos[0];
+  for (const inlineTranslations of [false, true, false]) {
+    const settings = { secondTrackId: 'external:mine', subtitleBackground: true, inlineTranslations };
+    video.currentTime = 1.5;
+    listener({ type: 'dualCaptions.content.fullState', settings,
+      externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: 'Hello' }] }],
+    }, {}, () => {});
+    const caption = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay').children[0];
+    assert.equal(caption.style.display, 'block');
+    video.currentTime = 10;
+    video.dispatch('timeupdate');
+    assert.equal(caption.style.display, 'none', 'A cue gap must not paint a padded black strip');
+    listener({ type: 'dualCaptions.content.settings', settings: { ...settings, secondTrackId: '' } }, {}, () => {});
+    assert.equal(caption.style.display, 'none');
+  }
+});
+
+test('inline wrapping keeps quotation marks attached and preserves explicit source line breaks', async () => {
+  const harness = await makeHarness();
+  harness.context.chrome.runtime.sendMessage = async (message) => ({ ok: true, data: { items: [{
+    start: 0, end: message.displayText?.length ?? 0, dictionary: 'Пример',
+    glossary: [{ text: 'Hello', translation: 'привет' }, { text: 'world', translation: 'мир' }],
+  }] } });
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  [...harness.onMessage.listeners][0]({ type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'external:mine', inlineTranslations: true },
+    externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: 'He said "Hello",\n(«world»)!' }] }],
+  }, {}, () => {});
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+  const caption = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay').children[0];
+  const cells = caption.children[0].children;
+  assert.deepEqual(cells.map((cell) => cell.children[1]?.textContent ?? cell.textContent), ['He', 'said', '"Hello",', '\n', '(«world»)!']);
+});
+
+test('dragging a clamped caption starts from its visible position rather than its saved anchor', async () => {
+  const harness = await makeHarness();
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  [...harness.onMessage.listeners][0]({ type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'external:mine', secondLeft: 96, secondBottom: 95 },
+    externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: 'Hello' }] }],
+  }, {}, () => {});
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  const [caption, handle] = overlay.children;
+  const visible = { left: 602, top: 28, right: 802, bottom: 88, width: 200, height: 60 };
+  caption.getBoundingClientRect = () => visible;
+  const event = { button: 0, pointerId: 1, clientX: 795, clientY: 23, preventDefault() {}, stopPropagation() {} };
+  handle.dispatch('pointerdown', event);
+  handle.dispatch('pointerup', { ...event, clientX: event.clientX - 20, clientY: event.clientY + 20 });
+  const saved = harness.reports.findLast((message) => message.type === 'dualCaptions.content.positionPatch');
+  const root = overlay.getBoundingClientRect();
+  assert.equal(saved.secondLeft, ((visible.left - root.left + visible.width / 2) / root.width) * 100 - (20 / root.width) * 100);
+  assert.equal(saved.secondBottom, ((root.bottom - visible.bottom) / root.height) * 100 - (20 / root.height) * 100);
 });
 
 test('production bootstrap re-reports after reinjection without duplicate controller listeners', async () => {
@@ -224,8 +289,8 @@ test('production content message renders only the selected original track safely
   assert.ok(overlay);
   assert.equal(overlay.children.length, 2);
   assert.equal(overlay.children[0].children.map((child) => child.textContent).join(''), 'Imported');
-  assert.equal(overlay.children[0].style.bottom, '8%');
-  assert.equal(overlay.children[0].style.left, '50%');
+  assert.equal(overlay.children[0].style.bottom, '36px');
+  assert.equal(overlay.children[0].style.left, '400px');
   assert.equal(overlay.children[1].textContent, '⠿');
 });
 

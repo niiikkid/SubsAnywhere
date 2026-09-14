@@ -1,0 +1,35 @@
+{
+  "sourceUrl": "https://www.youtube.com/watch?v=0Zaxca2sUGs",
+  "note": "Source text and times copied from the locally cached YouTube SRT. Russian translations are hand-authored offline layout fixtures, not AI responses.",
+  "captions": [
+    {
+      "time": 1.2,
+      "text": "⁣hāi\n⁤嗨",
+      "dictionary": "Привет!",
+      "glossary": [{ "pinyin": "hāi", "translation": "привет" }]
+    },
+    {
+      "time": 11,
+      "text": "⁣zhōng guó de shū diàn shì shén me yàng de\n⁤中国的书店是什么样的",
+      "dictionary": "Как выглядят книжные магазины в Китае?",
+      "glossary": [
+        { "pinyin": "zhōng guó de", "translation": "китайские" },
+        { "pinyin": "shū diàn", "translation": "книжные магазины" },
+        { "pinyin": "shì shén me yàng de", "translation": "как выглядят" }
+      ]
+    },
+    {
+      "time": 17,
+      "text": "⁣shùn biàn xué xí yī xiē jiǎn dān rì cháng de zhōng wén\n⁤顺便学习一些简单日常的中文",
+      "dictionary": "Заодно выучим несколько простых повседневных выражений на китайском.",
+      "glossary": [
+        { "pinyin": "shùn biàn", "translation": "заодно" },
+        { "pinyin": "xué xí", "translation": "изучать" },
+        { "pinyin": "yī xiē", "translation": "немного, несколько" },
+        { "pinyin": "jiǎn dān", "translation": "простой" },
+        { "pinyin": "rì cháng de", "translation": "повседневный" },
+        { "pinyin": "zhōng wén", "translation": "китайский язык" }
+      ]
+    }
+  ]
+}

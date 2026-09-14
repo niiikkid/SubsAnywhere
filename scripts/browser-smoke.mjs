@@ -214,13 +214,13 @@ try {
         fixtureRequests++;
         return { ok: true, data: { items: [{ start: 0, end: message.displayText.length,
           dictionary: 'Учебный пример перевода', isSentenceTranslation: true,
-          glossary: message.language === 'zh' ? [
+          glossary: window.fixtureGlossary ?? (message.language === 'zh' ? [
             { pinyin: 'nǐ hǎo', translation: 'здравствуйте, приветствую вас' },
             { pinyin: 'shì jiè', translation: 'мир, окружающий нас мир во всём его многообразии' },
           ] : [
             { text: 'Hello', translation: 'здравствуйте, приветствую вас' },
             { text: 'world', translation: 'мир, окружающий нас мир во всём его многообразии' },
-          ] }] } };
+          ]) }] } };
       }
     } };
   })()`);
@@ -230,7 +230,7 @@ try {
     const text = language === 'zh' ? '\u2063nǐ hǎo, shì jiè\n\u2064你好，世界' : 'Hello, world';
     await displayEval(`(async () => {
       fixtureListeners[0]({ type: 'dualCaptions.content.fullState',
-        settings: { secondTrackId: 'external:demo', fontSize: 32, inlineTranslations: true },
+        settings: { secondTrackId: 'external:demo', fontSize: 32, inlineTranslations: true, subtitleBackground: true },
         externalTracks: [{ id: 'demo', cues: [{ start: 0, end: 999, text: ${JSON.stringify(text)} }] }]
       }, {}, () => {});
       await new Promise(resolve => setTimeout(resolve, 850));
@@ -246,11 +246,116 @@ try {
       });
     })()`);
     assert.equal(geometry, true, 'Translations stay above source, smaller and inside wrapping cells');
+    assert.equal(await displayEval(`document.querySelector('.subs-anywhere-original').getBoundingClientRect().width < 750`),
+      true, 'A short glossary must not paint a full-width background');
     const { data } = await cdp('Page.captureScreenshot', { format: 'png' }, displaySession);
     await writeFile(join(artifacts, `inline-${language}-smoke.png`), Buffer.from(data, 'base64'));
   }
   assert.equal(await displayEval('fixtureRequests'), 2);
+  const bookstore = JSON.parse(await readFile(join(root, 'tests/fixtures/bookstore-captions.json'), 'utf8'));
+  const longCaption = bookstore.captions[2];
+  await displayEval(`(async () => {
+    document.querySelector('video').style.cssText = 'width:873px;height:491px;display:block';
+    fixtureGlossary = ${JSON.stringify(longCaption.glossary)};
+    fixtureListeners[0]({ type: 'dualCaptions.content.fullState',
+      settings: { secondTrackId: 'external:demo', fontSize: 28, inlineTranslations: true, subtitleBackground: true },
+      externalTracks: [{ id: 'demo', cues: [{ start: 0, end: 999, text: ${JSON.stringify(longCaption.text)} }] }]
+    }, {}, () => {});
+    await new Promise(resolve => setTimeout(resolve, 850));
+  })()`);
+  const rows = await displayEval(`(() => {
+    const counts = {};
+    for (const cell of document.querySelector('.dual-captions-inline').children) {
+      const y = Math.round(cell.getBoundingClientRect().bottom);
+      counts[y] = (counts[y] || 0) + 1;
+    }
+    return Object.values(counts);
+  })()`);
+  assert.deepEqual(rows, [3, 3], 'The bookstore caption should balance rows instead of stranding one phrase');
+  assert.equal(await displayEval(`document.querySelector('.subs-anywhere-original').getBoundingClientRect().width < 600`),
+    true, 'Wrapped background must hug the actual balanced rows, not the maximum available width');
+  const { data: bookstoreScreenshot } = await cdp('Page.captureScreenshot', { format: 'png' }, displaySession);
+  await writeFile(join(artifacts, 'bookstore-balanced.png'), Buffer.from(bookstoreScreenshot, 'base64'));
+  for (const [width, height, left, bottom, fontSize] of [
+    [1000, 600, 5, 95, 32], [360, 240, 95, 0, 48], [640, 360, 50, 22, 32],
+  ]) {
+    await displayEval(`(() => {
+      document.querySelector('video').style.cssText = 'width:${width}px;height:${height}px;display:block';
+      fixtureListeners[0]({ type: 'dualCaptions.content.settings', settings: {
+        secondTrackId: 'external:demo', inlineTranslations: true, subtitleBackground: true,
+        secondLeft: ${left}, secondBottom: ${bottom}, fontSize: ${fontSize}
+      } }, {}, () => {});
+    })()`);
+    const bounds = await displayEval(`(() => {
+      const root = document.querySelector('#dual-captions-overlay').getBoundingClientRect();
+      const caption = document.querySelector('.subs-anywhere-original');
+      const box = caption.getBoundingClientRect();
+      return box.left >= root.left && box.right <= root.right && box.top >= root.top && box.bottom <= root.bottom
+        && caption.scrollWidth <= caption.clientWidth + 1;
+    })()`);
+    assert.equal(bounds, true, 'Large captions must remain inside small players and at extreme saved positions');
+    await displayEval(`document.querySelector('.dual-captions-inline [role="button"]').click()`);
+    assert.equal(await displayEval(`(() => {
+      const root = document.querySelector('#dual-captions-overlay').getBoundingClientRect();
+      const tip = document.querySelector('[role="tooltip"]').getBoundingClientRect();
+      return tip.left >= root.left && tip.right <= root.right && tip.top >= root.top && tip.bottom <= root.bottom;
+    })()`), true, 'The full translation must remain reachable at every player edge');
+    await displayEval(`document.querySelector('[aria-label="Закрыть перевод"]').click()`);
+  }
+  const stressCases = [
+    ...bookstore.captions,
+    { text: 'WordWithoutBreaks'.repeat(18), glossary: [{ text: 'WordWithoutBreaks'.repeat(18), translation: 'ОченьДлинноеЗначение'.repeat(8) }] },
+    { text: 'Hello '.repeat(50) + 'world!', glossary: [{ text: 'Hello', translation: 'здравствуйте, приветствую вас' }] },
+    { text: '«Hello»,\n(world)!', glossary: [{ text: 'Hello', translation: 'привет' }, { text: 'world', translation: 'мир' }] },
+    { text: 'No glossary here', glossary: [] },
+  ];
+  const stressResults = await displayEval(`(async () => {
+    const results = [];
+    const video = document.querySelector('video');
+    video.style.cssText = 'width:360px;height:240px;display:block';
+    const settings = { secondTrackId: 'external:stress', inlineTranslations: true, subtitleBackground: true, fontSize: 48 };
+    const show = text => fixtureListeners[0]({ type: 'dualCaptions.content.fullState', settings,
+      externalTracks: [{ id: 'stress', cues: [{ start: 0, end: 999, text }] }]
+    }, {}, () => {});
+    for (const sample of ${JSON.stringify(stressCases)}) {
+      fixtureGlossary = sample.glossary;
+      show(sample.text);
+      await new Promise(resolve => setTimeout(resolve, 850));
+      const caption = document.querySelector('.subs-anywhere-original');
+      const root = document.querySelector('#dual-captions-overlay').getBoundingClientRect();
+      const box = caption.getBoundingClientRect();
+      const cells = [...document.querySelectorAll('.dual-captions-inline [role="button"]')];
+      const original = cells.map(cell => cell.children[1].textContent).join('');
+      const visibleText = sample.text.startsWith('\u2063') ? sample.text.split('\\n')[0].slice(1) : sample.text;
+      results.push({ bounded: box.left >= root.left && box.right <= root.right + 1 && box.top >= root.top && box.bottom <= root.bottom + 1,
+        overflow: caption.scrollWidth > caption.clientWidth + 1,
+        preserved: !cells.length || original.replace(/\\s/g, '') === visibleText.replace(/\\s/g, ''),
+        scrollable: caption.scrollHeight > caption.clientHeight });
+      if (caption.scrollHeight > caption.clientHeight) {
+        caption.scrollTop = caption.scrollHeight;
+        if (!caption.scrollTop) throw new Error('Tall caption is not scrollable');
+      }
+      const requests = fixtureRequests;
+      for (const inlineTranslations of [false, true]) {
+        fixtureListeners[0]({ type: 'dualCaptions.content.settings', settings: { ...settings, inlineTranslations } }, {}, () => {});
+      }
+      if (fixtureRequests !== requests) throw new Error('Display toggles must not spend more translation requests');
+      show('');
+      if (caption.getBoundingClientRect().height !== 0) throw new Error('Empty caption paints a background');
+    }
+    // Theatre-mode resize while paused: no synthetic window resize or cue event.
+    show('Hello, world');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    video.style.width = '700px';
+    await new Promise(resolve => setTimeout(resolve, 100));
+    if (document.querySelector('#dual-captions-overlay').getBoundingClientRect().width !== 700) throw new Error('ResizeObserver did not track the paused player');
+    return results;
+  })()`);
+  assert.equal(stressResults.length, stressCases.length);
+  assert.ok(stressResults.every(result => result.bounded && !result.overflow && result.preserved), JSON.stringify(stressResults));
+  assert.ok(stressResults.some(result => result.scrollable), 'The height-overflow fallback must actually be exercised');
   assert.deepEqual(errors, [], 'Chrome must not report runtime exceptions');
+  console.log(`PASS: balanced bookstore caption; edge positions and bounded tooltips; ${stressResults.length} short/long/empty-glossary/multiline cases; lossless tall-caption scrolling; cached mode toggles; paused player resize.`);
   console.log('PASS: inline mode persists across popup reopen; English/pinyin glossary cells wrap long meanings above the source in real Chrome (offline fixtures).');
   console.log('PASS: actual unpacked extension loads; appearance works without a player; input survives popup close/reopen; real iframe video/native captions render; reinjection creates no duplicate overlay; real content position message persists after actual service-worker shutdown without reconnecting; no page exceptions or horizontal overflow.');
   console.log(`Screenshot: ${join(artifacts, 'appearance-smoke.png')}`);

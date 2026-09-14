@@ -117,11 +117,12 @@ function drawPreview() {
     preview.textContent = '';
     for (const [source, translation] of [['One line', 'одна строка'], ['at a time.', 'за раз, по очереди']]) {
       const cell = document.createElement('span');
-      cell.style.cssText = 'display:inline-flex;flex-direction:column;vertical-align:bottom;max-width:10em;margin:.15em .2em;padding:.15em .25em;border:1px solid #ffffff20;border-radius:6px;';
+      cell.style.cssText = 'display:inline-flex;flex-direction:column;align-items:center;vertical-align:bottom;width:max-content;max-width:calc(100% - .18em);box-sizing:border-box;margin:.12em .09em;padding:.12em .22em;border:1px solid #ffffff20;border-radius:6px;';
       const meaning = document.createElement('span');
-      meaning.style.cssText = 'font-size:.58em;font-weight:400;line-height:1.25;opacity:.68;white-space:normal;overflow-wrap:anywhere;';
+      meaning.style.cssText = 'width:100%;max-width:18em;font-size:.58em;font-weight:400;line-height:1.3;opacity:.8;margin-bottom:.2em;white-space:normal;overflow-wrap:anywhere;';
       meaning.textContent = translation;
       const original = document.createElement('span');
+      original.style.cssText = 'max-width:100%;overflow-wrap:anywhere;';
       original.textContent = source;
       cell.append(meaning, original);
       preview.append(cell);

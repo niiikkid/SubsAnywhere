@@ -29,9 +29,13 @@
       dragHandle: null,
       tooltip: null,
       tooltipItem: null,
+      tooltipAnchor: null,
       drag: null,
       renderedCaptionKey: '',
       renderedCaptionItems: null,
+      inlineCells: null,
+      characterLine: null,
+      captionLayoutKey: '',
     };
     const builtInTrackResolver = runtime.createBuiltInTrackResolver();
     const originalTrackModes = new Map();
@@ -70,12 +74,13 @@
       const makeLayer = (name) => {
         const element = document.createElement('div');
         element.className = name;
-        element.style.cssText = 'position:absolute;left:50%;max-width:92%;color:#fff;text-align:center;font-family:Arial,sans-serif;font-weight:700;line-height:1.3;letter-spacing:.01em;white-space:pre-line;text-shadow:0 1px 3px rgba(0,0,0,.92);transform:translateX(-50%);';
+        element.style.cssText = 'position:absolute;left:50%;width:max-content;max-width:92%;box-sizing:border-box;border-radius:8px;color:#fff;text-align:center;font-family:Arial,sans-serif;font-weight:700;line-height:1.3;letter-spacing:.01em;white-space:pre-line;overflow-wrap:anywhere;text-shadow:0 1px 3px rgba(0,0,0,.92);transform:translateX(-50%);';
         root.append(element);
         return element;
       };
       state.second = makeLayer('subs-anywhere-original');
       state.second.style.pointerEvents = 'auto';
+      state.second.addEventListener('scroll', dismissTooltip);
       const dragHandle = document.createElement('button');
       dragHandle.type = 'button';
       dragHandle.textContent = '⠿';
@@ -105,12 +110,16 @@
       };
       dragHandle.addEventListener('pointerdown', (event) => {
         if (event.button !== 0) return;
+        const root = state.root.getBoundingClientRect();
+        const caption = state.second.getBoundingClientRect();
+        if (!root.width || !root.height) return;
+        dismissTooltip();
         state.drag = {
           pointerId: event.pointerId,
           pointerX: event.clientX,
           pointerY: event.clientY,
-          secondLeft: state.settings.secondLeft,
-          secondBottom: state.settings.secondBottom,
+          secondLeft: ((caption.left - root.left + caption.width / 2) / root.width) * 100,
+          secondBottom: ((root.top + root.height - caption.top - caption.height) / root.height) * 100,
         };
         dragHandle.style.cursor = 'grabbing';
         dragHandle.setPointerCapture?.(event.pointerId);
@@ -130,6 +139,7 @@
       state.tooltip?.remove();
       state.tooltip = null;
       state.tooltipItem = null;
+      state.tooltipAnchor = null;
     }
 
     function makeCaptionFocusable(element) {
@@ -204,12 +214,31 @@
         tooltip.append(close, dictionary);
       }
       state.root.append(tooltip);
-      const word = anchor.getBoundingClientRect();
-      const rootRect = state.root.getBoundingClientRect();
-      tooltip.style.left = `${Math.max(20, Math.min(rootRect.width - 20, word.left - rootRect.left + word.width / 2))}px`;
-      tooltip.style.top = `${Math.max(34, word.top - rootRect.top - 6)}px`;
       state.tooltip = tooltip;
       state.tooltipItem = item;
+      state.tooltipAnchor = anchor;
+      positionTooltip();
+    }
+
+    function positionTooltip() {
+      if (!state.tooltip || !state.tooltipAnchor?.isConnected) return;
+      const root = state.root.getBoundingClientRect();
+      const anchor = state.tooltipAnchor.getBoundingClientRect();
+      const tip = state.tooltip;
+      tip.style.boxSizing = 'border-box';
+      tip.style.minWidth = '0';
+      tip.style.width = 'max-content';
+      tip.style.maxWidth = `${Math.max(0, Math.min(360, root.width - 16))}px`;
+      tip.style.maxHeight = `${Math.max(0, root.height - 16)}px`;
+      tip.style.overflowY = 'auto';
+      tip.style.overflowWrap = 'anywhere';
+      tip.style.overscrollBehavior = 'contain';
+      tip.style.transform = 'none';
+      const box = tip.getBoundingClientRect();
+      const above = anchor.top - root.top - box.height - 8;
+      const top = above >= 8 ? above : anchor.top - root.top + anchor.height + 8;
+      tip.style.left = `${Math.max(8, Math.min(root.width - box.width - 8, anchor.left - root.left + (anchor.width - box.width) / 2))}px`;
+      tip.style.top = `${Math.max(8, Math.min(root.height - box.height - 8, top))}px`;
     }
 
     function renderPendingCaption(target, text) {
@@ -395,25 +424,50 @@
       if (!segments.some((segment) => segment.item)) return false;
       const cells = document.createElement('div');
       cells.className = 'dual-captions-inline';
-      cells.style.cssText = 'display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-end;gap:.25em .18em;white-space:normal;';
+      cells.style.cssText = 'display:block;text-align:center;text-wrap:balance;white-space:normal;';
       let previousSource = null;
+      let separated = true;
       for (const segment of segments) {
-        const parts = segment.item ? [segment.text] : segment.text.split(/(\s+)/);
-        for (const part of parts) {
-          if (!part.trim()) continue;
-          if (!segment.item && /^[,.;:!?，。；：！？…]+$/u.test(part) && previousSource) {
-            previousSource.textContent += part;
+        const parts = segment.item ? [segment.text] : segment.text.split(/(\r?\n|[^\S\r\n]+)/);
+        for (let part of parts) {
+          if (/^\r?\n$/.test(part)) {
+            const lineBreak = document.createElement('span');
+            lineBreak.textContent = '\n';
+            lineBreak.style.cssText = 'display:block;height:0;white-space:pre;';
+            lineBreak.setAttribute('aria-hidden', 'true');
+            cells.append(lineBreak);
+            previousSource = null;
+            separated = true;
             continue;
           }
+          if (!part.trim()) {
+            if (part) separated = true;
+            continue;
+          }
+          // A straight quote after whitespace opens the next word, rather than
+          // closing the preceding cell (e.g. He said "Hello").
+          if (!segment.item && previousSource && !(separated && /^['"]/.test(part))) {
+            const suffix = part.match(/^[,.;:!?，。；：！？…\)\]}'"”’»]+/u)?.[0];
+            if (suffix) {
+              previousSource.textContent += suffix;
+              part = part.slice(suffix.length);
+              if (!part) continue;
+            }
+          }
+          if (previousSource && /^[\(\[{'"“‘«]+$/u.test(previousSource.textContent)) {
+            part = previousSource.textContent + part;
+            previousSource.parentElement.remove();
+          }
           const cell = document.createElement('span');
-          cell.style.cssText = 'display:inline-flex;flex-direction:column;min-width:0;max-width:min(11em,100%);box-sizing:border-box;padding:.12em .22em;border:1px solid rgba(255,255,255,.13);border-radius:6px;color:inherit;pointer-events:auto;cursor:pointer;overflow-wrap:anywhere;';
+          cell.style.cssText = 'display:inline-flex;vertical-align:bottom;flex-direction:column;align-items:center;min-width:0;width:max-content;max-width:calc(100% - .18em);box-sizing:border-box;margin:.12em .09em;padding:.12em .22em;border:1px solid rgba(255,255,255,.13);border-radius:6px;color:inherit;pointer-events:auto;cursor:pointer;overflow-wrap:anywhere;';
           const meaning = document.createElement('span');
           meaning.textContent = segment.translation;
-          meaning.style.cssText = 'display:block;font-size:.58em;font-weight:400;line-height:1.25;opacity:.68;margin-bottom:.16em;white-space:normal;overflow-wrap:anywhere;';
+          meaning.style.cssText = 'display:block;width:100%;max-width:18em;font-size:.58em;font-weight:400;line-height:1.3;opacity:.8;margin-bottom:.2em;white-space:normal;overflow-wrap:anywhere;';
           const source = document.createElement('span');
           source.textContent = part;
           previousSource = source;
-          source.style.cssText = 'display:block;font:inherit;line-height:1.3;white-space:pre-wrap;';
+          separated = false;
+          source.style.cssText = 'display:block;max-width:100%;font:inherit;line-height:1.3;white-space:pre-wrap;overflow-wrap:anywhere;';
           cell.append(meaning, source);
           cell.tabIndex = 0;
           cell.setAttribute('role', 'button');
@@ -427,6 +481,7 @@
         }
       }
       target.append(cells);
+      state.inlineCells = cells;
       return true;
     }
 
@@ -437,8 +492,13 @@
       if (state.renderedCaptionKey === key && state.renderedCaptionItems === items) return;
       state.renderedCaptionKey = key;
       state.renderedCaptionItems = items;
+      state.inlineCells = null;
+      state.characterLine = null;
+      state.captionLayoutKey = '';
       dismissTooltip();
       state.second.replaceChildren();
+      state.second.scrollTop = 0;
+      state.second.style.display = descriptor.displayText.trim() ? 'block' : 'none';
       if (!descriptor.displayText) {
         return;
       }
@@ -450,6 +510,7 @@
         characters.textContent = descriptor.characters;
         characters.style.cssText = 'margin-top:2px;color:inherit;font-size:.72em;font-weight:600;line-height:1.15;opacity:.68;pointer-events:none;';
         state.second.append(target, characters);
+        state.characterLine = characters;
       }
       if (state.settings.inlineTranslations && items?.length) {
         if (renderInlineCaption(target, descriptor.displayText, items)) return;
@@ -528,19 +589,53 @@
       state.root.style.width = `${rect.width}px`;
       state.root.style.height = `${rect.height}px`;
       state.root.style.display = state.active && rect.width && rect.height ? 'block' : 'none';
+      applyCaptionPosition();
       positionDragHandle();
+      positionTooltip();
     }
 
     function applyCaptionPosition() {
-      state.second.style.left = `${state.settings.secondLeft}%`;
-      state.second.style.bottom = `${state.settings.secondBottom}%`;
+      const root = state.root.getBoundingClientRect();
+      state.second.style.maxHeight = `${Math.max(0, root.height - 16)}px`;
+      state.second.style.overflowY = 'auto';
+      state.second.style.overscrollBehavior = 'contain';
+      fitCaptionWidth(root);
+      const caption = state.second.getBoundingClientRect();
+      // Clamp presentation only; resizing must not overwrite the saved anchor.
+      const left = Math.max(caption.width / 2 + 8,
+        Math.min(root.width - caption.width / 2 - 8, root.width * state.settings.secondLeft / 100));
+      const bottom = Math.max(8,
+        Math.min(root.height - caption.height - 8, root.height * state.settings.secondBottom / 100));
+      state.second.style.left = `${left}px`;
+      state.second.style.bottom = `${bottom}px`;
+    }
+
+    function fitCaptionWidth(root) {
+      const key = `${root.width}:${root.height}:${state.settings.fontSize}:${state.settings.subtitleBackground}`;
+      if (state.captionLayoutKey === key) return;
+      state.captionLayoutKey = key;
+      state.second.style.width = 'max-content';
+      if (!state.inlineCells || !document.createRange) return;
+      const row = state.inlineCells.getBoundingClientRect();
+      const inset = state.second.getBoundingClientRect().width - row.width;
+      const boxes = Array.from(state.inlineCells.children, (cell) => cell.getBoundingClientRect()).filter((box) => box.width && box.height);
+      if (!boxes.length) return;
+      let contentWidth = Math.max(...boxes.map((box) => box.right)) - Math.min(...boxes.map((box) => box.left));
+      if (state.characterLine) {
+        const range = document.createRange();
+        range.selectNodeContents(state.characterLine);
+        contentWidth = Math.max(contentWidth, range.getBoundingClientRect().width);
+      }
+      // Balance at the available width, then trim unused sides. Keep cell margins
+      // and rounding slack so the measured row does not acquire a new wrap.
+      state.second.style.width = `${Math.ceil(Math.min(row.width, contentWidth + state.settings.fontSize * .18 + 2) + inset)}px`;
     }
 
     function positionDragHandle() {
       if (!state.root || !state.second || !state.dragHandle) return;
       const rootRect = state.root.getBoundingClientRect();
       const captionRect = state.second.getBoundingClientRect();
-      const visible = Boolean(state.second.textContent);
+      const visible = state.second.style.display !== 'none';
       state.dragHandle.style.display = visible ? 'grid' : 'none';
       if (!visible || !rootRect.width || !rootRect.height) return;
       const left = Math.min(rootRect.width - 28, Math.max(0, captionRect.right - rootRect.left - 7));
@@ -582,9 +677,7 @@
           requestTranslation(translationDescriptor(text));
         }
       }
-      applyCaptionPosition();
       state.second.style.fontSize = `${state.settings.fontSize}px`;
-      state.second.style.width = state.settings.inlineTranslations ? '92%' : '';
       state.second.style.color = state.settings.subtitleColor;
       state.second.style.background = state.settings.subtitleBackground ? subtitleBackgroundStyle() : 'transparent';
       state.second.style.padding = state.settings.subtitleBackground ? '4px 20px 4px 8px' : '0 12px 0 0';
@@ -610,11 +703,17 @@
     }
 
     const manager = runtime.createVideoManager({ report, render, trackRemoved: restoreTrackMode });
+    const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(positionOverlay) : null;
+    cleanup.push(() => resizeObserver?.disconnect());
 
     function discover() {
       const previous = manager.current().video;
       const result = manager.discover(document.querySelectorAll('video'));
-      if (previous && result?.video !== previous) restoreModes(previous);
+      if (result?.video !== previous) {
+        if (previous) restoreModes(previous);
+        resizeObserver?.disconnect();
+        if (result?.video) resizeObserver?.observe(result.video);
+      }
       return result;
     }
 
