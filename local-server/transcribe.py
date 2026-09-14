@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create Chinese subtitle files with the installed FunASR model."""
+"""Create local English/Chinese subtitles with bounded audio working sets."""
 
 from __future__ import annotations
 
@@ -10,6 +10,10 @@ import os
 import re
 import time
 from pathlib import Path
+
+from audio_stream import SAMPLE_RATE, audio_chunks, audio_duration_ms
+from asr_runtime import MemoryGuard, configure_threads
+from resource_budget import get_resource_budget
 
 
 def srt_time(milliseconds: int) -> str:
@@ -148,15 +152,46 @@ class ProgressWriter:
         os.replace(temporary, self.path)
 
 
-def transcribe(audio: Path, device: str, progress=None) -> list[tuple[int, int, str]]:
+def recognition_options(engine, language):
+    if engine == "sensevoice":
+        return {}, {"language": language, "use_itn": True}
+    if engine != "nano":
+        raise ValueError("Unsupported recognition model")
+    mounted = os.environ.get("SUBSANYWHERE_MODELS_DIR")
+    default = Path(mounted) / "Fun-ASR-Nano-2512" if mounted else (
+        Path.home() / ".cache/modelscope/hub/models/FunAudioLLM/Fun-ASR-Nano-2512")
+    path = Path(os.environ.get("SUBSANYWHERE_NANO_MODEL_DIR", str(default))).expanduser().resolve()
+    if not all((path / name).is_file() and (path / name).stat().st_size
+               for name in ("model.pt", "config.yaml", "Qwen3-0.6B/config.json")):
+        raise RuntimeError("Nano model is not cached locally; no automatic downloads")
+    return {
+        "model": str(path),
+        "llm_conf": {"llm_dtype": "fp32", "init_param_path": str(path / "Qwen3-0.6B")},
+    }, {
+        "language": {"en": "英文", "zh": "中文"}[language], "itn": True,
+        "llm_dtype": "fp32", "max_length": 256,
+        "llm_kwargs": {"do_sample": False, "num_beams": 1},
+    }
+
+
+def transcribe(audio: Path, device: str, progress=None, language="zh", ncpu=4,
+               engine="sensevoice") -> list[tuple[int, int, str]]:
+    if language not in {"en", "zh"}:
+        raise ValueError("Unsupported recognition language")
+    if not isinstance(ncpu, int) or ncpu < 1:
+        raise ValueError("Invalid recognition thread count")
+    if engine == "nano" and device != "cpu":
+        raise ValueError("Nano is supported on CPU only")
+    extra_init, extra_generate = recognition_options(engine, language)
     AutoModel = importlib.import_module("funasr").AutoModel
+    numpy = importlib.import_module("numpy")
     rich_transcription_postprocess = importlib.import_module(
         "funasr.utils.postprocess_utils"
     ).rich_transcription_postprocess
     model_path, vad_path = cached_model_paths()
 
     model = AutoModel(
-        model=str(model_path),
+        model=extra_init.pop("model", str(model_path)),
         vad_model=str(vad_path),
         # Split on audible pauses rather than estimating times from text length.
         # Cap continuous speech so a whole paragraph cannot become one cue.
@@ -165,30 +200,55 @@ def transcribe(audio: Path, device: str, progress=None) -> list[tuple[int, int, 
             "max_end_silence_time": 400,
         },
         device=device,
+        ncpu=ncpu,
         disable_update=True,
         disable_pbar=True,
+        trust_remote_code=False,
+        **extra_init,
     )
-    restore_progress = install_progress_tracking(model, progress) if progress else lambda: None
-    try:
-        result = model.generate(
-            input=str(audio),
-            batch_size_s=300,
-            sentence_timestamp=True,
-            merge_vad=False,
-        )
-    finally:
-        restore_progress()
-    sentence_info = result[0].get("sentence_info", []) if result else []
+    total_ms = audio_duration_ms(audio)
+    chunks = audio_chunks(audio)
     segments = []
-    for item in sentence_info:
-        text = rich_transcription_postprocess(
-            item.get("sentence") or item.get("text") or ""
-        )
-        text = re.sub(r"\s+", " ", text).strip()
-        start = int(item.get("start", 0))
-        end = int(item.get("end", 0))
-        if text and end > start:
-            segments.append((start, end, text))
+    try:
+        for offset, samples in chunks:
+            chunk_ms = round(len(samples) * 1000 / SAMPLE_RATE)
+
+            def report(update):
+                if progress is None:
+                    return
+                speech_ms = update.get("total_ms", 0)
+                fraction = update.get("completed_ms", 0) / speech_ms if speech_ms else 0
+                progress({"completed_ms": min(total_ms, offset + round(chunk_ms * fraction)),
+                          "total_ms": total_ms})
+
+            restore_progress = install_progress_tracking(model, report) if progress else lambda: None
+            try:
+                result = model.generate(
+                    input=numpy.asarray(samples, dtype="float32") / 32768.0,
+                    cache={}, batch_size=1,
+                    batch_size_s=30,
+                    sentence_timestamp=True,
+                    merge_vad=False,
+                    **extra_generate,
+                )
+            finally:
+                restore_progress()
+            sentence_info = result[0].get("sentence_info", []) if result else []
+            for item in sentence_info:
+                text = rich_transcription_postprocess(
+                    item.get("sentence") or item.get("text") or ""
+                )
+                text = re.sub(r"\s+", " ", text).strip()
+                start = max(0, int(item.get("start", 0)))
+                end = min(chunk_ms, int(item.get("end", 0)))
+                if text and end > start:
+                    segments.append((offset + start, offset + end, text))
+            if progress:
+                progress({"completed_ms": min(total_ms, offset + chunk_ms), "total_ms": total_ms})
+    finally:
+        close = getattr(chunks, "close", None)
+        if close:
+            close()
     return segments
 
 
@@ -200,12 +260,21 @@ def main() -> None:
     parser.add_argument("--markdown", type=Path, required=True)
     parser.add_argument("--device", choices=("cpu", "mps"), default="cpu")
     parser.add_argument("--progress", type=Path)
+    parser.add_argument("--language", choices=("en", "zh"), default="zh")
+    parser.add_argument("--model", choices=("sensevoice", "nano"),
+                        default=os.environ.get("SUBSANYWHERE_ASR_MODEL", "sensevoice"))
     args = parser.parse_args()
     audio = args.audio.expanduser().resolve()
     if not audio.is_file() or not audio.stat().st_size:
         raise SystemExit(f"Audio file not found: {audio}")
     progress = ProgressWriter(args.progress) if args.progress else None
-    segments = transcribe(audio, args.device, progress)
+    budget = get_resource_budget()
+    configure_threads(budget.threads)
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["MODELSCOPE_OFFLINE"] = "1"
+    with MemoryGuard(budget.memory_bytes):
+        segments = transcribe(audio, args.device, progress, language=args.language,
+                              ncpu=budget.threads, engine=args.model)
     count = write_outputs(
         segments,
         args.srt,

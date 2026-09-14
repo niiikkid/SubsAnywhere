@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Iterator
 from urllib.parse import parse_qs, urlparse
 
-from pinyin import bilingual_srt
+from pinyin import bilingual_srt, contains_han
 
 VIDEO_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
 EXTENSION_ORIGIN_PATTERN = re.compile(r"chrome-extension://[a-p]{32}\Z")
@@ -46,6 +46,7 @@ ERROR_MESSAGES = {
     "cancelled": "Generation cancelled; previous subtitles were preserved.",
     "invalid_output": "Local command did not create valid subtitle output.",
     "too_large": "Subtitle or media file exceeds the service size limit.",
+    "resource_limit": "Recognition exceeded the memory limit; choose a smaller model or increase the limit. Previous subtitles were preserved.",
 }
 
 
@@ -84,6 +85,11 @@ class OutputPaths:
     generated_srt: Path
     generated_txt: Path
     generated_markdown: Path
+
+    @property
+    def lossless_audio(self) -> Path:
+        # Keep the legacy MP3 path and tuple layout for existing caches/callers.
+        return self.audio.with_suffix(".flac")
 
     def __iter__(self) -> Iterator[Path]:
         return iter((
@@ -289,12 +295,14 @@ class SubtitleService:
             del self.jobs[old]
 
     def _finish_job(self, video_id: str, job: dict) -> None:
+        language = job.get("language", self.jobs.get(video_id, {}).get("language", "zh"))
+        job = dict(job, language=language if language in ("en", "zh") else "zh")
         try:
             self._save_job(video_id, job)
         except OSError:
             # Disk-full cannot make the worker immortal. The persisted running
             # record becomes interrupted on restart if this final write fails.
-            self._remember_job(video_id, error_payload(ServiceError("storage_error")))
+            self._remember_job(video_id, dict(error_payload(ServiceError("storage_error")), language=job["language"]))
 
     @staticmethod
     def _remove_work_file(path: Path):
@@ -315,7 +323,7 @@ class SubtitleService:
         except (OSError, ValueError):
             return {}
         if job.get("status") == "running":
-            job = {"status": "error", "source": "generated",
+            job = {"status": "error", "source": "generated", "language": job.get("language", "zh"),
                    "error_code": "interrupted", "error": "Generation interrupted by server restart; retry."}
             self._finish_job(video_id, job)
             return dict(self.jobs[video_id])
@@ -463,8 +471,9 @@ class SubtitleService:
                 raise ServiceError("command_failed")
             return {"status": "missing", "source": "youtube"}
 
-    def generate(self, video_id: str) -> dict:
+    def generate(self, video_id: str, language: str = "") -> dict:
         safe_id = validate_video_id(video_id)
+        language = validate_caption_language(language) or "zh"
         with self.lock:
             self._check_cancelled()
             if safe_id in self.active_jobs:
@@ -478,6 +487,7 @@ class SubtitleService:
                 self._save_job(safe_id, {
                     "status": "running",
                     "source": "generated",
+                    "language": language,
                     "stage": "preparing",
                     "progress": 0,
                 })
@@ -487,7 +497,7 @@ class SubtitleService:
                 self.slots.release()
                 raise ServiceError("storage_error") from None
         try:
-            self.start_background(lambda: self._generate_worker(safe_id))
+            self.start_background(lambda: self._generate_worker(safe_id, language))
         except Exception:
             with self.lock:
                 self._finish_job(safe_id, {"status": "error", "source": "generated",
@@ -499,6 +509,11 @@ class SubtitleService:
 
     def generated(self, video_id: str) -> dict:
         safe_id = validate_video_id(video_id)
+        path = output_paths(self.output_root, safe_id).generated_srt
+        with self._subtitle_lock(path):
+            return self._generated_locked(safe_id, path)
+
+    def _generated_locked(self, safe_id: str, path: Path) -> dict:
         with self.lock:
             job = self._load_job(safe_id)
         if job.get("status") in {"running", "error"}:
@@ -517,22 +532,34 @@ class SubtitleService:
                 except (ValueError, OSError):
                     pass
             return job
-        path = output_paths(self.output_root, safe_id).generated_srt
         if path.is_file() and path.stat().st_size:
-            return self._pinyin_subtitle_payload(path, "generated")
+            contents = self._read_subtitle(path)
+            # Job provenance is trusted only for the exact published SRT bytes.
+            # Legacy/replaced files must never inherit a stale ready-job language.
+            language = job.get("language")
+            if (language not in ("en", "zh")
+                    or job.get("sha256") != hashlib.sha256(contents.encode("utf-8")).hexdigest()):
+                language = "zh" if contains_han(contents) else "en"
+            if language == "zh":
+                contents = self._pinyinize_srt_locked(path, contents)
+            return self._subtitle_payload(path, "generated", contents, language)
         return {"status": "missing", "source": "generated"}
 
-    def _generate_worker(self, video_id: str) -> None:
+    def _generate_worker(self, video_id: str, language: str = "zh") -> None:
         paths = output_paths(self.output_root, video_id)
         self.local.cancel_event = self.cancel_events[video_id]
         try:
             self._check_cancelled()
             paths.directory.mkdir(parents=True, exist_ok=True)
-            if not paths.audio.is_file() or not paths.audio.stat().st_size:
+            audio = paths.lossless_audio
+            if (not audio.is_file() or not audio.stat().st_size) and paths.audio.is_file() and paths.audio.stat().st_size:
+                audio = paths.audio
+            if not audio.is_file() or not audio.stat().st_size:
                 with self.lock:
                     self.jobs[video_id].update(stage="downloading", progress=0)
                 audio_template = paths.directory / f"youtube-{video_id}-audio.working.%(ext)s"
-                working_audio = Path(str(audio_template).replace("%(ext)s", "mp3"))
+                audio_format = audio.suffix.lstrip(".")
+                working_audio = Path(str(audio_template).replace("%(ext)s", audio_format))
                 self._remove_work_file(working_audio)
                 result = self.run_command(
                     self._youtube_command() + [
@@ -541,9 +568,7 @@ class SubtitleService:
                         "ba/bestaudio",
                         "-x",
                         "--audio-format",
-                        "mp3",
-                        "--audio-quality",
-                        "0",
+                        audio_format,
                         "-o",
                         str(audio_template),
                         f"https://www.youtube.com/watch?v={video_id}",
@@ -559,10 +584,10 @@ class SubtitleService:
                     raise ServiceError("invalid_output")
                 if working_audio.stat().st_size > MAX_AUDIO_BYTES:
                     raise ServiceError("too_large")
-                working_audio.replace(paths.audio)
-            if not paths.audio.is_file() or not paths.audio.stat().st_size:
+                working_audio.replace(audio)
+            if not audio.is_file() or not audio.stat().st_size:
                 raise RuntimeError("yt-dlp did not create the audio file")
-            if paths.audio.stat().st_size > MAX_AUDIO_BYTES:
+            if audio.stat().st_size > MAX_AUDIO_BYTES:
                 raise ServiceError("too_large")
             temporary = {
                 "srt": paths.directory / f"youtube-{video_id}-generated.working.srt",
@@ -577,7 +602,7 @@ class SubtitleService:
                 [
                     self.asr_python,
                     str(self.transcriber),
-                    str(paths.audio),
+                    str(audio),
                     "--srt",
                     str(temporary["srt"]),
                     "--text",
@@ -586,6 +611,8 @@ class SubtitleService:
                     str(temporary["markdown"]),
                     "--device",
                     "cpu",
+                    "--language",
+                    language,
                     "--progress",
                     str(progress_path(paths)),
                 ],
@@ -594,6 +621,8 @@ class SubtitleService:
                 timeout=21_600,
                 check=False,
             )
+            if result.returncode == 73:
+                raise ServiceError("resource_limit")
             self._require_success(result)
             destinations = {
                 "srt": paths.generated_srt,
@@ -605,14 +634,17 @@ class SubtitleService:
                     raise ServiceError("invalid_output")
                 if path.stat().st_size > MAX_SUBTITLE_BYTES:
                     raise ServiceError("too_large")
-            self._validate_srt(self._read_subtitle(temporary["srt"]))
-            self._pinyinize_srt(temporary["srt"])
+            contents = self._read_subtitle(temporary["srt"])
+            self._validate_srt(contents)
+            if language == "zh":
+                contents = self._pinyinize_srt(temporary["srt"], contents)
             with self._subtitle_lock(paths.generated_srt), self.lock:
                 self._check_cancelled()
                 # Commit SRT last: failed conversion/cancellation never replaces it.
                 for key in ("text", "markdown", "srt"):
                     temporary[key].replace(destinations[key])
-                self._finish_job(video_id, {"status": "ready", "source": "generated"})
+                self._finish_job(video_id, {"status": "ready", "source": "generated", "language": language,
+                                            "sha256": hashlib.sha256(contents.encode("utf-8")).hexdigest()})
         except BaseException as error:
             with self.lock:
                 self._finish_job(video_id, error_payload(error))
@@ -814,16 +846,19 @@ class SubtitleService:
 
     def _pinyinize_srt(self, path: Path, contents: str | None = None) -> str:
         with self._subtitle_lock(path):
-            source = self._read_subtitle(path) if contents is None else contents
-            converted = self.pinyinize(source)
-            if not isinstance(converted, str) or not converted.strip():
-                raise ServiceError("invalid_output")
-            if len(converted.encode("utf-8")) > MAX_SUBTITLE_BYTES:
-                raise ServiceError("too_large")
-            existing = self._read_subtitle(path) if path.is_file() else None
-            if converted != existing:
-                self._write_text_atomically(path, converted)
-            return converted
+            return self._pinyinize_srt_locked(path, contents)
+
+    def _pinyinize_srt_locked(self, path: Path, contents: str | None = None) -> str:
+        source = self._read_subtitle(path) if contents is None else contents
+        converted = self.pinyinize(source)
+        if not isinstance(converted, str) or not converted.strip():
+            raise ServiceError("invalid_output")
+        if len(converted.encode("utf-8")) > MAX_SUBTITLE_BYTES:
+            raise ServiceError("too_large")
+        existing = self._read_subtitle(path) if path.is_file() else None
+        if converted != existing:
+            self._write_text_atomically(path, converted)
+        return converted
 
     def _pinyin_subtitle_payload(self, path: Path, subtitle_source: str) -> dict:
         return self._subtitle_payload(path, subtitle_source, self._pinyinize_srt(path))
@@ -950,7 +985,7 @@ def handler_for(service):
             try:
                 query = parse_qs(parsed.query, keep_blank_values=True, max_num_fields=4)
                 options = {}
-                if parsed.path == "/api/subtitles/existing" and "language" in query:
+                if parsed.path in {"/api/subtitles/existing", "/api/subtitles/generate"} and "language" in query:
                     languages = query.pop("language")
                     if len(languages) != 1 or languages[0] not in {"en", "zh"}:
                         raise ValueError("Invalid caption language")

@@ -25,6 +25,15 @@ test('formatGenerationProgress reports exact work and a useful ETA', () => {
   assert.equal(formatGenerationProgress({ status: 'ready' }).visible, false);
 });
 
+test('streamed recognition reports work even without a total segment count', () => {
+  const progress = formatGenerationProgress({ status: 'running', stage: 'recognizing',
+    progress: 20, completed_segments: 2, total_segments: 0, eta_seconds: 120 });
+  assert.equal(progress.label, 'Распознаю речь…');
+  assert.equal(progress.detail, '20% · осталось примерно 2 мин');
+  assert.equal(formatGenerationProgress({ status: 'running', stage: 'recognizing', progress: 0 }).label,
+    'Определяю объём речи…');
+});
+
 test('youtubeVideoId accepts supported YouTube pages and rejects other URLs', () => {
   assert.equal(youtubeVideoId('https://www.youtube.com/watch?v=rwnyaH6cTDE&t=3'), 'rwnyaH6cTDE');
   assert.equal(youtubeVideoId('https://youtu.be/rwnyaH6cTDE'), 'rwnyaH6cTDE');
@@ -93,6 +102,25 @@ test('caption language overrides are validated and sent to the server', async ()
   assert.equal(urls.length, 1);
 });
 
+test('generation forwards supported languages and defaults blank to Chinese', async () => {
+  const calls = [];
+  const client = new LocalSubtitleClient(async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, json: async () => ({ status: 'running' }) };
+  });
+  for (const language of ['en', 'zh', '', undefined]) {
+    await client.generate('0Zaxca2sUGs', language);
+    assert.equal(new URL(calls.at(-1).url).searchParams.get('language'), language || 'zh');
+    assert.equal(calls.at(-1).options.method, 'POST');
+  }
+  for (const invalid of ['fr', 'EN', 'en&other=value', null]) {
+    await assert.rejects(async () => client.generate('0Zaxca2sUGs', invalid), /язык/i);
+  }
+  assert.equal(calls.length, 4);
+  await client.status('0Zaxca2sUGs');
+  assert.equal(new URL(calls.at(-1).url).searchParams.has('language'), false);
+});
+
 test('local requests reject malformed success payloads rather than silently stopping polling', async () => {
   const client = new LocalSubtitleClient(async () => ({ ok: true, json: async () => ({ status: 'unknown' }) }));
   await assert.rejects(() => client.status('rwnyaH6cTDE'), /неверный ответ/);
@@ -117,4 +145,12 @@ test('server restart and resource failures explain recovery in Russian', async (
     json: async () => ({ status: 'error', error_code: 'interrupted', error: 'Generation interrupted by server restart; retry.' }),
   }));
   await assert.rejects(() => client.status('rwnyaH6cTDE'), /Сервер перезапущен.*запустите.*заново/i);
+});
+
+test('memory-limit errors explain model and limit recovery without losing saved subtitles', async () => {
+  const client = new LocalSubtitleClient(async () => ({
+    ok: true,
+    json: async () => ({ status: 'error', error_code: 'resource_limit', error: 'Memory limit exceeded' }),
+  }));
+  await assert.rejects(() => client.status('rwnyaH6cTDE'), /меньшую модель.*увеличьте лимит.*Прежние.*сохранены/);
 });

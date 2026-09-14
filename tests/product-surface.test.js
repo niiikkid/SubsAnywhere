@@ -10,6 +10,8 @@ test('popup exposes one original track and explicit local YouTube subtitle contr
   assert.match(html, /id="youtubeSubtitles"/);
   assert.match(html, /id="createYoutubeSubtitles"[^>]*>Создать свои субтитры</);
   assert.match(html, /id="youtubeSubtitleStatus"/);
+  assert.match(html, /распознает английскую или китайскую речь/);
+  assert.match(html, /для создания — китайский/);
   assert.doesNotMatch(html, /id="firstTrack"|id="secondTrack"/);
 });
 

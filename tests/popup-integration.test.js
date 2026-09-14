@@ -98,6 +98,29 @@ test('inline translations toggle hydrates, previews and saves immediately', asyn
   assert.equal(elements.subtitlePreview.textContent, 'One line at a time.');
 });
 
+test('manual generation forwards the selected speech language and imports its label', async () => {
+  for (const language of ['en', 'zh', '']) {
+    const expected = language || 'zh';
+    const { elements, messages } = await bootPopup({
+      'dualCaptions.state.get': () => ({ state: { settings: { youtubeLanguage: language } } }),
+      'dualCaptions.localSubtitle.status': () => ({ status: 'missing' }),
+      'dualCaptions.localSubtitle.existing': () => ({ status: 'missing' }),
+      'dualCaptions.localSubtitle.generate': () => ({ status: 'ready', source: 'generated', language: expected,
+        srt: '1\n00:00:00,000 --> 00:00:01,000\nHello, 你好\n' }),
+      'dualCaptions.track.upsertLocal': (m) => ({ state: { settings: { youtubeLanguage: language }, externalTracks: [m.track] } }),
+    }, { id: 77, url: 'https://www.youtube.com/watch?v=0Zaxca2sUGs' });
+    await tick();
+    assert.match(elements.youtubeSubtitleStatus.textContent, /Выберите язык речи/);
+    elements.createYoutubeSubtitles.listeners.get('click')();
+    await tick();
+    await tick();
+    assert.equal(messages.find((m) => m.type === 'dualCaptions.localSubtitle.generate').language, expected);
+    const track = messages.find((m) => m.type === 'dualCaptions.track.upsertLocal').track;
+    assert.equal(track.language, expected);
+    assert.match(track.name, expected === 'en' ? /^Английские/ : /^Китайские с пиньинем/);
+  }
+});
+
 test('YouTube language choice persists and is forwarded when loading captions', async () => {
   const { elements, messages } = await bootPopup({
     'dualCaptions.state.get': () => ({ state: { settings: { youtubeLanguage: 'zh' } } }),

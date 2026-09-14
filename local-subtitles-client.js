@@ -11,6 +11,7 @@ const SERVER_ERRORS = Object.freeze({
   busy: 'Сервер занят другим заданием. Повторите попытку немного позже',
   cancelled: 'Создание остановлено. Прежние файлы сохранены',
   invalid_output: 'Обработка не дала корректных субтитров. Попробуйте другой ролик',
+  resource_limit: 'Распознавание превысило лимит памяти. Выберите меньшую модель или увеличьте лимит памяти сервера. Прежние субтитры сохранены',
   too_large: 'Файл превышает ограничение сервера. Выберите более короткое видео или меньший SRT',
 });
 
@@ -82,7 +83,7 @@ export function formatGenerationProgress(payload) {
   return {
     visible: true,
     value,
-    label: total ? `Распознаю речь: ${completed} из ${total} сегментов.` : 'Определяю объём речи…',
+    label: total ? `Распознаю речь: ${completed} из ${total} сегментов.` : value > 0 ? 'Распознаю речь…' : 'Определяю объём речи…',
     detail: `${value}%${eta ? ` · осталось примерно ${eta}` : ''}`,
   };
 }
@@ -102,8 +103,9 @@ export class LocalSubtitleClient {
     return this.#request('/api/subtitles/existing', videoId, 'GET', language);
   }
 
-  generate(videoId) {
-    return this.#request('/api/subtitles/generate', videoId, 'POST');
+  generate(videoId, language = '') {
+    if (!['', 'en', 'zh'].includes(language)) throw new Error('Некорректный язык субтитров');
+    return this.#request('/api/subtitles/generate', videoId, 'POST', language || 'zh');
   }
 
   status(videoId) {

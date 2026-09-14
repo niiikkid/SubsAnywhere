@@ -13,3 +13,4 @@ cookies*.txt
 models/
 data/
 artifacts/
+compose.resources.local.yaml

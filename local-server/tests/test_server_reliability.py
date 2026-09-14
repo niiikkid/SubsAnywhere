@@ -1,4 +1,5 @@
 import json
+import hashlib
 import http.client
 import os
 import pathlib
@@ -49,11 +50,12 @@ class ReliabilityTests(unittest.TestCase):
             paths = server.output_paths(root, VIDEO)
             paths.directory.mkdir(parents=True)
             paths.audio.write_bytes(b"cached")
-            paths.generated_srt.write_text(VALID_SRT)
+            old_srt = VALID_SRT.replace("Captions", "旧字幕")
+            paths.generated_srt.write_text(old_srt)
             entered, release, converted = threading.Event(), threading.Event(), threading.Event()
             new_srt = VALID_SRT.replace("Captions", "New captions")
             def enrich(text):
-                if text == VALID_SRT:
+                if text == old_srt:
                     entered.set()
                     self.assertTrue(release.wait(2))
                 else:
@@ -175,13 +177,14 @@ class ReliabilityTests(unittest.TestCase):
             root = pathlib.Path(directory)
             def fail(command, **kwargs):
                 if "-o" in command:
-                    target = pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", "mp3"))
+                    target = pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", command[command.index("--audio-format") + 1]))
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(b"partial")
                 return subprocess.CompletedProcess(command, 1, "", "secret")
             service = server.SubtitleService(root, run_command=fail, start_background=lambda f: f())
             self.assertEqual(service.generate(VIDEO)["status"], "error")
             self.assertFalse(server.output_paths(root, VIDEO).audio.exists())
+            self.assertFalse(server.output_paths(root, VIDEO).lossless_audio.exists())
 
     def test_existing_async_polls_deduplicate_and_do_not_block_generation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -269,7 +272,8 @@ class ReliabilityTests(unittest.TestCase):
                     self.assertEqual(service.cancel(VIDEO), ready)
                     self.assertEqual(service.generated(VIDEO), ready)
                     self.assertEqual(json.loads(server.job_path(paths).read_text()),
-                                     {"status": "ready", "source": "generated"})
+                                     {"status": "ready", "source": "generated", "language": "zh",
+                                      "sha256": hashlib.sha256(VALID_SRT.encode()).hexdigest()})
                     self.assertEqual(server.SubtitleService(root, pinyinize=lambda text: text).generated(VIDEO), ready)
                     with service.lock:
                         self.assertIn(VIDEO, service.active_jobs)
@@ -348,7 +352,8 @@ class ReliabilityTests(unittest.TestCase):
                             self.assertTrue(closer.is_alive())
                             self.assertEqual(service.generated(VIDEO), ready)
                             self.assertEqual(json.loads(server.job_path(paths).read_text()),
-                                             {"status": "ready", "source": "generated"})
+                                             {"status": "ready", "source": "generated", "language": "zh",
+                                              "sha256": hashlib.sha256(VALID_SRT.encode()).hexdigest()})
                             self.assertEqual(server.SubtitleService(root, pinyinize=lambda text: text).generated(VIDEO), ready)
                             with service.lock:
                                 self.assertIn(VIDEO, service.active_jobs)

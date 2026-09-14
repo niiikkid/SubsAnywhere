@@ -235,7 +235,7 @@ export class BackgroundController {
           return ok(await this.#localSubtitles.existing(message.videoId, message.language));
         case MESSAGE.LOCAL_SUBTITLE_GENERATE:
           if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');
-          return ok(await this.#localSubtitles.generate(message.videoId));
+          return ok(await this.#localSubtitles.generate(message.videoId, message.language));
         case MESSAGE.LOCAL_SUBTITLE_STATUS:
           if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');
           return ok(await this.#localSubtitles.status(message.videoId));

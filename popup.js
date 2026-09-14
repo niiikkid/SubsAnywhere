@@ -425,7 +425,7 @@ async function pollExistingSubtitle(epoch, generatedReady = false, selectionAtSt
       ? 'Субтитры на языке оригинала скачаны и подключены.'
       : 'Субтитры на языке оригинала сохранены. Подключите плеер для просмотра.');
   } else {
-    setYoutubeStatus('Не найдена подходящая английская или китайская дорожка оригинала. Локальное создание пока доступно только для китайской речи.');
+    setYoutubeStatus('Не найдена подходящая английская или китайская дорожка оригинала. Выберите язык речи и создайте субтитры локально; в режиме «Авто» создание использует китайский.');
   }
 }
 
@@ -478,7 +478,7 @@ async function createYoutubeSubtitles() {
   generatedSelectionRevision = selectionRevision;
   drawYoutubeProgress({ status: 'running', stage: 'preparing', progress: 0 });
   try {
-    const result = await request(MESSAGE.LOCAL_SUBTITLE_GENERATE, { videoId: youtubeId });
+    const result = await request(MESSAGE.LOCAL_SUBTITLE_GENERATE, { videoId: youtubeId, language: state.settings.youtubeLanguage || 'zh' });
     if (popupClosed || epoch !== youtubeEpoch) return;
     if (result.status === 'ready') {
       drawYoutubeProgress(result);

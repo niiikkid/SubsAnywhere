@@ -13,6 +13,8 @@ services:
       SUBSANYWHERE_COOKIES_BROWSER: ""
       SUBSANYWHERE_COOKIES_FILE: ""
       SUBSANYWHERE_MAX_JOBS: "1"
+      # CPU/RAM are already budgeted below; do not divide cgroup limits again.
+      SUBSANYWHERE_RESOURCE_FRACTION: "1"
       OMP_NUM_THREADS: "4"
       MKL_NUM_THREADS: "4"
     volumes:
@@ -24,7 +26,9 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 256
+    # Fixed fallback only. Generate this host's limits with configure-resources.py.
     mem_limit: 8g
+    memswap_limit: 8g
     cpus: 4
     stop_grace_period: 20s
     logging:

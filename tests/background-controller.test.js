@@ -1103,13 +1103,13 @@ test('background forwards explicit YouTube subtitle actions to the local client'
   const calls = [];
   const localSubtitles = {
     async existing(videoId) { calls.push(['existing', videoId]); return { status: 'ready' }; },
-    async generate(videoId) { calls.push(['generate', videoId]); return { status: 'running' }; },
+    async generate(videoId, language) { calls.push(['generate', videoId, language]); return { status: 'running' }; },
     async status(videoId) { calls.push(['status', videoId]); return { status: 'missing' }; },
   };
   const controller = new BackgroundController(makeChrome(), new FakeStore(), { localSubtitles });
 
   const existing = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_EXISTING, videoId: 'rwnyaH6cTDE' });
-  const generated = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_GENERATE, videoId: 'rwnyaH6cTDE' });
+  const generated = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_GENERATE, videoId: 'rwnyaH6cTDE', language: 'en' });
   const status = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_STATUS, videoId: 'rwnyaH6cTDE' });
 
   assert.equal(existing.ok, true);
@@ -1117,7 +1117,7 @@ test('background forwards explicit YouTube subtitle actions to the local client'
   assert.equal(status.data.status, 'missing');
   assert.deepEqual(calls, [
     ['existing', 'rwnyaH6cTDE'],
-    ['generate', 'rwnyaH6cTDE'],
+    ['generate', 'rwnyaH6cTDE', 'en'],
     ['status', 'rwnyaH6cTDE'],
   ]);
 });

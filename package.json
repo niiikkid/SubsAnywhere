@@ -4,11 +4,11 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.js && python3 -m unittest discover -s local-server/tests",
-    "check": "node --check ai-client.js && node --check caption-core.js && node --check local-subtitles-client.js && node --check page-context.js && node --check state-core.js && node --check state-store.js && node --check protocol.js && node --check background-controller.js && node --check background.js && node --check content-runtime.js && node --check content.js && node --check popup-model.js && node --check popup.js && node --check scripts/browser-smoke.mjs && python3 -m py_compile local-server/pinyin.py local-server/server.py local-server/transcribe.py local-server/healthcheck.py local-server/import_models.py local-server/import_cookies.py scripts/docker-smoke.py",
+    "check": "node --check ai-client.js && node --check caption-core.js && node --check local-subtitles-client.js && node --check page-context.js && node --check state-core.js && node --check state-store.js && node --check protocol.js && node --check background-controller.js && node --check background.js && node --check content-runtime.js && node --check content.js && node --check popup-model.js && node --check popup.js && node --check scripts/browser-smoke.mjs && python3 -m py_compile local-server/pinyin.py local-server/server.py local-server/transcribe.py local-server/audio_stream.py local-server/asr_runtime.py local-server/resource_budget.py local-server/healthcheck.py local-server/import_models.py local-server/import_cookies.py scripts/docker-smoke.py scripts/configure-resources.py",
     "local-server": "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH python3 local-server/server.py",
     "test:browser": "node scripts/browser-smoke.mjs",
     "test:docker": "python3 scripts/docker-smoke.py",
-    "docker:up": "docker compose up -d --build --wait",
+    "docker:up": "python3 scripts/configure-resources.py && docker compose -f compose.yaml -f compose.resources.local.yaml up -d --build --wait",
     "docker:down": "docker compose down",
     "docker:logs": "docker compose logs --tail=100 -f subtitles"
   }

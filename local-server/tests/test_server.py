@@ -217,7 +217,7 @@ class SubtitleServiceTests(unittest.TestCase):
                     return discovery
                 calls.append(command)
                 if "-x" in command:
-                    output = pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", "mp3"))
+                    output = pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", command[command.index("--audio-format") + 1]))
                     output.parent.mkdir(parents=True, exist_ok=True)
                     output.write_bytes(b"audio")
                 elif command[0] != "/local/funasr/python":
@@ -258,7 +258,7 @@ class SubtitleServiceTests(unittest.TestCase):
                     return discovery
                 calls.append(command)
                 if "-x" in command:
-                    output = pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", "mp3"))
+                    output = pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", command[command.index("--audio-format") + 1]))
                     output.parent.mkdir(parents=True, exist_ok=True)
                     output.write_bytes(b"audio")
                 else:
