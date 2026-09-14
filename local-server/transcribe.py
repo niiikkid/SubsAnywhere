@@ -13,6 +13,7 @@ from pathlib import Path
 
 from audio_stream import SAMPLE_RATE, audio_chunks, audio_duration_ms
 from asr_runtime import MemoryGuard, configure_threads
+from asr_models import nano_model_available, nano_model_path, select_engine
 from resource_budget import get_resource_budget
 
 
@@ -157,12 +158,8 @@ def recognition_options(engine, language):
         return {}, {"language": language, "use_itn": True}
     if engine != "nano":
         raise ValueError("Unsupported recognition model")
-    mounted = os.environ.get("SUBSANYWHERE_MODELS_DIR")
-    default = Path(mounted) / "Fun-ASR-Nano-2512" if mounted else (
-        Path.home() / ".cache/modelscope/hub/models/FunAudioLLM/Fun-ASR-Nano-2512")
-    path = Path(os.environ.get("SUBSANYWHERE_NANO_MODEL_DIR", str(default))).expanduser().resolve()
-    if not all((path / name).is_file() and (path / name).stat().st_size
-               for name in ("model.pt", "config.yaml", "Qwen3-0.6B/config.json")):
+    path = nano_model_path()
+    if not nano_model_available(path):
         raise RuntimeError("Nano model is not cached locally; no automatic downloads")
     return {
         "model": str(path),
@@ -175,7 +172,8 @@ def recognition_options(engine, language):
 
 
 def transcribe(audio: Path, device: str, progress=None, language="zh", ncpu=4,
-               engine="sensevoice") -> list[tuple[int, int, str]]:
+               engine="auto") -> list[tuple[int, int, str]]:
+    engine = select_engine(engine, language)
     if language not in {"en", "zh"}:
         raise ValueError("Unsupported recognition language")
     if not isinstance(ncpu, int) or ncpu < 1:
@@ -261,9 +259,10 @@ def main() -> None:
     parser.add_argument("--device", choices=("cpu", "mps"), default="cpu")
     parser.add_argument("--progress", type=Path)
     parser.add_argument("--language", choices=("en", "zh"), default="zh")
-    parser.add_argument("--model", choices=("sensevoice", "nano"),
-                        default=os.environ.get("SUBSANYWHERE_ASR_MODEL", "sensevoice"))
+    parser.add_argument("--model", choices=("auto", "sensevoice", "nano"),
+                        default=os.environ.get("SUBSANYWHERE_ASR_MODEL", "auto"))
     args = parser.parse_args()
+    engine = select_engine(args.model, args.language)
     audio = args.audio.expanduser().resolve()
     if not audio.is_file() or not audio.stat().st_size:
         raise SystemExit(f"Audio file not found: {audio}")
@@ -274,7 +273,7 @@ def main() -> None:
     os.environ["MODELSCOPE_OFFLINE"] = "1"
     with MemoryGuard(budget.memory_bytes):
         segments = transcribe(audio, args.device, progress, language=args.language,
-                              ncpu=budget.threads, engine=args.model)
+                              ncpu=budget.threads, engine=engine)
     count = write_outputs(
         segments,
         args.srt,
@@ -283,6 +282,7 @@ def main() -> None:
         audio.name,
     )
     print(f"segments={count}")
+    print(f"model={engine}")
     print(f"srt={args.srt}")
 
 

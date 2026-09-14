@@ -10,11 +10,22 @@ import transcribe
 
 
 class TranscribeOutputTests(unittest.TestCase):
+    def test_default_model_prioritizes_nano_for_chinese_only(self):
+        self.assertEqual(transcribe.select_engine('auto', 'zh'), 'nano')
+        self.assertEqual(transcribe.select_engine('auto', 'en'), 'sensevoice')
+        self.assertEqual(transcribe.select_engine('sensevoice', 'zh'), 'sensevoice')
+        self.assertEqual(transcribe.select_engine('nano', 'en'), 'nano')
+        with self.assertRaises(ValueError):
+            transcribe.select_engine('typo', 'zh')
+        with self.assertRaises(ValueError):
+            transcribe.select_engine('auto', 'ru')
+
     def test_nano_is_explicit_offline_cpu_float32_without_sampling(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             (root / 'Qwen3-0.6B').mkdir()
-            for name in ('model.pt', 'config.yaml', 'Qwen3-0.6B/config.json'):
+            from asr_models import NANO_REQUIRED_FILES
+            for name in NANO_REQUIRED_FILES:
                 (root / name).write_text('fixture')
             with patch.dict(os.environ, {'SUBSANYWHERE_NANO_MODEL_DIR': temporary}):
                 init, generate = transcribe.recognition_options('nano', 'zh')
@@ -48,6 +59,7 @@ class TranscribeOutputTests(unittest.TestCase):
                 transcribe.main()
             self.assertEqual(events[:2], [('threads', 2), 'guard'])
             self.assertEqual(events[2][1]['ncpu'], 2)
+            self.assertEqual(events[2][1]['engine'], 'nano')
             factory.assert_called_once_with(8000)
 
     def test_model_directory_can_be_mounted_outside_a_user_home(self):

@@ -9,10 +9,30 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SERVER = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SERVER))
 MODELS = ("SenseVoiceSmall", "speech_fsmn_vad_zh-cn-16k-common-pytorch")
 
 
 class ModelImportTests(unittest.TestCase):
+    def test_nano_can_be_added_to_an_existing_volume_without_replacing_base_models(self):
+        from asr_models import NANO_NAME, NANO_REQUIRED_FILES
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            source, target = root / 'source', root / 'target'
+            base = target / MODELS[0] / 'model.pt'
+            base.parent.mkdir(parents=True)
+            base.write_bytes(b'preserved')
+            for name in NANO_REQUIRED_FILES:
+                path = source / NANO_NAME / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'fixture')
+            command = [sys.executable, str(SERVER / 'import_models.py'), str(source), str(target), '--nano']
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(base.read_bytes(), b'preserved')
+            self.assertTrue((target / NANO_NAME / 'Qwen3-0.6B/tokenizer.json').is_file())
+            self.assertNotEqual(subprocess.run(command, capture_output=True, timeout=10).returncode, 0)
+
     def test_healthcheck_identifies_the_service_not_just_an_open_port(self):
         class Handler(BaseHTTPRequestHandler):
             payload = {"ok": True, "service": "subsanywhere", "api_version": 1}

@@ -13,6 +13,7 @@ services:
       SUBSANYWHERE_COOKIES_BROWSER: ""
       SUBSANYWHERE_COOKIES_FILE: ""
       SUBSANYWHERE_MAX_JOBS: "1"
+      SUBSANYWHERE_ASR_MODEL: "${SUBSANYWHERE_ASR_MODEL:-auto}"
       # CPU/RAM are already budgeted below; do not divide cgroup limits again.
       SUBSANYWHERE_RESOURCE_FRACTION: "1"
       OMP_NUM_THREADS: "4"

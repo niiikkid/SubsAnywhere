@@ -1,4 +1,5 @@
 import json
+import os
 import hashlib
 import http.client
 import pathlib
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -18,6 +20,18 @@ CHINESE = ENGLISH.replace("Hello, 你好", "你好")
 
 
 class GenerationLanguageTests(unittest.TestCase):
+    def test_health_reports_language_models_and_missing_nano_without_disabling_english(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(os.environ, {'SUBSANYWHERE_ASR_MODEL': 'auto'}), \
+                mock.patch.object(server, 'nano_model_available', return_value=False, create=True):
+            service = server.SubtitleService(pathlib.Path(directory))
+            service.health_cached = dict.fromkeys(('yt_dlp', 'ffmpeg', 'pinyin', 'asr_python', 'asr_dependencies', 'models'), True)
+            service.health_checked_at = time.monotonic()
+            health = service.health()
+            self.assertEqual(health['recognition_models'], {'en': 'sensevoice', 'zh': 'nano'})
+            self.assertEqual(health['capabilities']['asr_languages'], ['en'])
+            self.assertTrue(health['capabilities']['asr'])
+
     def test_transcriber_memory_ceiling_is_actionable_and_preserves_subtitles(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)

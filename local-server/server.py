@@ -26,6 +26,7 @@ from typing import Iterator
 from urllib.parse import parse_qs, urlparse
 
 from pinyin import bilingual_srt, contains_han
+from asr_models import nano_model_available, select_engine
 
 VIDEO_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
 EXTENSION_ORIGIN_PATTERN = re.compile(r"chrome-extension://[a-p]{32}\Z")
@@ -263,10 +264,16 @@ class SubtitleService:
                 self.health_cached = checks
                 self.health_checked_at = time.monotonic()
             checks = dict(self.health_cached)
+        model_setting = os.environ.get("SUBSANYWHERE_ASR_MODEL", "auto")
+        models = {language: select_engine(model_setting, language) for language in ("en", "zh")}
+        base_ready = all(checks.values())
+        checks["nano_model"] = nano_model_available()
+        languages = [language for language, model in models.items()
+                     if base_ready and (model != "nano" or checks["nano_model"])]
         return {"ok": True, "service": "subsanywhere", "api_version": 1,
-                "checks": checks, "capabilities": {
+                "checks": checks, "recognition_models": models, "capabilities": {
                     "existing": all(checks[key] for key in ("yt_dlp", "ffmpeg", "pinyin")),
-                    "asr": all(checks.values()),
+                    "asr": bool(languages), "asr_languages": languages,
                 }, "limits": {"max_jobs": self.max_jobs}}
 
     def _youtube_command(self) -> list[str]:
