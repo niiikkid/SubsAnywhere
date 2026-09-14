@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import server
 import pinyin
+from caption_fixtures import metadata_response
 
 
 class PathSafetyTests(unittest.TestCase):
@@ -145,6 +146,9 @@ class SubtitleServiceTests(unittest.TestCase):
             root = pathlib.Path(temporary)
 
             def run(command, **kwargs):
+                discovery = metadata_response(command)
+                if discovery is not None:
+                    return discovery
                 calls.append(command)
                 if "--write-auto-subs" in command:
                     paths = server.output_paths(root, "rwnyaH6cTDE")
@@ -180,6 +184,9 @@ class SubtitleServiceTests(unittest.TestCase):
             root = pathlib.Path(temporary)
 
             def run(command, **kwargs):
+                discovery = metadata_response(command)
+                if discovery is not None:
+                    return discovery
                 calls.append(command)
                 if "--write-subs" in command and "zh" in command[command.index("--sub-langs") + 1].split(","):
                     pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", "zh.srt")).write_text(
@@ -205,6 +212,9 @@ class SubtitleServiceTests(unittest.TestCase):
             root = pathlib.Path(temporary)
 
             def run(command, **kwargs):
+                discovery = metadata_response(command)
+                if discovery is not None:
+                    return discovery
                 calls.append(command)
                 if "-x" in command:
                     output = pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", "mp3"))
@@ -243,6 +253,9 @@ class SubtitleServiceTests(unittest.TestCase):
             root = pathlib.Path(temporary)
 
             def run(command, **kwargs):
+                discovery = metadata_response(command)
+                if discovery is not None:
+                    return discovery
                 calls.append(command)
                 if "-x" in command:
                     output = pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", "mp3"))

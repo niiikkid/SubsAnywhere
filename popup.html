@@ -38,7 +38,14 @@
         <h2>Субтитры YouTube</h2>
         <span>локальный сервер</span>
       </div>
-      <p id="youtubeSubtitleStatus" class="hint" role="status" aria-live="polite">Проверяю готовые китайские субтитры…</p>
+      <p id="youtubeSubtitleStatus" class="hint" role="status" aria-live="polite">Ищу английские или китайские субтитры на языке оригинала…</p>
+      <label>Язык субтитров
+        <select id="youtubeLanguage">
+          <option value="">Автоматически — язык оригинала</option>
+          <option value="en">Английский</option>
+          <option value="zh">Китайский с пиньинем</option>
+        </select>
+      </label>
       <div id="youtubeProgressBox" class="youtube-progress" hidden>
         <div class="progress-row">
           <progress id="youtubeProgress" max="100" value="0" aria-label="Создание субтитров"></progress>

@@ -232,7 +232,7 @@ export class BackgroundController {
           return ok(await this.#translateCaption(message));
         case MESSAGE.LOCAL_SUBTITLE_EXISTING:
           if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');
-          return ok(await this.#localSubtitles.existing(message.videoId));
+          return ok(await this.#localSubtitles.existing(message.videoId, message.language));
         case MESSAGE.LOCAL_SUBTITLE_GENERATE:
           if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');
           return ok(await this.#localSubtitles.generate(message.videoId));
@@ -559,11 +559,21 @@ export class BackgroundController {
           dictionary: translation.dictionary,
           context: translation.context,
           glossary: translation.glossary,
+          isSentenceTranslation: true,
         }],
       };
     }
+    const translation = await this.#deepSeek.translateCaption(text);
     return {
-      items: await this.#deepSeek.translateCaption(text),
+      items: [{
+        start: 0,
+        end: displayText.length || text.length,
+        text: displayText || text,
+        dictionary: translation.translation,
+        context: translation.translation,
+        glossary: translation.glossary,
+        isSentenceTranslation: true,
+      }],
     };
   }
 

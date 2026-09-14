@@ -280,12 +280,20 @@ test('production shows a pinyin-to-Russian glossary with the full Chinese senten
   assert.equal(tooltip.children[2].children.map((child) => child.textContent).join(' '), 'Слова nǐ hǎo — здравствуйте shì jiè — мир wǒ — я men — множественное число xué — учиться zhōng wén — китайский язык hěn — очень yǒu — есть yì si — интересный xiè xie — спасибо zài jiàn — до свидания míng tiān — завтра jiàn — увидимся');
 });
 
-test('production turns prepared English phrases into toggled translation tooltips', async () => {
+test('production shows a full English sentence translation with a phrase list', async () => {
   const harness = await makeHarness();
   harness.context.chrome.runtime.sendMessage = (message) => {
     if (message.type === 'dualCaptions.caption.translate') {
       return Promise.resolve({ ok: true, data: {
-        items: [{ start: 0, end: 5, text: 'Built', dictionary: 'строить', context: 'встроенный' }],
+        items: [{
+          start: 0,
+          end: 8,
+          text: 'Built in',
+          dictionary: 'Встроено.',
+          context: 'Встроено.',
+          glossary: [{ text: 'Built in', translation: 'встроено' }],
+          isSentenceTranslation: true,
+        }],
       } });
     }
     harness.reports.push(structuredClone(message));
@@ -306,11 +314,15 @@ test('production turns prepared English phrases into toggled translation tooltip
 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
   const phrase = overlay.children[0].children[0];
-  assert.equal(phrase.textContent, 'Built');
+  assert.equal(phrase.textContent, 'Built in');
   phrase.dispatch('click', { stopPropagation() {} });
   assert.equal(
     overlay.children.at(-1).children[1].children.map((child) => child.textContent).join(' '),
-    'Обычно строить',
+    'Перевод Встроено.',
+  );
+  assert.equal(
+    overlay.children.at(-1).children[2].children.map((child) => child.textContent).join(' '),
+    'Фразы Built in — встроено',
   );
 
   phrase.dispatch('click', { stopPropagation() {} });
@@ -380,7 +392,7 @@ test('production makes the original caption clickable while its translation is l
 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
   const token = overlay.children[0].children[0];
-  assert.equal(token.textContent, 'Built');
+  assert.equal(token.textContent, 'Built in');
   token.dispatch('click', { stopPropagation() {} });
   assert.equal(
     overlay.children.at(-1).children[1].children.map((child) => child.textContent).join(' '),
@@ -388,7 +400,7 @@ test('production makes the original caption clickable while its translation is l
   );
 });
 
-test('production keeps original caption tokens clickable when AI returns no phrases', async () => {
+test('production keeps the full original caption clickable when AI returns no phrases', async () => {
   const harness = await makeHarness();
   harness.context.chrome.runtime.sendMessage = (message) => {
     if (message.type === 'dualCaptions.caption.translate') return Promise.resolve({ ok: true, data: { items: [] } });
@@ -409,7 +421,7 @@ test('production keeps original caption tokens clickable when AI returns no phra
 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
   const token = overlay.children[0].children[0];
-  assert.equal(token.textContent, 'Built');
+  assert.equal(token.textContent, 'Built in');
   assert.equal(token.listeners.get('click')?.size, 1);
 });
 

@@ -4,6 +4,7 @@ export const DEFAULT_STATE = Object.freeze({
   schemaVersion: SCHEMA_VERSION,
   settings: Object.freeze({
     secondTrackId: '',
+    youtubeLanguage: '',
     secondTrackFallbackId: '',
     secondTrackCacheId: '',
     secondTrackCacheSource: '',
@@ -27,6 +28,7 @@ export const DEFAULT_ROOT_STATE = Object.freeze({
 
 const SETTING_KEYS = new Set([
   'secondTrackId',
+  'youtubeLanguage',
   'secondTrackFallbackId',
   'secondTrackCacheId',
   'secondTrackCacheSource',
@@ -112,6 +114,7 @@ export function normalizeState(value = {}) {
     settings: {
       ...retainedSettings,
       secondTrackId: selectedTrackId,
+      youtubeLanguage: ['en', 'zh'].includes(settings.youtubeLanguage) ? settings.youtubeLanguage : '',
       secondTrackFallbackId: selectedFallbackId,
       secondTrackCacheId: typeof settings.secondTrackCacheId === 'string' ? settings.secondTrackCacheId : '',
       secondTrackCacheSource: typeof settings.secondTrackCacheSource === 'string' ? settings.secondTrackCacheSource : '',

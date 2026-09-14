@@ -41,13 +41,17 @@ export function youtubeVideoId(rawUrl) {
   }
 }
 
-export function localSubtitleTrack(videoId, source, cues) {
+export function localSubtitleTrack(videoId, source, cues, language = '') {
   const safeId = assertVideoId(videoId);
   const safeSource = source === 'generated' ? 'generated' : 'youtube';
+  // Older servers have no language field; infer the label from their subtitle text.
+  const safeLanguage = ['en', 'zh'].includes(language) ? language
+    : cues.some((cue) => /\p{Script=Han}/u.test(cue.text)) ? 'zh' : 'en';
+  const label = safeLanguage === 'zh' ? 'Китайские с пиньинем' : 'Английские';
   return {
     id: `youtube-${safeId}-${safeSource}`,
-    name: `YouTube ${safeId} ${safeSource} Chinese`,
-    language: 'zh',
+    name: `${label} — ${safeSource === 'generated' ? 'распознаны локально' : 'YouTube'}`,
+    language: safeLanguage,
     cues,
     offsetSeconds: 0,
     timeScale: 1,
@@ -93,8 +97,9 @@ export class LocalSubtitleClient {
     this.#baseUrl = baseUrl;
   }
 
-  existing(videoId) {
-    return this.#request('/api/subtitles/existing', videoId);
+  existing(videoId, language = '') {
+    if (!['', 'en', 'zh'].includes(language)) throw new Error('Некорректный язык субтитров');
+    return this.#request('/api/subtitles/existing', videoId, 'GET', language);
   }
 
   generate(videoId) {
@@ -105,9 +110,9 @@ export class LocalSubtitleClient {
     return this.#request('/api/subtitles/generated', videoId);
   }
 
-  async #request(path, videoId, method = 'GET') {
+  async #request(path, videoId, method = 'GET', language = '') {
     const safeId = assertVideoId(videoId);
-    const url = `${this.#baseUrl}${path}?video_id=${encodeURIComponent(safeId)}`;
+    const url = `${this.#baseUrl}${path}?video_id=${encodeURIComponent(safeId)}${language ? `&language=${language}` : ''}`;
     const signal = AbortSignal.timeout(25_000);
     let response;
     try {

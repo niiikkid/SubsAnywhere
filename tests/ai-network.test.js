@@ -8,7 +8,7 @@ test('DeepSeek bounds network waits, omits cookies and refuses redirects', async
   let options;
   const client = new DeepSeekClient(async (_url, request) => {
     options = request;
-    return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[]}' } }] }));
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"translation":"Привет","glossary":[]}' } }] }));
   }, credentials);
   await client.translateCaption('Hello');
   assert.ok(options.signal instanceof AbortSignal);

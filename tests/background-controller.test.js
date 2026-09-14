@@ -652,7 +652,10 @@ test('caption translation sends only the current short caption to DeepSeek', asy
   const deepSeek = {
     async translateCaption(text) {
       calls.push({ text });
-      return [{ start: 0, end: 4, text: 'Wait', dictionary: 'ждать', context: 'подожди' }];
+      return {
+        translation: 'Подожди меня.',
+        glossary: [{ text: 'Wait for', translation: 'подожди' }],
+      };
     },
   };
   const controller = new BackgroundController(makeChrome(), new FakeStore(), { deepSeek });
@@ -664,7 +667,15 @@ test('caption translation sends only the current short caption to DeepSeek', asy
   }, await selectTranslationPlayer(controller));
 
   assert.equal(result.ok, true);
-  assert.deepEqual(result.data.items, [{ start: 0, end: 4, text: 'Wait', dictionary: 'ждать', context: 'подожди' }]);
+  assert.deepEqual(result.data.items, [{
+    start: 0,
+    end: 12,
+    text: 'Wait for me.',
+    dictionary: 'Подожди меня.',
+    context: 'Подожди меня.',
+    glossary: [{ text: 'Wait for', translation: 'подожди' }],
+    isSentenceTranslation: true,
+  }]);
   assert.deepEqual(calls, [{
     text: 'Wait for me.',
   }]);
@@ -700,6 +711,7 @@ test('Chinese pinyin click translates its linked characters in one request', asy
     dictionary: 'Привет, мир',
     context: 'Привет, мир',
     glossary: [{ pinyin: 'nǐ hǎo', translation: 'здравствуйте' }],
+    isSentenceTranslation: true,
   }]);
 });
 

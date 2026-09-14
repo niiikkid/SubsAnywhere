@@ -34,7 +34,7 @@ function makeDocument() {
     'syncBox', 'syncTrack', 'offsetSeconds', 'timeScalePercent', 'activate', 'restartSearch', 'subtitleFile',
     'deepseekKey', 'deepseekModel', 'saveDeepseekKey', 'clearDeepseekKey', 'aiKeyState',
     'youtubeSubtitles', 'youtubeSubtitleStatus', 'createYoutubeSubtitles',
-    'youtubeProgressBox', 'youtubeProgress', 'youtubeProgressValue', 'youtubeProgressDetail',
+    'youtubeProgressBox', 'youtubeProgress', 'youtubeProgressValue', 'youtubeProgressDetail', 'youtubeLanguage',
     'playerTab', 'appearanceTab', 'settingsTab', 'playerPanel', 'appearancePanel', 'settingsPanel',
     'subtitlePreview', 'saveStatus', 'retrySave', 'retryYoutubeSubtitles', 'retrySettings', 'pageScope',
   ];
@@ -85,6 +85,44 @@ async function bootPopup(overrides = {}, tab = { id: 77, url: 'https://video.exa
   await tick();
   return { elements: document.elements, document, messages, handlers };
 }
+
+test('YouTube language choice persists and is forwarded when loading captions', async () => {
+  const { elements, messages } = await bootPopup({
+    'dualCaptions.state.get': () => ({ state: { settings: { youtubeLanguage: 'zh' } } }),
+    'dualCaptions.localSubtitle.status': () => ({ status: 'missing' }),
+    'dualCaptions.localSubtitle.existing': () => ({ status: 'missing', language_required: true }),
+  }, { id: 77, url: 'https://www.youtube.com/watch?v=0Zaxca2sUGs' });
+  await tick();
+  assert.equal(elements.youtubeLanguage.value, 'zh');
+  assert.equal(messages.find((m) => m.type === 'dualCaptions.localSubtitle.existing').language, 'zh');
+  elements.youtubeLanguage.value = 'en';
+  elements.youtubeLanguage.listeners.get('change')();
+  await tick();
+  await tick();
+  assert.ok(messages.some((m) => m.type === 'dualCaptions.state.patch' && m.patch.youtubeLanguage === 'en'));
+  assert.equal(messages.filter((m) => m.type === 'dualCaptions.localSubtitle.existing').at(-1).language, 'en');
+});
+
+test('choosing a YouTube language selects its track instead of reloading generated Chinese captions', async () => {
+  const { elements, messages } = await bootPopup({
+    'dualCaptions.state.get': () => ({ state: { settings: { secondTrackId: 'external:generated-old' } } }),
+    'dualCaptions.localSubtitle.status': () => ({ status: 'missing' }),
+    'dualCaptions.localSubtitle.existing': (m) => m.language === 'en'
+      ? { status: 'ready', source: 'youtube', language: 'en', srt: '1\n00:00:00,000 --> 00:00:01,000\nHello\n' }
+      : { status: 'missing' },
+    'dualCaptions.track.upsertLocal': (m) => ({ state: { settings: { secondTrackId: 'external:generated-old' }, externalTracks: [m.track] } }),
+  }, { id: 77, url: 'https://www.youtube.com/watch?v=1evO3Nekrr8' });
+  await tick();
+  messages.length = 0;
+  elements.youtubeLanguage.value = 'en';
+  elements.youtubeLanguage.listeners.get('change')();
+  await tick();
+  await tick();
+  assert.equal(messages.some((m) => m.type === 'dualCaptions.localSubtitle.status'), false);
+  assert.ok(messages.some((m) => m.type === 'dualCaptions.state.patch'
+    && m.patch.secondTrackId === 'external:youtube-1evO3Nekrr8-youtube'));
+  assert.equal(messages.find((m) => m.type === 'dualCaptions.track.upsertLocal').track.language, 'en');
+});
 
 test('state and AI hydrate while the cached player request is still pending', async () => {
   const cache = deferred();
@@ -570,7 +608,7 @@ test('YouTube startup downloads ready Chinese subtitles without starting recogni
   };
   const localTrack = {
     id: 'youtube-rwnyaH6cTDE-youtube',
-    name: 'YouTube rwnyaH6cTDE youtube Chinese',
+    name: 'Китайские с пиньинем — YouTube',
     language: 'zh',
     sourceType: 'local-server',
     cues: [{ start: 0, end: 1, text: '你好' }],
@@ -636,7 +674,7 @@ test('YouTube recognition starts only after the create button is clicked', async
   const messages = [];
   const track = {
     id: 'youtube-rwnyaH6cTDE-generated',
-    name: 'YouTube rwnyaH6cTDE generated Chinese',
+    name: 'Китайские с пиньинем — распознаны локально',
     language: 'zh',
     sourceType: 'local-server',
     cues: [{ start: 0, end: 1, text: '自己' }],

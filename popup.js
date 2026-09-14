@@ -233,6 +233,8 @@ function drawSync() {
 
 function drawSettings() {
   const settings = state.settings;
+  $('youtubeLanguage').value = settings.youtubeLanguage;
+  $('youtubeLanguage').disabled = !pageKey;
   for (const id of ['fontSize', 'subtitleColor', 'subtitleBackground', 'originalTrack', 'subtitleFile']) $(id).disabled = !pageKey;
   drawTrackSelect($('originalTrack'), settings.secondTrackId, settings.secondTrackFallbackId);
   $('fontSize').value = settings.fontSize;
@@ -321,7 +323,7 @@ async function importFile(file) {
   $('subtitleFile').value = '';
 }
 
-async function installLocalSubtitle(payload, selectTrack = false) {
+async function installLocalSubtitle(payload, selectTrack = false, selectionAtStart = generatedSelectionRevision) {
   if (popupClosed) return false;
   const epoch = youtubeEpoch;
   if (payload?.status !== 'ready' || typeof payload.srt !== 'string') return false;
@@ -329,9 +331,9 @@ async function installLocalSubtitle(payload, selectTrack = false) {
   const cues = parseSrt(payload.srt);
   if (!cues.length) throw new Error('Локальный сервер вернул пустые субтитры');
   const source = payload.source === 'generated' ? 'generated' : 'youtube';
-  const track = localSubtitleTrack(youtubeId, source, cues);
+  const track = localSubtitleTrack(youtubeId, source, cues, payload.language);
   const revision = selectionRevision;
-  const shouldSelect = (selectTrack && generatedSelectionRevision === selectionRevision)
+  const shouldSelect = (selectTrack && selectionAtStart === selectionRevision)
     || (!state.settings.secondTrackId && !Object.hasOwn(editedSettings, 'secondTrackId'));
   const stored = await request(MESSAGE.TRACK_UPSERT_LOCAL, { tabId, pageKey, track });
   if (popupClosed || epoch !== youtubeEpoch) return false;
@@ -382,17 +384,21 @@ async function pollGeneratedSubtitle(epoch = youtubeEpoch) {
   }
 }
 
-async function pollExistingSubtitle(epoch, generatedReady = false) {
+async function pollExistingSubtitle(epoch, generatedReady = false, selectionAtStart = null) {
   if (popupClosed || epoch !== youtubeEpoch) return;
-  const result = await request(MESSAGE.LOCAL_SUBTITLE_EXISTING, { videoId: youtubeId });
+  const result = await request(MESSAGE.LOCAL_SUBTITLE_EXISTING, { videoId: youtubeId, language: state.settings.youtubeLanguage });
   if (popupClosed || epoch !== youtubeEpoch) return;
   if (result.status === 'running') {
     setYoutubeStatus('Скачиваю готовую дорожку YouTube… Можно продолжать настройку внешнего вида.');
-    youtubePollTimer = setTimeout(() => pollExistingSubtitle(epoch, generatedReady).catch((error) => youtubeFailure(error, true, epoch)), 1500);
+    youtubePollTimer = setTimeout(() => pollExistingSubtitle(epoch, generatedReady, selectionAtStart).catch((error) => youtubeFailure(error, true, epoch)), 1500);
     return;
   }
   if (result.status === 'error') throw new Error(result.error || 'Не удалось скачать дорожку YouTube');
-  const existingReady = await installLocalSubtitle(result);
+  if (result.language_required) {
+    setYoutubeStatus('YouTube не указал язык оригинала. Выберите английский или китайский выше.');
+    return;
+  }
+  const existingReady = await installLocalSubtitle(result, selectionAtStart !== null, selectionAtStart);
   if (popupClosed || epoch !== youtubeEpoch) return;
   if (generatedReady) {
     setYoutubeStatus(existingReady
@@ -400,10 +406,10 @@ async function pollExistingSubtitle(epoch, generatedReady = false) {
       : 'Созданные субтитры готовы. Готовой дорожки YouTube нет.');
   } else if (existingReady) {
     setYoutubeStatus(players.length
-      ? 'Готовые китайские субтитры YouTube скачаны и подключены.'
-      : 'Готовые китайские субтитры YouTube сохранены. Подключите плеер для просмотра.');
+      ? 'Субтитры на языке оригинала скачаны и подключены.'
+      : 'Субтитры на языке оригинала сохранены. Подключите плеер для просмотра.');
   } else {
-    setYoutubeStatus('Готовых китайских субтитров нет. Можно создать свои.');
+    setYoutubeStatus('Не найдена подходящая английская или китайская дорожка оригинала. Локальное создание пока доступно только для китайской речи.');
   }
 }
 
@@ -650,6 +656,18 @@ $('deepseekModel').addEventListener('change', () => saveDeepseekModel().catch((e
 $('subtitleFile').addEventListener('change', (event) => importFile(event.target.files?.[0]).catch((error) => setStatus(error.message, true)));
 $('createYoutubeSubtitles').addEventListener('click', () => createYoutubeSubtitles());
 $('retryYoutubeSubtitles').addEventListener('click', () => loadYoutubeSubtitles());
+$('youtubeLanguage').addEventListener('change', () => {
+  youtubeEpoch += 1;
+  clearTimeout(youtubePollTimer);
+  const epoch = youtubeEpoch;
+  const selectionAtStart = selectionRevision;
+  void persistSetting('youtubeLanguage', $('youtubeLanguage').value).then(() => {
+    if (!popupClosed && epoch === youtubeEpoch) {
+      setYoutubeStatus('Ищу дорожку выбранного языка…');
+      return pollExistingSubtitle(epoch, false, selectionAtStart);
+    }
+  }).catch((error) => setYoutubeStatus(error.message, true));
+});
 $('player').addEventListener('change', () => {
   const player = players.find((item) => item.frameId === Number($('player').value));
   selectPlayer(player).catch((error) => setStatus(error.message, true));

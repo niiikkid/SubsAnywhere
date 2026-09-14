@@ -13,6 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import server
+from caption_fixtures import metadata_response, missing_captions, mark_cache
 
 VIDEO = "rwnyaH6cTDE"
 VALID_SRT = "1\n00:00:00,000 --> 00:00:01,000\nCaptions\n"
@@ -108,6 +109,9 @@ class ReliabilityTests(unittest.TestCase):
     def test_failed_caption_command_cannot_publish_partial_subtitles(self):
         with tempfile.TemporaryDirectory() as directory:
             def fail(command, **kwargs):
+                discovery = metadata_response(command)
+                if discovery is not None:
+                    return discovery
                 target = pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", "zh-Hans.srt"))
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("partial subtitle")
@@ -146,10 +150,12 @@ class ReliabilityTests(unittest.TestCase):
 
     def test_instant_existing_job_ready_response_contains_srt(self):
         with tempfile.TemporaryDirectory() as directory:
-            service = server.SubtitleService(pathlib.Path(directory), start_background=lambda f: f(), pinyinize=lambda text: text)
+            service = server.SubtitleService(pathlib.Path(directory), start_background=lambda f: f(), pinyinize=lambda text: text,
+                                             run_command=mock.Mock(side_effect=AssertionError("unexpected cache miss")))
             paths = server.output_paths(service.output_root, VIDEO)
             paths.directory.mkdir(parents=True)
             paths.youtube_srt.write_text("captions")
+            mark_cache(paths.youtube_srt)
             self.assertEqual(service.existing_job(VIDEO)["srt"], "captions")
 
     def test_oversized_srt_is_rejected_before_read_or_conversion(self):
@@ -180,7 +186,7 @@ class ReliabilityTests(unittest.TestCase):
     def test_existing_async_polls_deduplicate_and_do_not_block_generation(self):
         with tempfile.TemporaryDirectory() as directory:
             pending = []
-            run = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            run = mock.Mock(side_effect=missing_captions)
             service = server.SubtitleService(pathlib.Path(directory), run_command=run, start_background=pending.append)
             self.assertEqual(service.existing_job(VIDEO)["status"], "running")
             self.assertEqual(service.existing_job(VIDEO)["status"], "running")
@@ -191,7 +197,7 @@ class ReliabilityTests(unittest.TestCase):
             pending.pop(0)()
             self.assertEqual(service.existing_job(VIDEO)["status"], "missing")
             self.assertEqual(service.existing_job(VIDEO)["status"], "missing")
-            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_count, 1)
 
     def test_failed_status_write_and_cleanup_cannot_leave_a_running_job(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -427,7 +433,7 @@ class ReliabilityTests(unittest.TestCase):
         }):
             args = server.parse_args([])
             self.assertEqual((args.host, args.port, args.output_dir), ("0.0.0.0", 43000, pathlib.Path(directory)))
-            run = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+            run = mock.Mock(side_effect=missing_captions)
             service = server.SubtitleService(args.output_dir, run_command=run)
             self.assertEqual(service.asr_python, sys.executable)
             self.assertEqual(service.max_jobs, 2)
@@ -444,6 +450,9 @@ class ReliabilityTests(unittest.TestCase):
             calls, results, errors = [], [], []
 
             def run(command, **kwargs):
+                discovery = metadata_response(command)
+                if discovery is not None:
+                    return discovery
                 calls.append(command)
                 entered.set()
                 self.assertTrue(release.wait(2))

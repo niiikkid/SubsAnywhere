@@ -40,58 +40,66 @@ test('AI credential store saves the chosen DeepSeek model for translation', asyn
 });
 
 
-test('caption translation keeps only ordered phrase spans from the displayed subtitle', () => {
+test('caption translation keeps a full sentence translation and exact source phrases', () => {
   const result = normalizeCaptionTranslation('I gave up at last.', {
-    items: [
-      { text: 'gave up', dictionary: 'сдаваться', context: 'сдался' },
-      { text: 'at last', dictionary: 'наконец', context: 'наконец-то' },
-      { text: 'invented phrase', dictionary: 'x', context: 'x' },
-      { text: 'I', dictionary: 'я', context: 'я' },
+    translation: 'В конце концов я сдался.',
+    glossary: [
+      { text: 'at last', translation: 'в конце концов' },
+      { text: 'invented phrase', translation: 'выдумано' },
+      { text: 'gave up', translation: 'сдался' },
     ],
   });
 
-  assert.deepEqual(result, [
-    { start: 0, end: 1, text: 'I', dictionary: 'я', context: 'я' },
-    { start: 2, end: 9, text: 'gave up', dictionary: 'сдаваться', context: 'сдался' },
-    { start: 10, end: 17, text: 'at last', dictionary: 'наконец', context: 'наконец-то' },
-  ]);
+  assert.deepEqual(result, {
+    translation: 'В конце концов я сдался.',
+    glossary: [
+      { text: 'gave up', translation: 'сдался' },
+      { text: 'at last', translation: 'в конце концов' },
+    ],
+  });
 });
 
-test('caption translation never matches a word inside another word and handles repeats', () => {
-  const result = normalizeCaptionTranslation('The he said he.', {
-    items: [{ text: 'he', dictionary: 'он', context: 'он' }],
+test('caption translation rejects glossary text inside another word', () => {
+  const result = normalizeCaptionTranslation('The therapist helped.', {
+    translation: 'Терапевт помог.',
+    glossary: [{ text: 'he', translation: 'он' }, { text: 'therapist', translation: 'терапевт' }],
   });
 
-  assert.deepEqual(result, [
-    { start: 4, end: 6, text: 'he', dictionary: 'он', context: 'он' },
-    { start: 12, end: 14, text: 'he', dictionary: 'он', context: 'он' },
-  ]);
+  assert.deepEqual(result.glossary, [{ text: 'therapist', translation: 'терапевт' }]);
 });
 
-test('caption translation prefers a complete phrase even when AI returns its words first', () => {
+test('caption translation prefers a complete phrase over its component words', () => {
   const result = normalizeCaptionTranslation('You should look after him.', {
-    items: [
-      { text: 'look', dictionary: 'смотреть', context: 'следить' },
-      { text: 'after', dictionary: 'после', context: 'за' },
-      { text: 'look after', dictionary: 'заботиться, присматривать', context: 'присмотреть за' },
-      { text: 'him', dictionary: 'он, ему', context: 'ним' },
+    translation: 'Тебе следует присмотреть за ним.',
+    glossary: [
+      { text: 'look', translation: 'смотреть' },
+      { text: 'after', translation: 'после' },
+      { text: 'look after', translation: 'присмотреть за' },
     ],
   });
 
-  assert.deepEqual(result, [
-    { start: 11, end: 21, text: 'look after', dictionary: 'заботиться, присматривать', context: 'присмотреть за' },
-    { start: 22, end: 25, text: 'him', dictionary: 'он, ему', context: 'ним' },
-  ]);
+  assert.deepEqual(result.glossary, [{ text: 'look after', translation: 'присмотреть за' }]);
 });
 
 test('caption translation accepts concise common response field names from AI', () => {
   const result = normalizeCaptionTranslation('I gave up.', {
-    phrases: [{ phrase: 'gave up', translation: 'сдаться', contextTranslation: 'сдался' }],
+    context: 'Я сдался.',
+    phrases: [{ phrase: 'gave up', meaning: 'сдался' }],
   });
 
-  assert.deepEqual(result, [{
-    start: 2, end: 9, text: 'gave up', dictionary: 'сдаться', context: 'сдался',
-  }]);
+  assert.deepEqual(result, {
+    translation: 'Я сдался.',
+    glossary: [{ text: 'gave up', translation: 'сдался' }],
+  });
+});
+
+test('caption translation never truncates the complete sentence translation', () => {
+  const translation = `Полный перевод: ${'длинная фраза '.repeat(30)}`.trim();
+
+  assert.equal(normalizeCaptionTranslation('A long complete sentence.', {
+    translation,
+    glossary: [],
+  }).translation, translation);
 });
 
 test('DeepSeek prepares concise click translations for one caption only', async () => {
@@ -102,37 +110,36 @@ test('DeepSeek prepares concise click translations for one caption only', async 
   const client = new DeepSeekClient(async (_url, options) => {
     request = JSON.parse(options.body);
     return new Response(JSON.stringify({
-      choices: [{ message: { content: '{"items":[{"text":"I","dictionary":"я","context":"я"},{"text":"gave up","dictionary":"сдаваться","context":"сдался"}]}' } }],
+      choices: [{ message: { content: '{"translation":"Я сдался.","glossary":[{"text":"gave up","translation":"сдался"}]}' } }],
     }), { status: 200, headers: { 'content-type': 'application/json' } });
   }, credentials);
 
   const result = await client.translateCaption('I gave up.');
 
-  assert.deepEqual(result, [
-    { start: 0, end: 1, text: 'I', dictionary: 'я', context: 'я' },
-    { start: 2, end: 9, text: 'gave up', dictionary: 'сдаваться', context: 'сдался' },
-  ]);
-  assert.equal(request.max_tokens, 2400);
+  assert.deepEqual(result, {
+    translation: 'Я сдался.',
+    glossary: [{ text: 'gave up', translation: 'сдался' }],
+  });
+  assert.equal(request.max_tokens, 1600);
   assert.equal(request.model, 'deepseek-v4-pro');
   assert.deepEqual(request.thinking, { type: 'disabled' });
   assert.equal('reasoning_effort' in request, false);
-  assert.match(request.messages[0].content, /phrasal verbs, idioms and fixed expressions/i);
-  assert.match(request.messages[0].content, /every English word exactly once/i);
-  assert.match(request.messages[0].content, /multi-word/i);
-  assert.match(request.messages[0].content, /articles, pronouns, auxiliaries/i);
+  assert.match(request.messages[0].content, /entire English subtitle sentence/i);
+  assert.match(request.messages[0].content, /natural Russian/i);
+  assert.match(request.messages[0].content, /phrases, not a word-by-word breakdown/i);
   assert.match(request.messages[0].content, /Before returning JSON/i);
   assert.match(request.messages[0].content, /Example input:/);
   assert.deepEqual(JSON.parse(request.messages[1].content), { caption: 'I gave up.' });
   assert.match(request.messages[1].content, /I gave up\./);
 });
 
-test('DeepSeek keeps valid partial translations without a repair request', async () => {
+test('DeepSeek keeps a valid sentence translation without a repair request', async () => {
   const storage = new MemoryStorage();
   const credentials = new AiCredentialStore(storage);
   await credentials.patch({ apiKey: 'test-key' });
   const requests = [];
   const replies = [
-    { items: [{ text: 'gave up', dictionary: 'сдаваться', context: 'сдался' }] },
+    { translation: 'Я сдался.', glossary: [] },
   ];
   const client = new DeepSeekClient(async (_url, options) => {
     requests.push(JSON.parse(options.body));
@@ -144,9 +151,7 @@ test('DeepSeek keeps valid partial translations without a repair request', async
   const result = await client.translateCaption('I gave up.');
 
   assert.equal(requests.length, 1);
-  assert.deepEqual(result, [
-    { start: 2, end: 9, text: 'gave up', dictionary: 'сдаваться', context: 'сдался' },
-  ]);
+  assert.deepEqual(result, { translation: 'Я сдался.', glossary: [] });
 });
 
 test('DeepSeek translates a linked Chinese sentence in one request', async () => {

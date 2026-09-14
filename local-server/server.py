@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -32,7 +33,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 43817
 MAX_SUBTITLE_BYTES = 5 * 1024 * 1024
 MAX_AUDIO_BYTES = 512 * 1024 * 1024
-CHINESE_SUBTITLE_LANGUAGES = ("zh-Hans", "zh-CN", "zh", "zh-Hant", "zh-TW")
+CAPTION_CACHE_VERSION = 1
 ERROR_MESSAGES = {
     "interrupted": "Generation interrupted by server restart; retry.",
     "start_failed": "Could not start generation; retry.",
@@ -107,6 +108,60 @@ def output_paths(root: Path, video_id: str) -> OutputPaths:
         generated_txt=directory / f"{prefix}-generated.txt",
         generated_markdown=directory / f"{prefix}-generated.timestamps.md",
     )
+
+
+def validate_caption_language(language: str) -> str:
+    if language not in ("", "en", "zh"):
+        raise ValueError("Invalid caption language")
+    return language
+
+
+def caption_language(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+    base = value.lower().replace("_", "-").split("-")[0]
+    return base if base in {"en", "zh"} else None
+
+
+def select_original_captions(metadata: dict, language: str = "") -> tuple[str | None, list]:
+    """Prefer manual tracks, then original ASR; never infer speech from titles.
+
+    Unlabelled multilingual HLS captions are not evidence of original language.
+    Unknown/unsupported/ambiguous originals deliberately return no selection.
+    """
+    override = validate_caption_language(language)
+    tracks = []
+    for source in ("subtitles", "automatic_captions"):
+        mapping = metadata.get(source)
+        if not isinstance(mapping, dict):
+            continue
+        for code, formats in sorted(mapping.items(), key=lambda pair: (not pair[0].endswith("-orig"), pair[0])):
+            if "-t-" in code.lower() or not isinstance(formats, list):
+                continue
+            original = [item for item in formats if isinstance(item, dict)
+                        and isinstance(item.get("url"), str)
+                        and "tlang" not in parse_qs(urlparse(item["url"]).query, keep_blank_values=True)]
+            if original:
+                tracks.append((source, code, original))
+
+    declared = next((value for value in (override, metadata.get("language"), metadata.get("audio_language"))
+                     if isinstance(value, str) and value and value.lower() != "und"), None)
+    if not declared:
+        audio = [item for item in (metadata.get("formats") or []) if isinstance(item, dict)
+                 and isinstance(item.get("language"), str) and item["language"]
+                 and item["language"].lower() != "und" and item.get("acodec") != "none"]
+        originals = [item for item in audio if "original" in str(item.get("format_note", "")).lower()]
+        evidence = {item["language"].split("-")[0].lower() for item in (originals or audio)}
+        if len(evidence) == 1:
+            declared = next(iter(evidence))
+    if not declared:
+        auto = [code for source, code, _ in tracks if source == "automatic_captions"]
+        originals = [code for code in auto if code.endswith("-orig")]
+        evidence = {code.split("-")[0].lower() for code in (originals or auto)}
+        if len(evidence) == 1:
+            declared = next(iter(evidence))
+    selected_language = caption_language(declared)
+    return selected_language, [item for item in tracks if selected_language and caption_language(item[1]) == selected_language]
 
 
 def progress_path(paths: OutputPaths) -> Path:
@@ -266,36 +321,42 @@ class SubtitleService:
             return dict(self.jobs[video_id])
         return job
 
-    def existing(self, video_id: str) -> dict:
+    def existing(self, video_id: str, language: str = "") -> dict:
         safe_id = validate_video_id(video_id)
+        language = validate_caption_language(language)
         self._check_cancelled()
         paths = output_paths(self.output_root, safe_id)
         download_lock = self.download_locks[hash(safe_id) % len(self.download_locks)]
         if not download_lock.acquire(timeout=10):
             raise ServiceError("busy")
         try:
-            if paths.youtube_srt.is_file() and paths.youtube_srt.stat().st_size:
-                return self._youtube_subtitle_payload(paths.youtube_srt)
+            cached = self._cached_youtube_payload(paths.youtube_srt, language)
+            if cached:
+                return cached
             if not self.caption_slots.acquire(blocking=False):
                 raise ServiceError("busy")
             try:
-                return self._download_existing(safe_id, paths)
+                return self._download_existing(safe_id, paths, language)
             finally:
                 self.caption_slots.release()
         finally:
             download_lock.release()
 
-    def existing_job(self, video_id: str) -> dict:
+    def existing_job(self, video_id: str, language: str = "") -> dict:
         """Nonblocking HTTP facade; MV3 fetches cannot wait for yt-dlp."""
         safe_id = validate_video_id(video_id)
+        language = validate_caption_language(language)
+        key = (safe_id, language)
         paths = output_paths(self.output_root, safe_id)
         with self.lock:
             self._check_cancelled()
-            cached = self.caption_jobs.get(safe_id)
+            cached = self.caption_jobs.get(key)
             if cached:
                 updated, payload = cached
-                if payload["status"] == "ready" and paths.youtube_srt.is_file():
-                    return self._subtitle_payload(paths.youtube_srt, "youtube")
+                if payload["status"] == "ready":
+                    ready = self._cached_youtube_payload(paths.youtube_srt, language)
+                    if ready:
+                        return ready
                 cooldown = 10 if payload["status"] == "error" else 60
                 if payload["status"] == "running" or (payload["status"] != "ready" and time.monotonic() - updated < cooldown):
                     return dict(payload)
@@ -303,63 +364,104 @@ class SubtitleService:
                 raise ServiceError("busy")
             self.caption_active.add(safe_id)
             payload = {"status": "running", "source": "youtube", "stage": "downloading"}
-            self.caption_jobs[safe_id] = (time.monotonic(), payload)
-            self.caption_jobs.move_to_end(safe_id)
+            self.caption_jobs[key] = (time.monotonic(), payload)
+            self.caption_jobs.move_to_end(key)
             while len(self.caption_jobs) > 128:
                 self.caption_jobs.popitem(last=False)
         try:
-            self.start_background(lambda: self._existing_worker(safe_id))
+            self.start_background(lambda: self._existing_worker(safe_id, language))
         except Exception:
             with self.lock:
                 self.caption_active.discard(safe_id)
-                self.caption_jobs[safe_id] = (time.monotonic(), error_payload(ServiceError("start_failed"), "youtube"))
+                self.caption_jobs[key] = (time.monotonic(), error_payload(ServiceError("start_failed"), "youtube"))
         with self.lock:
-            result = dict(self.caption_jobs[safe_id][1])
-        return self._subtitle_payload(paths.youtube_srt, "youtube") if result["status"] == "ready" else result
+            result = dict(self.caption_jobs[key][1])
+        if result["status"] == "ready":
+            return self._cached_youtube_payload(paths.youtube_srt, language) or error_payload(ServiceError("invalid_output"), "youtube")
+        return result
 
-    def _existing_worker(self, video_id: str):
+    def _existing_worker(self, video_id: str, language: str = ""):
         try:
-            result = self.existing(video_id)
+            result = self.existing(video_id, language)
             result = {key: value for key, value in result.items() if key != "srt"}
         except BaseException as error:
             result = error_payload(error, "youtube")
         with self.lock:
-            self.caption_jobs[video_id] = (time.monotonic(), result)
+            self.caption_jobs[(video_id, language)] = (time.monotonic(), result)
             self.caption_active.discard(video_id)
 
-    def _download_existing(self, safe_id: str, paths: OutputPaths) -> dict:
-        if paths.youtube_srt.is_file() and paths.youtube_srt.stat().st_size:
-            return self._youtube_subtitle_payload(paths.youtube_srt)
+    def _download_existing(self, safe_id: str, paths: OutputPaths, requested_language: str = "") -> dict:
         paths.directory.mkdir(parents=True, exist_ok=True)
-        failures = 0
-        for flag in ("--write-subs", "--write-auto-subs"):
-            # Failed downloads remain isolated, including a converter that exits
-            # nonzero after writing only half an SRT. Never promote those files.
-            with tempfile.TemporaryDirectory(prefix=".captions-", dir=paths.directory) as directory:
-                output_template = Path(directory) / f"youtube-{safe_id}-youtube.%(ext)s"
-                result = self.run_command(
-                    self._youtube_command() + ["--skip-download", "--no-playlist", flag,
-                        "--sub-langs", ",".join(CHINESE_SUBTITLE_LANGUAGES),
-                        "--sub-format", "srt", "--convert-subs", "srt",
-                        "-o", str(output_template), f"https://www.youtube.com/watch?v={safe_id}"],
-                    capture_output=True, text=True, timeout=180, check=False,
-                )
-                self._check_cancelled()
-                if result.returncode:
-                    failures += 1
+        with tempfile.TemporaryDirectory(prefix=".captions-", dir=paths.directory) as directory:
+            work = Path(directory)
+            template = work / "metadata.%(ext)s"
+            result = self.run_command(
+                self._youtube_command() + ["--skip-download", "--no-playlist", "--write-info-json",
+                    "-o", str(template), f"https://www.youtube.com/watch?v={safe_id}"],
+                capture_output=True, text=True, timeout=180, check=False,
+            )
+            self._require_success(result)
+            self._check_cancelled()
+            try:
+                metadata = json.loads(self._read_subtitle(work / "metadata.info.json"))
+                if not isinstance(metadata, dict):
+                    raise ValueError("Invalid metadata")
+            except (ValueError, FileNotFoundError):
+                raise ServiceError("invalid_output") from None
+            language, selections = select_original_captions(metadata, requested_language)
+            if language is None:
+                available = [code for code in ("en", "zh") if select_original_captions(metadata, code)[1]]
+                return {"status": "missing", "source": "youtube", "language_required": bool(available),
+                        "available_languages": available}
+            failures = 0
+            # At most one manual and one automatic attempt, independent of how
+            # many regional aliases YouTube exposes. Never download media.
+            attempted = set()
+            for source, code, formats in selections:
+                if source in attempted:
                     continue
-                candidate = next((path for path in Path(directory).glob("*.srt")
-                                  if path.is_file() and path.stat().st_size), None)
-                if candidate:
-                    contents = self._clean_srt(self._read_subtitle(candidate))
-                    self._validate_srt(contents)
-                    contents = self._pinyinize_srt(candidate, contents)
+                attempted.add(source)
+                selected = dict(metadata, subtitles={}, automatic_captions={})
+                selected[source] = {code: formats}
+                selected.pop("requested_subtitles", None)
+                info = work / "selected.info.json"
+                info.write_text(json.dumps(selected), encoding="utf-8")
+                with tempfile.TemporaryDirectory(prefix="track-", dir=work) as attempt:
+                    output_template = Path(attempt) / f"youtube-{safe_id}-youtube.%(ext)s"
+                    flag = "--write-subs" if source == "subtitles" else "--write-auto-subs"
+                    result = self.run_command(
+                        self._youtube_command() + ["--skip-download", "--no-playlist", flag,
+                            "--sub-langs", re.escape(code).replace(r"\-", "-"), "--sub-format", "srt/vtt/best",
+                            "--convert-subs", "srt", "--load-info-json", str(info),
+                            "-o", str(output_template)],
+                        capture_output=True, text=True, timeout=180, check=False,
+                    )
                     self._check_cancelled()
-                    candidate.replace(paths.youtube_srt)
-                    return self._subtitle_payload(paths.youtube_srt, "youtube", contents)
-        if failures:
-            raise ServiceError("command_failed")
-        return {"status": "missing", "source": "youtube"}
+                    if result.returncode:
+                        failures += 1
+                        continue
+                    candidate = next((path for path in Path(attempt).glob("*.srt")
+                                      if path.is_file() and path.stat().st_size), None)
+                    if candidate:
+                        contents = self._clean_srt(self._read_subtitle(candidate))
+                        self._validate_srt(contents)
+                        if language == "zh":
+                            contents = self._pinyinize_srt(candidate, contents)
+                        else:
+                            self._write_text_atomically(candidate, contents)
+                        self._check_cancelled()
+                        record = {"version": CAPTION_CACHE_VERSION, "language": language,
+                                  "requested_language": requested_language,
+                                  "track": code, "kind": source,
+                                  "sha256": hashlib.sha256(contents.encode("utf-8")).hexdigest()}
+                        # Bind provenance to exact bytes. Publish SRT last; failed
+                        # refreshes preserve it, crashes cannot trust stale metadata.
+                        self._write_text_atomically(paths.youtube_srt.with_suffix(".language.json"), json.dumps(record))
+                        candidate.replace(paths.youtube_srt)
+                        return self._subtitle_payload(paths.youtube_srt, "youtube", contents, language)
+            if failures:
+                raise ServiceError("command_failed")
+            return {"status": "missing", "source": "youtube"}
 
     def generate(self, video_id: str) -> dict:
         safe_id = validate_video_id(video_id)
@@ -726,8 +828,20 @@ class SubtitleService:
     def _pinyin_subtitle_payload(self, path: Path, subtitle_source: str) -> dict:
         return self._subtitle_payload(path, subtitle_source, self._pinyinize_srt(path))
 
-    def _youtube_subtitle_payload(self, path: Path) -> dict:
-        return self._pinyin_subtitle_payload(path, "youtube")
+    def _cached_youtube_payload(self, path: Path, requested_language: str = "") -> dict | None:
+        try:
+            with path.with_suffix(".language.json").open(encoding="utf-8") as source:
+                record = json.loads(source.read(8192))
+            if (not isinstance(record, dict) or record.get("version") != CAPTION_CACHE_VERSION
+                    or record.get("language") not in {"en", "zh"}
+                    or record.get("requested_language") != requested_language):
+                return None
+            contents = self._read_subtitle(path)
+            if hashlib.sha256(contents.encode("utf-8")).hexdigest() != record.get("sha256"):
+                return None
+            return self._subtitle_payload(path, "youtube", contents, record["language"])
+        except (OSError, ValueError):
+            return None
 
     @staticmethod
     def _read_subtitle(path: Path) -> str:
@@ -740,10 +854,11 @@ class SubtitleService:
         return data.decode("utf-8")
 
     @staticmethod
-    def _subtitle_payload(path: Path, source: str, contents: str | None = None) -> dict:
+    def _subtitle_payload(path: Path, source: str, contents: str | None = None, language: str = "zh") -> dict:
         return {
             "status": "ready",
             "source": source,
+            "language": language,
             "file_name": path.name,
             "srt": SubtitleService._read_subtitle(path) if contents is None else contents,
         }
@@ -834,10 +949,16 @@ def handler_for(service):
                 return
             try:
                 query = parse_qs(parsed.query, keep_blank_values=True, max_num_fields=4)
+                options = {}
+                if parsed.path == "/api/subtitles/existing" and "language" in query:
+                    languages = query.pop("language")
+                    if len(languages) != 1 or languages[0] not in {"en", "zh"}:
+                        raise ValueError("Invalid caption language")
+                    options["language"] = languages[0]
                 if set(query) != {"video_id"} or len(query["video_id"]) != 1 or parsed.netloc or parsed.fragment:
                     raise ValueError("Invalid query")
                 video_id = query["video_id"][0]
-                payload = action(validate_video_id(video_id))
+                payload = action(validate_video_id(video_id), **options)
                 self._send_json(HTTPStatus.OK, payload)
             except ValueError:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid video ID or query"})

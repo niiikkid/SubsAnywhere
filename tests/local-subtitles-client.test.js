@@ -33,20 +33,32 @@ test('youtubeVideoId accepts supported YouTube pages and rejects other URLs', ()
   assert.equal(youtubeVideoId('https://www.youtube.com/watch?v=bad/id'), '');
 });
 
-test('localSubtitleTrack uses deterministic English-only metadata', () => {
+test('localSubtitleTrack keeps a stable ID and a readable Chinese name', () => {
   const track = localSubtitleTrack('rwnyaH6cTDE', 'generated', [
     { start: 1, end: 2, text: '你好' },
   ]);
 
   assert.deepEqual(track, {
     id: 'youtube-rwnyaH6cTDE-generated',
-    name: 'YouTube rwnyaH6cTDE generated Chinese',
+    name: 'Китайские с пиньинем — распознаны локально',
     language: 'zh',
     cues: [{ start: 1, end: 2, text: '你好' }],
     offsetSeconds: 0,
     timeScale: 1,
     sourceType: 'local-server',
   });
+});
+
+test('localSubtitleTrack uses the original language and readable names', () => {
+  const cues = [{ start: 0, end: 1, text: 'May I ask about AI?' }];
+  const track = localSubtitleTrack('1evO3Nekrr8', 'youtube', cues, 'en');
+  assert.equal(track.language, 'en');
+  assert.equal(track.name, 'Английские — YouTube');
+  assert.equal(track.id, 'youtube-1evO3Nekrr8-youtube');
+  assert.deepEqual(track.cues, cues);
+  assert.equal(localSubtitleTrack('1evO3Nekrr8', 'youtube', cues).language, 'en');
+  assert.equal(localSubtitleTrack('0Zaxca2sUGs', 'youtube', [{ start: 0, end: 1, text: '你好' }], 'zh').name,
+    'Китайские с пиньинем — YouTube');
 });
 
 test('LocalSubtitleClient sends only validated video ids to the fixed local server', async () => {
@@ -67,6 +79,18 @@ test('LocalSubtitleClient sends only validated video ids to the fixed local serv
   assert.equal(calls[0].options.method, 'GET');
   assert.equal(calls[0].options.headers['X-SubsAnywhere-Client'], 'extension-v1');
   await assert.rejects(() => client.generate('../escape'), /YouTube video ID/i);
+});
+
+test('caption language overrides are validated and sent to the server', async () => {
+  const urls = [];
+  const client = new LocalSubtitleClient(async (url) => {
+    urls.push(url);
+    return { ok: true, json: async () => ({ status: 'missing' }) };
+  });
+  await client.existing('0Zaxca2sUGs', 'zh');
+  assert.match(urls[0], /&language=zh$/);
+  await assert.rejects(async () => client.existing('0Zaxca2sUGs', 'bad'), /язык/i);
+  assert.equal(urls.length, 1);
 });
 
 test('local requests reject malformed success payloads rather than silently stopping polling', async () => {

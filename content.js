@@ -162,19 +162,22 @@
       close.addEventListener('click', (event) => { event.stopPropagation(); dismissTooltip(); });
       const glossary = (Array.isArray(item.glossary) ? item.glossary : [])
         .map((term) => ({
-          pinyin: typeof term?.pinyin === 'string' ? term.pinyin.trim().slice(0, 120) : '',
+          source: typeof (term?.pinyin ?? term?.text ?? term?.phrase) === 'string'
+            ? String(term.pinyin ?? term.text ?? term.phrase).trim().slice(0, 120)
+            : '',
+          isPinyin: typeof term?.pinyin === 'string',
           translation: typeof term?.translation === 'string' ? term.translation.trim().slice(0, 160) : '',
         }))
-        .filter((term) => term.pinyin && term.translation);
+        .filter((term) => term.source && term.translation);
       const dictionary = document.createElement('div');
       dictionary.style.cssText = 'font-size:14px;line-height:1.35;';
       const dictionaryLabel = document.createElement('span');
       dictionaryLabel.style.cssText = 'display:block;margin-bottom:2px;color:#8f9ab3;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;';
-      dictionaryLabel.textContent = glossary.length ? 'Перевод' : 'Обычно';
+      dictionaryLabel.textContent = glossary.length || item.isSentenceTranslation ? 'Перевод' : 'Обычно';
       const dictionaryValue = document.createElement('span');
       dictionaryValue.textContent = item.dictionary;
       dictionary.append(dictionaryLabel, dictionaryValue);
-      if (!glossary.length) {
+      if (!glossary.length && !item.isSentenceTranslation) {
         const context = document.createElement('div');
         context.style.cssText = 'margin-top:7px;padding-top:6px;border-top:1px solid rgba(177,196,255,.18);color:#d7e1ff;font-size:14px;line-height:1.35;';
         const contextLabel = document.createElement('span');
@@ -184,19 +187,21 @@
         contextValue.textContent = item.context;
         context.append(contextLabel, contextValue);
         tooltip.append(close, dictionary, context);
-      } else {
+      } else if (glossary.length) {
         const terms = document.createElement('div');
         terms.style.cssText = 'margin-top:7px;padding-top:6px;border-top:1px solid rgba(177,196,255,.18);color:#d7e1ff;font-size:13px;line-height:1.4;';
         const termsLabel = document.createElement('span');
         termsLabel.style.cssText = 'display:block;margin-bottom:3px;color:#8f9ab3;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;';
-        termsLabel.textContent = 'Слова';
+        termsLabel.textContent = glossary.some((term) => term.isPinyin) ? 'Слова' : 'Фразы';
         terms.append(termsLabel);
         for (const term of glossary) {
           const row = document.createElement('div');
-          row.textContent = `${term.pinyin} — ${term.translation}`;
+          row.textContent = `${term.source} — ${term.translation}`;
           terms.append(row);
         }
         tooltip.append(close, dictionary, terms);
+      } else {
+        tooltip.append(close, dictionary);
       }
       state.root.append(tooltip);
       const word = anchor.getBoundingClientRect();
@@ -208,28 +213,21 @@
     }
 
     function renderPendingCaption(target, text) {
-      for (const part of text.split(/(\s+)/)) {
-        if (!part) continue;
-        if (/^\s+$/.test(part)) {
-          target.append(document.createTextNode(part));
-          continue;
-        }
-        const token = document.createElement('span');
-        token.textContent = part;
-        token.tabIndex = 0;
-        token.setAttribute('role', 'button');
-        token.style.cssText = 'pointer-events:auto;cursor:pointer;border-radius:4px;padding:0 2px;color:inherit;text-decoration:underline;text-decoration-color:rgba(174,199,255,.9);text-decoration-style:dotted;text-decoration-thickness:2px;text-underline-offset:3px;transition:background .14s,color .14s;';
-        makeCaptionFocusable(token);
-        const loading = () => showTooltip({
-          dictionary: 'Перевод готовится…',
-          context: 'Нажмите ещё раз через мгновение.',
-        }, token);
-        token.addEventListener('click', (event) => { event.stopPropagation(); loading(); });
-        token.addEventListener('keydown', (event) => {
-          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); loading(); }
-        });
-        target.append(token);
-      }
+      const caption = document.createElement('span');
+      caption.textContent = text;
+      caption.tabIndex = 0;
+      caption.setAttribute('role', 'button');
+      caption.style.cssText = 'pointer-events:auto;cursor:pointer;border-radius:4px;padding:0 2px;color:inherit;text-decoration:underline;text-decoration-color:rgba(174,199,255,.9);text-decoration-style:dotted;text-decoration-thickness:2px;text-underline-offset:3px;transition:background .14s,color .14s;';
+      makeCaptionFocusable(caption);
+      const loading = () => showTooltip({
+        dictionary: 'Перевод готовится…',
+        context: 'Нажмите ещё раз через мгновение.',
+      }, caption);
+      caption.addEventListener('click', (event) => { event.stopPropagation(); loading(); });
+      caption.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); loading(); }
+      });
+      target.append(caption);
     }
 
     function translationDescriptor(text) {
