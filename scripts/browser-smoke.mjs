@@ -93,10 +93,12 @@ try {
   })()`);
   // No change/blur event: the input event itself must leave the ephemeral popup.
   await popup.until(`document.getElementById('fontSizeValue').value === '31px'`);
+  await popup.evaluate(`document.getElementById('inlineTranslations').click()`);
   await cdp('Target.closeTarget', { targetId: popup.targetId });
   const reopened = await openPopup();
 
   await reopened.until(`document.getElementById('fontSize').value === '31'`);
+  await reopened.until(`document.getElementById('inlineTranslations').checked`);
   await reopened.evaluate(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Внешний вид')?.click()`);
   assert.equal(await reopened.evaluate(`document.querySelectorAll('[data-subsanywhere-overlay]').length`), 0);
   assert.equal(await reopened.evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
@@ -187,7 +189,69 @@ try {
   })()`);
   assert.equal(handoff[0]?.result?.ok, true, 'Cold worker must accept the current selected content document');
   await reopened.until(`(${positionExpression}).then(value => value === 72)`);
+
+  // Display-only fixture: real DOM/layout, deterministic glossary, no AI/network.
+  const { targetId: displayTarget } = await cdp('Target.createTarget', { url: 'about:blank' });
+  const { sessionId: displaySession } = await cdp('Target.attachToTarget', { targetId: displayTarget, flatten: true });
+  await cdp('Runtime.enable', {}, displaySession);
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 1000, height: 600, deviceScaleFactor: 1, mobile: false }, displaySession);
+  const displayEval = async (expression) => {
+    const result = await cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, displaySession);
+    if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+    return result.result.value;
+  };
+  await displayEval(`(() => {
+    document.body.style.cssText = 'margin:0;background:#161a24';
+    const video = document.createElement('video');
+    video.style.cssText = 'width:1000px;height:600px;display:block';
+    document.body.append(video);
+    window.fixtureListeners = [];
+    window.fixtureRequests = 0;
+    window.chrome = { runtime: {
+      onMessage: { addListener: fn => fixtureListeners.push(fn), removeListener() {} },
+      sendMessage: async message => {
+        if (message.type !== 'dualCaptions.caption.translate') return { ok: true };
+        fixtureRequests++;
+        return { ok: true, data: { items: [{ start: 0, end: message.displayText.length,
+          dictionary: 'Учебный пример перевода', isSentenceTranslation: true,
+          glossary: message.language === 'zh' ? [
+            { pinyin: 'nǐ hǎo', translation: 'здравствуйте, приветствую вас' },
+            { pinyin: 'shì jiè', translation: 'мир, окружающий нас мир во всём его многообразии' },
+          ] : [
+            { text: 'Hello', translation: 'здравствуйте, приветствую вас' },
+            { text: 'world', translation: 'мир, окружающий нас мир во всём его многообразии' },
+          ] }] } };
+      }
+    } };
+  })()`);
+  await displayEval(await readFile(join(root, 'content-runtime.js'), 'utf8'));
+  await displayEval(await readFile(join(root, 'content.js'), 'utf8'));
+  for (const language of ['en', 'zh']) {
+    const text = language === 'zh' ? '\u2063nǐ hǎo, shì jiè\n\u2064你好，世界' : 'Hello, world';
+    await displayEval(`(async () => {
+      fixtureListeners[0]({ type: 'dualCaptions.content.fullState',
+        settings: { secondTrackId: 'external:demo', fontSize: 32, inlineTranslations: true },
+        externalTracks: [{ id: 'demo', cues: [{ start: 0, end: 999, text: ${JSON.stringify(text)} }] }]
+      }, {}, () => {});
+      await new Promise(resolve => setTimeout(resolve, 850));
+    })()`);
+    const geometry = await displayEval(`(() => {
+      const cells = [...document.querySelector('.dual-captions-inline').children];
+      return cells.every(cell => {
+        const meaning = cell.children[0], source = cell.children[1];
+        const box = cell.getBoundingClientRect();
+        return box.left >= 0 && box.right <= innerWidth && cell.scrollWidth <= cell.clientWidth + 1
+          && meaning.getBoundingClientRect().bottom <= source.getBoundingClientRect().top + 1
+          && parseFloat(getComputedStyle(meaning).fontSize) < parseFloat(getComputedStyle(source).fontSize);
+      });
+    })()`);
+    assert.equal(geometry, true, 'Translations stay above source, smaller and inside wrapping cells');
+    const { data } = await cdp('Page.captureScreenshot', { format: 'png' }, displaySession);
+    await writeFile(join(artifacts, `inline-${language}-smoke.png`), Buffer.from(data, 'base64'));
+  }
+  assert.equal(await displayEval('fixtureRequests'), 2);
   assert.deepEqual(errors, [], 'Chrome must not report runtime exceptions');
+  console.log('PASS: inline mode persists across popup reopen; English/pinyin glossary cells wrap long meanings above the source in real Chrome (offline fixtures).');
   console.log('PASS: actual unpacked extension loads; appearance works without a player; input survives popup close/reopen; real iframe video/native captions render; reinjection creates no duplicate overlay; real content position message persists after actual service-worker shutdown without reconnecting; no page exceptions or horizontal overflow.');
   console.log(`Screenshot: ${join(artifacts, 'appearance-smoke.png')}`);
 } finally {

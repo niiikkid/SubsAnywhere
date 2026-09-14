@@ -18,6 +18,15 @@ import {
   updateExternalTrackOffset,
 } from '../state-core.js';
 
+test('inline translations default off and persist independently per page', () => {
+  assert.equal(normalizeState().settings.inlineTranslations, false);
+  const changed = patchSettings(normalizeState(), { inlineTranslations: true });
+  const root = setPageStateInRoot({}, 'https://example.com/one', changed);
+  assert.equal(pageStateFromRoot(root, 'https://example.com/one').settings.inlineTranslations, true);
+  assert.equal(pageStateFromRoot(root, 'https://example.com/two').settings.inlineTranslations, false);
+  assert.equal(patchSettings(changed, { inlineTranslations: false }).settings.inlineTranslations, false);
+});
+
 test('migrateStoredState keeps the original selection and drops the removed first track', () => {
   const legacyTrack = { id: 'abc', name: 'English', cues: [{ start: 1, end: 2, text: 'Hi' }], offsetSeconds: 1.5 };
   const state = migrateStoredState({

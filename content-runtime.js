@@ -42,6 +42,33 @@
     return segments;
   }
 
+  function glossarySegments(text, items = []) {
+    const source = String(text ?? '');
+    const terms = [];
+    for (const item of Array.isArray(items) ? items : []) {
+      for (const term of Array.isArray(item?.glossary) ? item.glossary : []) {
+        const label = term?.pinyin ?? term?.text ?? term?.phrase;
+        if (typeof label !== 'string' || !label.trim() || typeof term?.translation !== 'string' || !term.translation.trim()) continue;
+        terms.push({ label: label.trim(), translation: term.translation.trim(), item });
+      }
+    }
+    const spans = [];
+    const isWord = (character) => /[\p{L}\p{M}\p{N}_]/u.test(character ?? '');
+    for (const term of terms.sort((a, b) => b.label.length - a.label.length)) {
+      let from = 0;
+      while (from < source.length) {
+        const start = source.indexOf(term.label, from);
+        if (start < 0) break;
+        const end = start + term.label.length;
+        from = end;
+        if (isWord(source[start - 1]) || isWord(source[end]) || spans.some((span) => start < span.end && end > span.start)) continue;
+        spans.push({ start, end, ...term });
+      }
+    }
+    return captionSegments(source, spans.sort((a, b) => a.start - b.start))
+      .map((segment) => ({ text: segment.text, item: segment.item?.item ?? null, translation: segment.item?.translation ?? '' }));
+  }
+
   function cueTextAt(cues, videoTime, offsetSeconds = 0, timeScale = 1) {
     const scale = Number(timeScale);
     const sourceTime = (Number(videoTime) - Number(offsetSeconds || 0)) / (Number.isFinite(scale) && scale > 0 ? scale : 1);
@@ -216,6 +243,7 @@
       secondLeft: bounded(value.secondLeft, 4, 96, 50),
       secondBottom: bounded(value.secondBottom, 0, 95, 5),
       fontSize: bounded(value.fontSize, 12, 48, 22),
+      inlineTranslations: value.inlineTranslations === true,
       subtitleColor: /^#[0-9a-f]{6}$/i.test(String(value.subtitleColor)) ? String(value.subtitleColor).toLowerCase() : '#ffffff',
       subtitleBackground: Boolean(value.subtitleBackground),
       subtitleBackgroundColor: /^#[0-9a-f]{6}$/i.test(String(value.subtitleBackgroundColor)) ? String(value.subtitleBackgroundColor).toLowerCase() : '#000000',
@@ -358,6 +386,7 @@
     activeCueText,
     bindVideoEvents,
     captionSegments,
+    glossarySegments,
     chooseVideo,
     cleanSubtitleText,
     createBuiltInTrackResolver,

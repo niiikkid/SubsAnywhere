@@ -390,10 +390,50 @@
       }).finally(() => cachingBuiltInSelections.delete(selectionKey));
     }
 
+    function renderInlineCaption(target, text, items) {
+      const segments = runtime.glossarySegments(text, items);
+      if (!segments.some((segment) => segment.item)) return false;
+      const cells = document.createElement('div');
+      cells.className = 'dual-captions-inline';
+      cells.style.cssText = 'display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-end;gap:.25em .18em;white-space:normal;';
+      let previousSource = null;
+      for (const segment of segments) {
+        const parts = segment.item ? [segment.text] : segment.text.split(/(\s+)/);
+        for (const part of parts) {
+          if (!part.trim()) continue;
+          if (!segment.item && /^[,.;:!?，。；：！？…]+$/u.test(part) && previousSource) {
+            previousSource.textContent += part;
+            continue;
+          }
+          const cell = document.createElement('span');
+          cell.style.cssText = 'display:inline-flex;flex-direction:column;min-width:0;max-width:min(11em,100%);box-sizing:border-box;padding:.12em .22em;border:1px solid rgba(255,255,255,.13);border-radius:6px;color:inherit;pointer-events:auto;cursor:pointer;overflow-wrap:anywhere;';
+          const meaning = document.createElement('span');
+          meaning.textContent = segment.translation;
+          meaning.style.cssText = 'display:block;font-size:.58em;font-weight:400;line-height:1.25;opacity:.68;margin-bottom:.16em;white-space:normal;overflow-wrap:anywhere;';
+          const source = document.createElement('span');
+          source.textContent = part;
+          previousSource = source;
+          source.style.cssText = 'display:block;font:inherit;line-height:1.3;white-space:pre-wrap;';
+          cell.append(meaning, source);
+          cell.tabIndex = 0;
+          cell.setAttribute('role', 'button');
+          makeCaptionFocusable(cell);
+          const show = () => showTooltip(segment.item ?? items[0], cell);
+          cell.addEventListener('click', (event) => { event.stopPropagation(); show(); });
+          cell.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); show(); }
+          });
+          cells.append(cell);
+        }
+      }
+      target.append(cells);
+      return true;
+    }
+
     function renderInteractiveCaption(text) {
       const descriptor = translationDescriptor(text);
       const items = translationCache.get(descriptor.key);
-      const key = `${state.settings.secondTrackId}\u0000${descriptor.key}`;
+      const key = `${state.settings.secondTrackId}\u0000${descriptor.key}\u0000${state.settings.inlineTranslations}`;
       if (state.renderedCaptionKey === key && state.renderedCaptionItems === items) return;
       state.renderedCaptionKey = key;
       state.renderedCaptionItems = items;
@@ -410,6 +450,9 @@
         characters.textContent = descriptor.characters;
         characters.style.cssText = 'margin-top:2px;color:inherit;font-size:.72em;font-weight:600;line-height:1.15;opacity:.68;pointer-events:none;';
         state.second.append(target, characters);
+      }
+      if (state.settings.inlineTranslations && items?.length) {
+        if (renderInlineCaption(target, descriptor.displayText, items)) return;
       }
       if (!items || !items.length) {
         renderPendingCaption(target, descriptor.displayText);
@@ -541,6 +584,7 @@
       }
       applyCaptionPosition();
       state.second.style.fontSize = `${state.settings.fontSize}px`;
+      state.second.style.width = state.settings.inlineTranslations ? '92%' : '';
       state.second.style.color = state.settings.subtitleColor;
       state.second.style.background = state.settings.subtitleBackground ? subtitleBackgroundStyle() : 'transparent';
       state.second.style.padding = state.settings.subtitleBackground ? '4px 20px 4px 8px' : '0 12px 0 0';

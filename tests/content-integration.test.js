@@ -132,6 +132,43 @@ async function makeHarness() {
   return { context, runtimeSource, contentSource, document, reports, onMessage, observers, scheduled };
 }
 
+test('inline translations toggle reuses cached glossary for English and pinyin', async () => {
+  for (const chinese of [false, true]) {
+    const harness = await makeHarness();
+    const source = chinese ? 'nǐ hǎo, shì jiè' : 'Hello, world';
+    const item = { start: 0, end: source.length, dictionary: 'Привет, мир', isSentenceTranslation: true,
+      glossary: chinese ? [{ pinyin: 'nǐ hǎo', translation: 'здравствуйте, приветствую вас' }]
+        : [{ text: 'Hello', translation: 'здравствуйте, приветствую вас' }] };
+    let requests = 0;
+    harness.context.chrome.runtime.sendMessage = async (message) => {
+      if (message.type !== 'dualCaptions.caption.translate') return { ok: true };
+      requests += 1;
+      return { ok: true, data: { items: [item] } };
+    };
+    vm.runInContext(harness.runtimeSource, harness.context);
+    vm.runInContext(harness.contentSource, harness.context);
+    const listener = [...harness.onMessage.listeners][0];
+    const settings = { secondTrackId: 'external:mine', inlineTranslations: true };
+    listener({ type: 'dualCaptions.content.fullState', settings,
+      externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: chinese ? `\u2063${source}\n\u2064你好，世界` : source }] }],
+    }, {}, () => {});
+    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+    const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+    const caption = overlay.children[0];
+    const cells = chinese ? caption.children[0].children[0] : caption.children[0];
+    assert.equal(cells.className, 'dual-captions-inline');
+    assert.equal(cells.children[0].children[0].textContent, item.glossary[0].translation);
+    assert.equal(cells.children[0].children[1].textContent, chinese ? 'nǐ hǎo,' : 'Hello,');
+    assert.equal(caption.style.width, '92%');
+    if (chinese) assert.equal(caption.children[1].textContent, '你好，世界');
+    cells.children[0].dispatch('click', { stopPropagation() {} });
+    assert.equal(overlay.children.length, 3);
+    listener({ type: 'dualCaptions.content.settings', settings: { ...settings, inlineTranslations: false } }, {}, () => {});
+    assert.notEqual(caption.children[0].className, 'dual-captions-inline');
+    assert.equal(requests, 1);
+  }
+});
+
 test('production bootstrap re-reports after reinjection without duplicate controller listeners', async () => {
   const harness = await makeHarness();
   vm.runInContext(harness.runtimeSource, harness.context);

@@ -36,7 +36,7 @@ function makeDocument() {
     'youtubeSubtitles', 'youtubeSubtitleStatus', 'createYoutubeSubtitles',
     'youtubeProgressBox', 'youtubeProgress', 'youtubeProgressValue', 'youtubeProgressDetail', 'youtubeLanguage',
     'playerTab', 'appearanceTab', 'settingsTab', 'playerPanel', 'appearancePanel', 'settingsPanel',
-    'subtitlePreview', 'saveStatus', 'retrySave', 'retryYoutubeSubtitles', 'retrySettings', 'pageScope',
+    'subtitlePreview', 'inlineTranslations', 'saveStatus', 'retrySave', 'retryYoutubeSubtitles', 'retrySettings', 'pageScope',
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement()]));
   elements.controls.hidden = true;
@@ -85,6 +85,18 @@ async function bootPopup(overrides = {}, tab = { id: 77, url: 'https://video.exa
   await tick();
   return { elements: document.elements, document, messages, handlers };
 }
+
+test('inline translations toggle hydrates, previews and saves immediately', async () => {
+  const { elements, messages } = await bootPopup({
+    'dualCaptions.state.get': () => ({ state: { settings: { inlineTranslations: true } } }),
+  });
+  assert.equal(elements.inlineTranslations.checked, true);
+  assert.ok(elements.subtitlePreview.children.length > 0);
+  elements.inlineTranslations.checked = false;
+  elements.inlineTranslations.listeners.get('change')();
+  assert.deepEqual(messages.filter((message) => message.type === 'dualCaptions.state.patch').at(-1).patch, { inlineTranslations: false });
+  assert.equal(elements.subtitlePreview.textContent, 'One line at a time.');
+});
 
 test('YouTube language choice persists and is forwarded when loading captions', async () => {
   const { elements, messages } = await bootPopup({

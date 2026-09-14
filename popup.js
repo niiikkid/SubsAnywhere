@@ -112,6 +112,21 @@ function drawPreview() {
   const preview = $('subtitlePreview');
   preview.style.fontSize = `${settings.fontSize}px`;
   preview.style.color = settings.subtitleColor;
+  preview.replaceChildren();
+  if (settings.inlineTranslations) {
+    preview.textContent = '';
+    for (const [source, translation] of [['One line', 'одна строка'], ['at a time.', 'за раз, по очереди']]) {
+      const cell = document.createElement('span');
+      cell.style.cssText = 'display:inline-flex;flex-direction:column;vertical-align:bottom;max-width:10em;margin:.15em .2em;padding:.15em .25em;border:1px solid #ffffff20;border-radius:6px;';
+      const meaning = document.createElement('span');
+      meaning.style.cssText = 'font-size:.58em;font-weight:400;line-height:1.25;opacity:.68;white-space:normal;overflow-wrap:anywhere;';
+      meaning.textContent = translation;
+      const original = document.createElement('span');
+      original.textContent = source;
+      cell.append(meaning, original);
+      preview.append(cell);
+    }
+  } else preview.textContent = 'One line at a time.';
   const rgb = [1, 3, 5].map((index) => parseInt(settings.subtitleBackgroundColor.slice(index, index + 2), 16));
   preview.style.backgroundColor = settings.subtitleBackground
     ? `rgba(${rgb.join(', ')}, ${settings.subtitleBackgroundOpacity / 100})` : 'transparent';
@@ -235,9 +250,10 @@ function drawSettings() {
   const settings = state.settings;
   $('youtubeLanguage').value = settings.youtubeLanguage;
   $('youtubeLanguage').disabled = !pageKey;
-  for (const id of ['fontSize', 'subtitleColor', 'subtitleBackground', 'originalTrack', 'subtitleFile']) $(id).disabled = !pageKey;
+  for (const id of ['fontSize', 'inlineTranslations', 'subtitleColor', 'subtitleBackground', 'originalTrack', 'subtitleFile']) $(id).disabled = !pageKey;
   drawTrackSelect($('originalTrack'), settings.secondTrackId, settings.secondTrackFallbackId);
   $('fontSize').value = settings.fontSize;
+  $('inlineTranslations').checked = settings.inlineTranslations;
   $('subtitleColor').value = settings.subtitleColor;
   $('subtitleBackground').checked = settings.subtitleBackground;
   $('subtitleBackgroundColor').value = settings.subtitleBackgroundColor;
@@ -674,6 +690,7 @@ $('player').addEventListener('change', () => {
 });
 $('originalTrack').addEventListener('change', () => persistSetting('secondTrackId', $('originalTrack').value));
 $('fontSize').addEventListener('input', () => previewSetting('fontSize', Number($('fontSize').value)));
+$('inlineTranslations').addEventListener('change', () => persistSetting('inlineTranslations', $('inlineTranslations').checked));
 $('subtitleColor').addEventListener('input', () => previewSetting('subtitleColor', $('subtitleColor').value));
 
 $('subtitleBackground').addEventListener('change', () => {

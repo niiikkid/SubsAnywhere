@@ -42,6 +42,28 @@ function fakeVideo(width, height) {
   return video;
 }
 
+test('inline glossary segments preserve source, repeated phrases and pinyin boundaries', async () => {
+  const runtime = await loadRuntime();
+  const text = 'I gave up, gave up again.';
+  const item = { glossary: [
+    { text: 'up', translation: 'вверх' },
+    { text: 'gave up', translation: 'сдался, отказался от попытки' },
+    { text: 'missing', translation: 'нет' },
+  ] };
+  const segments = runtime.glossarySegments(text, [item]);
+  assert.equal(segments.map((segment) => segment.text).join(''), text);
+  assert.deepEqual(Array.from(segments.filter((segment) => segment.item), (segment) =>
+    [segment.text, segment.translation]), [
+    ['gave up', 'сдался, отказался от попытки'], ['gave up', 'сдался, отказался от попытки'],
+  ]);
+  assert.equal(segments.find((segment) => segment.item).item, item);
+  const chinese = runtime.glossarySegments('wǒmen wǒ, hǎo', [{ glossary: [
+    { pinyin: 'wǒ', translation: 'я' }, { pinyin: 'hǎo', translation: 'хорошо' },
+  ] }]);
+  assert.deepEqual(Array.from(chinese.filter((segment) => segment.item), (segment) => segment.text), ['wǒ', 'hǎo']);
+  assert.equal(runtime.glossarySegments(text, []).map((segment) => segment.text).join(''), text);
+});
+
 test('chooseVideo returns the largest visible candidate and its stable document index', async () => {
   const runtime = await loadRuntime();
   const small = fakeVideo(200, 100);
@@ -364,6 +386,7 @@ test('runtime normalizes settings at the content-script boundary', async () => {
       secondLeft: 96,
       secondBottom: 95,
       fontSize: 31,
+      inlineTranslations: false,
       subtitleColor: '#3b82f6',
       subtitleBackground: true,
       subtitleBackgroundColor: '#18233f',
