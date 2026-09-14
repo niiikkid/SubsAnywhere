@@ -159,7 +159,13 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
     for (let index = 0; index < 8; index += 1) await Promise.resolve();
     const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
     const caption = overlay.children[0];
-    const cells = chinese ? caption.children[0].children[0] : caption.children[0];
+    const target = chinese ? caption.children[0] : caption;
+    const sentenceTranslation = target.children[0];
+    const cells = target.children[1];
+    assert.equal(sentenceTranslation.className, 'dual-captions-sentence-translation');
+    assert.equal(sentenceTranslation.textContent, 'Привет, мир');
+    assert.match(sentenceTranslation.style.cssText, /text-align:center/);
+    assert.match(sentenceTranslation.style.cssText, /font-size:\.58em/);
     assert.equal(cells.className, 'dual-captions-inline');
     assert.equal(cells.children[0].children[0].textContent, item.glossary[0].translation);
     assert.equal(cells.children[0].children[1].textContent, chinese ? 'nǐ hǎo,' : 'Hello,');

@@ -34,6 +34,7 @@
       renderedCaptionKey: '',
       renderedCaptionItems: null,
       inlineCells: null,
+      sentenceTranslationLine: null,
       characterLine: null,
       captionLayoutKey: '',
     };
@@ -422,6 +423,16 @@
     function renderInlineCaption(target, text, items) {
       const segments = runtime.glossarySegments(text, items);
       if (!segments.some((segment) => segment.item)) return false;
+      const sentenceItem = items.find((item) => item?.isSentenceTranslation && typeof item.dictionary === 'string');
+      const sentenceText = sentenceItem?.dictionary.trim();
+      if (sentenceText) {
+        const sentenceTranslation = document.createElement('div');
+        sentenceTranslation.className = 'dual-captions-sentence-translation';
+        sentenceTranslation.textContent = sentenceText;
+        sentenceTranslation.style.cssText = 'display:block;width:100%;box-sizing:border-box;margin:0 0 .18em;padding:0 .22em;color:inherit;text-align:center;font-size:.58em;font-weight:400;line-height:1.3;opacity:.88;white-space:normal;overflow-wrap:anywhere;pointer-events:none;';
+        target.append(sentenceTranslation);
+        state.sentenceTranslationLine = sentenceTranslation;
+      }
       const cells = document.createElement('div');
       cells.className = 'dual-captions-inline';
       cells.style.cssText = 'display:block;text-align:center;text-wrap:balance;white-space:normal;';
@@ -493,6 +504,7 @@
       state.renderedCaptionKey = key;
       state.renderedCaptionItems = items;
       state.inlineCells = null;
+      state.sentenceTranslationLine = null;
       state.characterLine = null;
       state.captionLayoutKey = '';
       dismissTooltip();
@@ -621,6 +633,11 @@
       const boxes = Array.from(state.inlineCells.children, (cell) => cell.getBoundingClientRect()).filter((box) => box.width && box.height);
       if (!boxes.length) return;
       let contentWidth = Math.max(...boxes.map((box) => box.right)) - Math.min(...boxes.map((box) => box.left));
+      if (state.sentenceTranslationLine) {
+        const range = document.createRange();
+        range.selectNodeContents(state.sentenceTranslationLine);
+        contentWidth = Math.max(contentWidth, range.getBoundingClientRect().width);
+      }
       if (state.characterLine) {
         const range = document.createRange();
         range.selectNodeContents(state.characterLine);
