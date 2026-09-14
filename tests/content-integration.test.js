@@ -171,8 +171,15 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
     assert.match(cells.children[0].children[0].style.cssText, /font-size:\.4em/);
     assert.match(cells.children[0].children[0].style.cssText, /white-space:nowrap/);
     assert.match(cells.children[0].children[0].style.cssText, /text-overflow:ellipsis/);
-    assert.equal(cells.children[0].children[0].title, item.glossary[0].translation);
+    assert.equal(cells.children[0].children[0].title, '');
     assert.equal(cells.children[0].children[1].textContent, chinese ? 'nǐ hǎo,' : 'Hello,');
+
+    cells.children[0].children[0].dispatch('mouseenter');
+    const hoverTranslation = overlay.children.at(-1);
+    assert.equal(hoverTranslation.className, 'dual-captions-meaning-preview');
+    assert.equal(hoverTranslation.textContent, item.glossary[0].translation);
+    cells.children[0].children[0].dispatch('mouseleave');
+    assert.equal(overlay.children.includes(hoverTranslation), false);
 
     if (chinese) assert.equal(caption.children[1].textContent, '你好，世界');
     cells.children[0].dispatch('click', { stopPropagation() {} });
@@ -183,8 +190,8 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
   }
 });
 
-test('inline pinyin cells hide grammatical meanings for untoned de, le and zhe', async () => {
-  for (const particle of ['de', 'le', 'zhe']) {
+test('inline pinyin cells hide grammatical meanings for untoned de, le, zhe and la', async () => {
+  for (const particle of ['de', 'le', 'zhe', 'la']) {
     const harness = await makeHarness();
     harness.context.chrome.runtime.sendMessage = async (message) => ({ ok: true, data: { items: [{
       start: 0, end: message.displayText.length, dictionary: 'Учебный пример', isSentenceTranslation: true,
@@ -206,6 +213,42 @@ test('inline pinyin cells hide grammatical meanings for untoned de, le and zhe',
     assert.match(particleCell.children[0].style.cssText, /display:none/);
     assert.equal(particleCell.children.at(-1).textContent, particle);
   }
+});
+
+test('inline pinyin meanings grow only by the length-based cell allowance', async () => {
+  const harness = await makeHarness();
+  harness.document.createRange = () => {
+    let node;
+    return {
+      selectNodeContents(value) { node = value; },
+      getBoundingClientRect() {
+        const letters = [...String(node?.textContent ?? '').normalize('NFD')]
+          .filter((character) => /\p{L}/u.test(character)).length;
+        return { width: letters * 10 };
+      },
+    };
+  };
+  const glossary = [
+    { pinyin: 'ma', translation: 'перевод для двух букв' },
+    { pinyin: 'hǎo', translation: 'перевод для трёх букв' },
+    { pinyin: 'zhen', translation: 'перевод для четырёх букв' },
+    { pinyin: 'pengyou', translation: 'перевод для длинного слова' },
+  ];
+  harness.context.chrome.runtime.sendMessage = async (message) => ({ ok: true, data: { items: [{
+    start: 0, end: message.displayText.length, dictionary: 'Учебный пример', isSentenceTranslation: true, glossary,
+  }] } });
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  [...harness.onMessage.listeners][0]({ type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'external:mine', inlineTranslations: true },
+    externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: '\u2063ma hǎo zhen pengyou\n\u2064示例' }] }],
+  }, {}, () => {});
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  const cells = overlay.children[0].children[0].children[1].children;
+  const limits = Object.fromEntries(cells.map((cell) => [cell.children.at(-1)?.textContent, cell.children[0]?.style.maxWidth]));
+  assert.deepEqual(limits, { ma: '60px', hǎo: '60px', zhen: '52px', pengyou: '81px' });
 });
 
 test('empty cues and track switches hide the caption background in either display mode', async () => {

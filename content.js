@@ -30,6 +30,8 @@
       tooltip: null,
       tooltipItem: null,
       tooltipAnchor: null,
+      meaningPreview: null,
+      meaningPreviewAnchor: null,
       drag: null,
       renderedCaptionKey: '',
       renderedCaptionItems: null,
@@ -81,7 +83,10 @@
       };
       state.second = makeLayer('subs-anywhere-original');
       state.second.style.pointerEvents = 'auto';
-      state.second.addEventListener('scroll', dismissTooltip);
+      state.second.addEventListener('scroll', () => {
+        dismissTooltip();
+        dismissMeaningPreview();
+      });
       const dragHandle = document.createElement('button');
       dragHandle.type = 'button';
       dragHandle.textContent = '⠿';
@@ -143,6 +148,40 @@
       state.tooltipAnchor = null;
     }
 
+    function dismissMeaningPreview() {
+      state.meaningPreview?.remove();
+      state.meaningPreview = null;
+      state.meaningPreviewAnchor = null;
+    }
+
+    function showMeaningPreview(text, anchor) {
+      const value = String(text ?? '').trim();
+      if (!value || !anchor?.isConnected) return;
+      dismissMeaningPreview();
+      const preview = document.createElement('div');
+      preview.className = 'dual-captions-meaning-preview';
+      preview.textContent = value;
+      preview.style.cssText = 'position:absolute;z-index:3;max-width:280px;padding:7px 10px;border:1px solid rgba(190,207,255,.8);border-radius:7px;background:rgba(8,10,16,.98);color:#fff;font:700 13px/1.3 Arial,sans-serif;text-align:left;white-space:normal;overflow-wrap:anywhere;box-shadow:0 6px 20px rgba(0,0,0,.72);pointer-events:none;';
+      state.root.append(preview);
+      state.meaningPreview = preview;
+      state.meaningPreviewAnchor = anchor;
+      positionMeaningPreview();
+    }
+
+    function positionMeaningPreview() {
+      if (!state.meaningPreview || !state.meaningPreviewAnchor?.isConnected) return;
+      const root = state.root.getBoundingClientRect();
+      const anchor = state.meaningPreviewAnchor.getBoundingClientRect();
+      const preview = state.meaningPreview;
+      preview.style.boxSizing = 'border-box';
+      preview.style.maxWidth = `${Math.max(0, Math.min(280, root.width - 16))}px`;
+      const box = preview.getBoundingClientRect();
+      const above = anchor.top - root.top - box.height - 6;
+      const top = above >= 8 ? above : anchor.bottom - root.top + 6;
+      preview.style.left = `${Math.max(8, Math.min(root.width - box.width - 8, anchor.left - root.left + (anchor.width - box.width) / 2))}px`;
+      preview.style.top = `${Math.max(8, Math.min(root.height - box.height - 8, top))}px`;
+    }
+
     function makeCaptionFocusable(element) {
       element.addEventListener('focus', () => {
         element.style.outline = '2px solid #adc3ff';
@@ -161,6 +200,7 @@
         dismissTooltip();
         return;
       }
+      dismissMeaningPreview();
       dismissTooltip();
       const tooltip = document.createElement('div');
       tooltip.setAttribute('role', 'tooltip');
@@ -422,7 +462,7 @@
 
     function renderInlineCaption(target, text, items) {
       const segments = runtime.glossarySegments(text, items);
-      const hiddenPinyinParticles = ['de', 'le', 'zhe'];
+      const hiddenPinyinParticles = ['de', 'le', 'zhe', 'la'];
       if (!segments.some((segment) => segment.item)) return false;
       const sentenceItem = items.find((item) => item?.isSentenceTranslation && typeof item.dictionary === 'string');
       const sentenceText = sentenceItem?.dictionary.trim();
@@ -437,6 +477,7 @@
       const cells = document.createElement('div');
       cells.className = 'dual-captions-inline';
       cells.style.cssText = 'display:block;text-align:center;text-wrap:balance;white-space:normal;';
+      target.append(cells);
       let previousSource = null;
       let separated = true;
       for (const segment of segments) {
@@ -474,14 +515,20 @@
           cell.style.cssText = 'display:inline-flex;vertical-align:bottom;flex-direction:column;align-items:center;min-width:0;width:max-content;max-width:calc(100% - .18em);box-sizing:border-box;margin:.12em .09em;padding:.12em .22em;border:1px solid rgba(255,255,255,.13);border-radius:6px;color:inherit;pointer-events:auto;cursor:pointer;overflow-wrap:anywhere;';
           const meaning = document.createElement('span');
           const displayedParticle = segment.text.trim().toLowerCase();
-          const hidesParticleMeaning = hiddenPinyinParticles.includes(displayedParticle)
-            && Array.isArray(segment.item?.glossary)
-            && segment.item.glossary.some((term) => (
+          const pinyinTerm = Array.isArray(segment.item?.glossary)
+            ? segment.item.glossary.find((term) => (
               typeof term?.pinyin === 'string' && term.pinyin.trim().toLowerCase() === displayedParticle
-            ));
+            ))
+            : null;
+          const hidesParticleMeaning = hiddenPinyinParticles.includes(displayedParticle)
+            && pinyinTerm;
           meaning.textContent = hidesParticleMeaning ? '' : segment.translation;
-          meaning.title = hidesParticleMeaning ? '' : segment.translation;
+          meaning.title = '';
           meaning.style.cssText = `display:${hidesParticleMeaning ? 'none' : 'block'};width:100%;max-width:18em;font-size:.4em;font-weight:400;line-height:1.3;opacity:.8;margin-bottom:.2em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
+          if (!hidesParticleMeaning) {
+            meaning.addEventListener('mouseenter', () => showMeaningPreview(segment.translation, meaning));
+            meaning.addEventListener('mouseleave', dismissMeaningPreview);
+          }
           const source = document.createElement('span');
           source.textContent = part;
           previousSource = source;
@@ -497,9 +544,17 @@
             if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); show(); }
           });
           cells.append(cell);
+          if (pinyinTerm && !hidesParticleMeaning && document.createRange) {
+            const letterCount = [...segment.text.normalize('NFD')]
+              .filter((character) => /\p{L}/u.test(character)).length;
+            const growth = letterCount <= 2 ? 3 : letterCount === 3 ? 2 : letterCount === 4 ? 1.3 : 1.15;
+            const range = document.createRange();
+            range.selectNodeContents(source);
+            const sourceWidth = range.getBoundingClientRect().width;
+            if (sourceWidth > 0) meaning.style.maxWidth = `${Math.ceil(sourceWidth * growth)}px`;
+          }
         }
       }
-      target.append(cells);
       state.inlineCells = cells;
       return true;
     }
@@ -515,6 +570,7 @@
       state.sentenceTranslationLine = null;
       state.characterLine = null;
       state.captionLayoutKey = '';
+      dismissMeaningPreview();
       dismissTooltip();
       state.second.replaceChildren();
       state.second.scrollTop = 0;
@@ -611,6 +667,7 @@
       state.root.style.display = state.active && rect.width && rect.height ? 'block' : 'none';
       applyCaptionPosition();
       positionDragHandle();
+      positionMeaningPreview();
       positionTooltip();
     }
 

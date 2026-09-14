@@ -237,16 +237,21 @@ try {
     })()`);
     const geometry = await displayEval(`(() => {
       const cells = [...document.querySelector('.dual-captions-inline').children];
-      return cells.every(cell => {
+      const meaningsFit = cells.every(cell => {
         const meaning = cell.children[0], source = cell.children[1];
         const box = cell.getBoundingClientRect();
         return box.left >= 0 && box.right <= innerWidth && cell.scrollWidth <= cell.clientWidth + 1
           && meaning.getBoundingClientRect().bottom <= source.getBoundingClientRect().top + 1
           && parseFloat(getComputedStyle(meaning).fontSize) < parseFloat(getComputedStyle(source).fontSize)
           && getComputedStyle(meaning).whiteSpace === 'nowrap'
-          && meaning.scrollHeight <= meaning.clientHeight + 1
-          && meaning.title === meaning.textContent;
+          && meaning.scrollHeight <= meaning.clientHeight + 1;
       });
+      const meaning = cells[0].children[0];
+      meaning.dispatchEvent(new Event('mouseenter'));
+      const preview = document.querySelector('.dual-captions-meaning-preview');
+      const immediatePreview = preview?.textContent === meaning.textContent;
+      meaning.dispatchEvent(new Event('mouseleave'));
+      return meaningsFit && immediatePreview && !document.querySelector('.dual-captions-meaning-preview');
     })()`);
     assert.equal(geometry, true, 'Translations stay above source, smaller and inside wrapping cells');
     assert.equal(await displayEval(`document.querySelector('.subs-anywhere-original').getBoundingClientRect().width < 750`),
