@@ -107,7 +107,7 @@ test('content cannot invoke popup-only credential, state, discovery or local-job
   };
   const controller = new BackgroundController(makeChrome(), store, { credentialStore });
   const before = structuredClone(store.state);
-  for (const type of [MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.STATE_GET, MESSAGE.STATE_PATCH,
+  for (const type of [MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.AI_MODELS_GET, MESSAGE.STATE_GET, MESSAGE.STATE_PATCH,
     MESSAGE.PLAYER_GET, MESSAGE.PLAYER_DISCOVER, MESSAGE.LOCAL_SUBTITLE_GENERATE, MESSAGE.TRACK_REMOVE]) {
     const response = await controller.handle({ type, tabId: 77, pageKey: 'https://private.example/', patch: { fontSize: 48 }, apiKey: 'not-a-real-key' }, { tab: { id: 3 }, frameId: 8 });
     assert.equal(response.ok, false, type);
@@ -116,6 +116,26 @@ test('content cannot invoke popup-only credential, state, discovery or local-job
   assert.deepEqual(store.state, before);
   assert.equal((await controller.handle({ type: MESSAGE.AI_CONFIG_GET })).ok, true);
   assert.equal(accesses, 1);
+});
+
+test('popup loads the selected provider model catalog through the background client', async () => {
+  const calls = [];
+  const controller = new BackgroundController(makeChrome(), new FakeStore(), {
+    deepSeek: {
+      async listModels(provider) {
+        calls.push(provider);
+        return ['gpt-5', 'gpt-5-mini'];
+      },
+    },
+  });
+
+  const response = await controller.handle({ type: MESSAGE.AI_MODELS_GET, provider: 'openai' });
+
+  assert.deepEqual(calls, ['openai']);
+  assert.deepEqual(response, {
+    ok: true,
+    data: { provider: 'openai', models: ['gpt-5', 'gpt-5-mini'] },
+  });
 });
 
 test('the own popup page remains trusted when Chrome hosts it in an extension tab', async () => {
@@ -147,7 +167,7 @@ async function backgroundHarness(setAccessLevel) {
   const handled = [];
   const sandbox = {
     chrome, MESSAGE, failure, console, fetch() { throw new Error('No network in bootstrap tests'); },
-    StateStore: class {}, AiCredentialStore: class {}, DeepSeekClient: class {}, LocalSubtitleClient: class {},
+    StateStore: class {}, AiCredentialStore: class {}, AIClient: class {}, LocalSubtitleClient: class {},
     BackgroundController: class {
       async handle(message) { handled.push(message); return { ok: true }; }
       async initialize() {}
@@ -174,7 +194,7 @@ test('background waits for trusted-only storage access before handling AI creden
 test('storage access protection failures fail closed for AI without crashing the worker', async () => {
   for (const setter of [undefined, () => { throw new Error('Unsupported'); }, () => Promise.reject(new Error('Denied'))]) {
     const harness = await backgroundHarness(setter);
-    for (const type of [MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.CAPTION_TRANSLATE]) {
+    for (const type of [MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.AI_MODELS_GET, MESSAGE.CAPTION_TRANSLATE]) {
       assert.equal((await harness.request(type)).ok, false);
     }
     assert.equal(harness.handled.length, 0);

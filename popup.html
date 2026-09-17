@@ -20,7 +20,7 @@
       <button id="appearanceTab" type="button" role="tab" aria-controls="appearancePanel" aria-selected="false" tabindex="-1">Внешний вид</button>
       <button id="settingsTab" type="button" role="tab" aria-controls="settingsPanel" aria-selected="false" tabindex="-1">Настройки</button>
     </nav>
-    <p id="pageScope" class="hint scope-note">Внешний вид и SRT сохраняются для этой страницы. DeepSeek — для всех сайтов.</p>
+    <p id="pageScope" class="hint scope-note">Внешний вид и SRT сохраняются для этой страницы. Настройки перевода — для всех сайтов.</p>
     <div class="save-feedback">
       <p id="saveStatus" role="status" aria-live="polite">Изменения сохраняются автоматически</p>
       <button id="retrySave" type="button" hidden>Повторить сохранение</button>
@@ -112,23 +112,28 @@
       <section id="settingsPanel" role="tabpanel" aria-labelledby="settingsTab" hidden>
           <section class="control-card ai-settings">
             <div class="section-heading">
-              <h2>Перевод DeepSeek</h2>
+              <h2>Перевод через ИИ</h2>
               <span>по клику</span>
             </div>
             <p class="hint">Текущая короткая реплика заранее разбирается на кликабельные слова и выражения. Целый файл субтитров в ИИ не отправляется.</p>
-            <label>API-ключ DeepSeek
-              <input id="deepseekKey" type="password" autocomplete="new-password" placeholder="Вставьте ключ">
-            </label>
-            <label>Модель
-              <select id="deepseekModel">
-                <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
-                <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+            <label>Сервис перевода
+              <select id="aiProvider">
+                <option value="deepseek">DeepSeek</option>
+                <option value="openai">OpenAI</option>
               </select>
             </label>
+            <label><span id="aiKeyLabel">API-ключ DeepSeek</span>
+              <input id="aiKey" type="password" autocomplete="new-password" placeholder="Вставьте ключ">
+            </label>
+            <label>Текстовая модель
+              <select id="aiModel" disabled></select>
+            </label>
+            <p id="aiModelHint" class="hint">Сначала сохраните ключ.</p>
             <div class="button-row">
-              <button id="saveDeepseekKey" type="button">Сохранить ключ</button>
-              <button id="clearDeepseekKey" type="button" class="danger-text">Удалить ключ</button>
+              <button id="loadAiModels" type="button">Сохранить ключ и загрузить модели</button>
+              <button id="clearAiKey" type="button" class="danger-text">Удалить ключ</button>
             </div>
+            <button id="saveAiSettings" type="button" class="primary settings-save" disabled>Использовать для перевода</button>
             <p id="aiKeyState" class="hint"></p>
           </section>
 

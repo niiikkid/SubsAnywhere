@@ -28,19 +28,23 @@ test('popup has accessible job navigation and an always-available appearance pre
   assert.doesNotMatch(html, /id="controls" hidden/);
 });
 
-test('popup lets the user choose DeepSeek Flash or Pro', async () => {
+test('popup configures either DeepSeek or OpenAI from an authenticated text-model catalog', async () => {
   const html = await fs.readFile(new URL('../popup.html', import.meta.url), 'utf8');
 
-  assert.match(html, /<select id="deepseekModel">/);
-  assert.match(html, /<option value="deepseek-v4-flash">DeepSeek V4 Flash<\/option>/);
-  assert.match(html, /<option value="deepseek-v4-pro">DeepSeek V4 Pro<\/option>/);
+  assert.match(html, /<select id="aiProvider">/);
+  assert.match(html, /<option value="deepseek">DeepSeek<\/option>/);
+  assert.match(html, /<option value="openai">OpenAI<\/option>/);
+  assert.match(html, /<select id="aiModel"[^>]*disabled/);
+  assert.match(html, /id="loadAiModels"/);
+  assert.match(html, /id="saveAiSettings"/);
 });
 
-test('manifest grants network access only to DeepSeek and the fixed local server', async () => {
+test('manifest grants network access only to both AI providers and the fixed local server', async () => {
   const manifest = JSON.parse(await fs.readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
 
   assert.deepEqual(manifest.host_permissions, [
     'https://api.deepseek.com/*',
+    'https://api.openai.com/*',
     'http://127.0.0.1:43817/*',
   ]);
   assert.match(manifest.description, /оригинальн/i);

@@ -75,4 +75,5 @@ optgroup { font-weight: 700; }
 .two-columns label { margin-top: 5px; }
 .button-row { display: flex; gap: 7px; margin-top: 10px; }
 .button-row button { flex: 1; font-size: 12px; }
+.settings-save { margin-top: 9px; }
 .danger-text { color: #ffb5c0; }

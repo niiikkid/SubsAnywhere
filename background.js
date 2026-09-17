@@ -1,4 +1,4 @@
-import { AiCredentialStore, DeepSeekClient } from './ai-client.js';
+import { AIClient, AiCredentialStore } from './ai-client.js';
 import { BackgroundController } from './background-controller.js';
 import { LocalSubtitleClient } from './local-subtitles-client.js';
 import { StateStore } from './state-store.js';
@@ -7,11 +7,13 @@ import { MESSAGE, failure } from './protocol.js';
 const storage = chrome.storage.local;
 const store = new StateStore(storage);
 const credentialStore = new AiCredentialStore(storage);
-const deepSeek = new DeepSeekClient(globalThis.fetch.bind(globalThis), credentialStore);
+const aiClient = new AIClient(globalThis.fetch.bind(globalThis), credentialStore);
 const localSubtitles = new LocalSubtitleClient(globalThis.fetch.bind(globalThis));
-const controller = new BackgroundController(chrome, store, { credentialStore, deepSeek, localSubtitles });
+const controller = new BackgroundController(chrome, store, { credentialStore, aiClient, localSubtitles });
 
-const protectedMessages = new Set([MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.CAPTION_TRANSLATE]);
+const protectedMessages = new Set([
+  MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.AI_MODELS_GET, MESSAGE.CAPTION_TRANSLATE,
+]);
 const storageProtection = (async () => {
   try {
     if (typeof storage.setAccessLevel !== 'function') return false;

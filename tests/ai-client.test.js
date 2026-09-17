@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   AiCredentialStore,
+  buildAIRequest,
+  buildModelListRequest,
   DeepSeekClient,
+  extractAIText,
+  filterAvailableModels,
   normalizeCaptionTranslation,
 } from '../ai-client.js';
 
@@ -13,6 +17,7 @@ class MemoryStorage {
     return Object.fromEntries(names.filter((key) => key in this.data).map((key) => [key, structuredClone(this.data[key])]));
   }
   async set(values) { Object.assign(this.data, structuredClone(values)); }
+  async remove(key) { delete this.data[key]; }
 }
 
 
@@ -20,10 +25,16 @@ test('AI credential store never exposes the saved key to the popup', async () =>
   const storage = new MemoryStorage();
   const credentials = new AiCredentialStore(storage);
 
-  const publicInfo = await credentials.patch({ apiKey: 'secret-key' });
+  const publicInfo = await credentials.patch({ provider: 'deepseek', apiKey: 'secret-key', model: 'deepseek-chat', activate: true });
 
-  assert.deepEqual(publicInfo, { hasApiKey: true, model: 'deepseek-v4-flash' });
-  assert.deepEqual(await credentials.publicInfo(), { hasApiKey: true, model: 'deepseek-v4-flash' });
+  assert.deepEqual(publicInfo, {
+    activeProvider: 'deepseek',
+    providers: {
+      deepseek: { hasApiKey: true, model: 'deepseek-chat' },
+      openai: { hasApiKey: false, model: '' },
+    },
+  });
+  assert.deepEqual(await credentials.publicInfo(), publicInfo);
   assert.equal((await credentials.get()).apiKey, 'secret-key');
   assert.equal('apiKey' in publicInfo, false);
 });
@@ -32,11 +43,111 @@ test('AI credential store saves the chosen DeepSeek model for translation', asyn
   const storage = new MemoryStorage();
   const credentials = new AiCredentialStore(storage);
 
-  const publicInfo = await credentials.patch({ apiKey: 'secret-key', model: 'deepseek-v4-pro' });
+  const publicInfo = await credentials.patch({ provider: 'deepseek', apiKey: 'secret-key', model: 'deepseek-v4-pro', activate: true });
 
-  assert.deepEqual(publicInfo, { hasApiKey: true, model: 'deepseek-v4-pro' });
-  assert.deepEqual(await credentials.publicInfo(), { hasApiKey: true, model: 'deepseek-v4-pro' });
+  assert.deepEqual(publicInfo.providers.deepseek, { hasApiKey: true, model: 'deepseek-v4-pro' });
+  assert.deepEqual((await credentials.publicInfo()).providers.deepseek, { hasApiKey: true, model: 'deepseek-v4-pro' });
   assert.equal((await credentials.get()).model, 'deepseek-v4-pro');
+});
+
+test('AI credential store keeps OpenAI and DeepSeek credentials separate and activates one provider', async () => {
+  const storage = new MemoryStorage();
+  const credentials = new AiCredentialStore(storage);
+
+  await credentials.patch({ provider: 'deepseek', apiKey: 'deepseek-secret', model: 'deepseek-chat' });
+  await credentials.patch({ provider: 'openai', apiKey: 'openai-secret', model: 'gpt-5-mini', activate: true });
+
+  assert.deepEqual(await credentials.publicInfo(), {
+    activeProvider: 'openai',
+    providers: {
+      deepseek: { hasApiKey: true, model: 'deepseek-chat' },
+      openai: { hasApiKey: true, model: 'gpt-5-mini' },
+    },
+  });
+  assert.deepEqual(await credentials.getActive(), {
+    provider: 'openai', apiKey: 'openai-secret', model: 'gpt-5-mini',
+  });
+});
+
+test('legacy DeepSeek settings migrate without exposing the key', async () => {
+  const storage = new MemoryStorage();
+  storage.data.subsAnywhereDeepSeek = { apiKey: 'legacy-secret', model: 'deepseek-v4-pro' };
+  const credentials = new AiCredentialStore(storage);
+
+  const info = await credentials.publicInfo();
+
+  assert.equal(info.activeProvider, 'deepseek');
+  assert.deepEqual(info.providers.deepseek, { hasApiKey: true, model: 'deepseek-v4-pro' });
+  assert.equal(JSON.stringify(info).includes('legacy-secret'), false);
+});
+
+test('deleting a migrated DeepSeek key removes the legacy credential too', async () => {
+  const storage = new MemoryStorage();
+  storage.data.subsAnywhereDeepSeek = { apiKey: 'legacy-secret', model: 'deepseek-v4-pro' };
+  const credentials = new AiCredentialStore(storage);
+
+  await credentials.patch({ provider: 'deepseek', clearApiKey: true });
+
+  assert.equal('subsAnywhereDeepSeek' in storage.data, false);
+  assert.equal((await credentials.get('deepseek')).apiKey, '');
+});
+
+test('provider model catalogs use saved-key endpoints and keep only translation text models', () => {
+  assert.deepEqual(buildModelListRequest('openai', 'openai-secret'), {
+    url: 'https://api.openai.com/v1/models',
+    options: { headers: { Authorization: 'Bearer openai-secret' } },
+  });
+  assert.deepEqual(buildModelListRequest('deepseek', 'deepseek-secret'), {
+    url: 'https://api.deepseek.com/models',
+    options: { headers: { Authorization: 'Bearer deepseek-secret' } },
+  });
+  assert.deepEqual(filterAvailableModels('openai', { data: [
+    { id: 'gpt-5' }, { id: 'gpt-5-mini' }, { id: 'gpt-5-image' },
+    { id: 'gpt-5-audio' }, { id: 'gpt-5-codex' }, { id: 'gpt-6-astra' },
+    { id: 'gpt-4.1' }, { id: 'whisper-1' },
+  ] }), ['gpt-5', 'gpt-5-mini', 'gpt-6-astra']);
+  assert.deepEqual(filterAvailableModels('deepseek', { data: [
+    { id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }, { id: 'deepseek-vision' },
+  ] }), ['deepseek-chat', 'deepseek-reasoner']);
+});
+
+test('model discovery refuses network access until that provider key is saved', async () => {
+  let requests = 0;
+  const credentials = new AiCredentialStore(new MemoryStorage());
+  const client = new DeepSeekClient(async () => { requests += 1; }, credentials);
+
+  await assert.rejects(() => client.listModels('openai'), /Сначала сохраните API-ключ OpenAI/);
+  assert.equal(requests, 0);
+});
+
+test('OpenAI translation requests use its selected text model and response shape', () => {
+  const request = buildAIRequest({ provider: 'openai', model: 'gpt-5-mini', system: 'Translate', user: '{"caption":"Hi"}', maxTokens: 1600 });
+  assert.equal(request.url, 'https://api.openai.com/v1/responses');
+  assert.equal(request.body.model, 'gpt-5-mini');
+  assert.equal(request.body.max_output_tokens, 1600);
+  assert.equal(request.body.instructions, 'Translate');
+  assert.equal(request.body.input, '{"caption":"Hi"}');
+  assert.equal('thinking' in request.body, false);
+  assert.equal(extractAIText('openai', { output: [{ content: [{ type: 'output_text', text: '{"translation":"Привет"}' }] }] }), '{"translation":"Привет"}');
+});
+
+test('active OpenAI settings drive the real translation client path', async () => {
+  const credentials = new AiCredentialStore(new MemoryStorage());
+  await credentials.patch({ provider: 'openai', apiKey: 'openai-secret', model: 'gpt-5-mini', activate: true });
+  let requestUrl;
+  let requestBody;
+  const client = new DeepSeekClient(async (url, options) => {
+    requestUrl = url;
+    requestBody = JSON.parse(options.body);
+    return new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: '{"translation":"Привет","glossary":[]}' }] }],
+    }));
+  }, credentials);
+
+  assert.deepEqual(await client.translateCaption('Hello'), { translation: 'Привет', glossary: [] });
+  assert.equal(requestUrl, 'https://api.openai.com/v1/responses');
+  assert.equal(requestBody.model, 'gpt-5-mini');
+  assert.equal(requestBody.max_output_tokens, 1600);
 });
 
 
@@ -105,7 +216,7 @@ test('caption translation never truncates the complete sentence translation', ()
 test('DeepSeek prepares concise click translations for one caption only', async () => {
   const storage = new MemoryStorage();
   const credentials = new AiCredentialStore(storage);
-  await credentials.patch({ apiKey: 'secret-key', model: 'deepseek-v4-pro' });
+  await credentials.patch({ provider: 'deepseek', apiKey: 'secret-key', model: 'deepseek-v4-pro', activate: true });
   let request;
   const client = new DeepSeekClient(async (_url, options) => {
     request = JSON.parse(options.body);
@@ -136,7 +247,7 @@ test('DeepSeek prepares concise click translations for one caption only', async 
 test('DeepSeek keeps a valid sentence translation without a repair request', async () => {
   const storage = new MemoryStorage();
   const credentials = new AiCredentialStore(storage);
-  await credentials.patch({ apiKey: 'test-key' });
+  await credentials.patch({ provider: 'deepseek', apiKey: 'secret-key', model: 'deepseek-chat', activate: true });
   const requests = [];
   const replies = [
     { translation: 'Я сдался.', glossary: [] },
@@ -157,7 +268,7 @@ test('DeepSeek keeps a valid sentence translation without a repair request', asy
 test('DeepSeek translates a linked Chinese sentence in one request', async () => {
   const storage = new MemoryStorage();
   const credentials = new AiCredentialStore(storage);
-  await credentials.patch({ apiKey: 'secret-key' });
+  await credentials.patch({ provider: 'deepseek', apiKey: 'secret-key', model: 'deepseek-chat', activate: true });
   let request;
   const client = new DeepSeekClient(async (_url, options) => {
     request = JSON.parse(options.body);
@@ -188,7 +299,7 @@ test('DeepSeek translates a linked Chinese sentence in one request', async () =>
 test('DeepSeek keeps every valid Chinese glossary term returned for a caption', async () => {
   const storage = new MemoryStorage();
   const credentials = new AiCredentialStore(storage);
-  await credentials.patch({ apiKey: 'secret-key' });
+  await credentials.patch({ provider: 'deepseek', apiKey: 'secret-key', model: 'deepseek-chat', activate: true });
   const glossary = Array.from({ length: 13 }, (_, index) => ({
     pinyin: `cí${index + 1}`,
     translation: `слово ${index + 1}`,
@@ -205,7 +316,7 @@ test('DeepSeek keeps every valid Chinese glossary term returned for a caption', 
 test('DeepSeek rejects model glossary terms that are not exact displayed pinyin phrases', async () => {
   const storage = new MemoryStorage();
   const credentials = new AiCredentialStore(storage);
-  await credentials.patch({ apiKey: 'secret-key' });
+  await credentials.patch({ provider: 'deepseek', apiKey: 'secret-key', model: 'deepseek-chat', activate: true });
   const client = new DeepSeekClient(async () => new Response(JSON.stringify({
     choices: [{ message: { content: JSON.stringify({
       translation: 'Привет, мир',

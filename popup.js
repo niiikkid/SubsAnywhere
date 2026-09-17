@@ -28,8 +28,17 @@ let aiLoaded = false;
 let youtubeLoaded = false;
 let selectedFrameId;
 let syncTrackId = '';
-let hasApiKey = false;
-let aiModel = 'deepseek-v4-flash';
+let aiConfig = {
+  activeProvider: 'deepseek',
+  providers: {
+    deepseek: { hasApiKey: false, model: '' },
+    openai: { hasApiKey: false, model: '' },
+  },
+};
+let aiProvider = 'deepseek';
+let aiCatalog = [];
+let aiCatalogProvider = '';
+let aiCatalogRevision = 0;
 let aiModelRevision = 0;
 let aiKeyRevision = 0;
 let youtubeId = '';
@@ -173,6 +182,30 @@ function option(parent, value, label) {
   return element;
 }
 
+function providerLabel(provider = aiProvider) {
+  return provider === 'openai' ? 'OpenAI' : 'DeepSeek';
+}
+
+function normalizeAiConfig(value = {}) {
+  const activeProvider = value.activeProvider === 'openai' ? 'openai' : 'deepseek';
+  return {
+    activeProvider,
+    providers: Object.fromEntries(['deepseek', 'openai'].map((provider) => [provider, {
+      hasApiKey: Boolean(value.providers?.[provider]?.hasApiKey),
+      model: typeof value.providers?.[provider]?.model === 'string' ? value.providers[provider].model : '',
+    }])),
+  };
+}
+
+function adoptAiConfig(value) {
+  aiConfig = normalizeAiConfig(value);
+}
+
+function resetAiCatalog() {
+  aiCatalog = [];
+  aiCatalogProvider = '';
+}
+
 function drawPlayers() {
   const select = $('player');
   const selected = currentPlayer();
@@ -263,12 +296,32 @@ function drawSettings() {
   $('subtitleBackgroundColor').disabled = !pageKey || !settings.subtitleBackground;
   $('subtitleBackgroundOpacity').disabled = !pageKey || !settings.subtitleBackground;
   $('fontSizeValue').value = `${settings.fontSize}px`;
+  const providerInfo = aiConfig.providers[aiProvider];
+  const catalogReady = aiCatalogProvider === aiProvider && aiCatalog.length > 0;
+  const selectedModel = catalogReady && aiCatalog.includes($('aiModel').value)
+    ? $('aiModel').value : providerInfo.model;
+  $('aiProvider').value = aiProvider;
+  $('aiKeyLabel').textContent = `API-ключ ${providerLabel()}`;
+  $('loadAiModels').textContent = providerInfo.hasApiKey && !$('aiKey').value.trim()
+    ? 'Загрузить доступные модели' : 'Сохранить ключ и загрузить модели';
+  $('aiModel').replaceChildren();
+  if (catalogReady) {
+    for (const model of aiCatalog) option($('aiModel'), model, model);
+    $('aiModel').value = aiCatalog.includes(selectedModel) ? selectedModel : aiCatalog[0];
+  }
+  $('aiModel').disabled = !catalogReady;
+  $('saveAiSettings').disabled = !catalogReady || !$('aiModel').value;
+  $('aiModelHint').textContent = catalogReady
+    ? 'Модели загружены. Выберите одну и сохраните настройки.'
+    : providerInfo.hasApiKey ? 'Загрузите доступные модели.' : 'Сначала сохраните ключ.';
   $('aiKeyState').textContent = hydrationErrors.has('ai')
-    ? `Не удалось загрузить DeepSeek: ${hydrationErrors.get('ai').message}`
-    : !aiLoaded ? 'Загружаю настройки DeepSeek…' : hasApiKey
-    ? 'Ключ сохранён. Перевод по клику включён.'
-    : 'Ключ не сохранён. Перевод по клику недоступен.';
-  $('deepseekModel').value = aiModel;
+    ? `Не удалось загрузить настройки ИИ: ${hydrationErrors.get('ai').message}`
+    : !aiLoaded ? 'Загружаю настройки перевода…'
+      : aiConfig.activeProvider === aiProvider && providerInfo.hasApiKey && providerInfo.model
+        ? `${providerLabel()} используется для перевода: ${providerInfo.model}.`
+        : providerInfo.hasApiKey
+          ? `Ключ ${providerLabel()} сохранён. Загрузите модели и выберите одну.`
+          : `Ключ ${providerLabel()} не сохранён.`;
   drawPreview();
 }
 
@@ -549,24 +602,51 @@ async function activate(restart = false) {
   }
 }
 
-async function saveDeepseekKey(clear = false) {
-  const inputValue = $('deepseekKey').value;
-  const apiKey = $('deepseekKey').value.trim();
-  if (!clear && !apiKey) throw new Error('Вставьте API-ключ DeepSeek');
+async function loadAiModels() {
+  const provider = aiProvider;
+  const revision = ++aiCatalogRevision;
+  const inputValue = $('aiKey').value;
+  const apiKey = inputValue.trim();
+  if (!apiKey && !aiConfig.providers[provider].hasApiKey) throw new Error(`Вставьте API-ключ ${providerLabel(provider)}`);
   aiKeyRevision += 1;
-  await saveRequest('ai:key', MESSAGE.AI_CONFIG_PATCH, { apiKey, model: aiModel, clearApiKey: clear }, (data) => {
-    hasApiKey = Boolean(data.hasApiKey);
-    aiLoaded = true;
-    hydrationErrors.delete('ai');
-    if ($('deepseekKey').value === inputValue) $('deepseekKey').value = '';
+  if (apiKey) {
+    await saveRequest(`ai:key:${provider}`, MESSAGE.AI_CONFIG_PATCH, { provider, apiKey }, (data) => {
+      adoptAiConfig(data);
+      aiLoaded = true;
+      hydrationErrors.delete('ai');
+      if ($('aiKey').value === inputValue) $('aiKey').value = '';
+    });
+  }
+  if (revision !== aiCatalogRevision || provider !== aiProvider) return;
+  const data = await request(MESSAGE.AI_MODELS_GET, { provider });
+  if (revision !== aiCatalogRevision || provider !== aiProvider || popupClosed) return;
+  aiCatalog = Array.isArray(data.models) ? data.models : [];
+  aiCatalogProvider = provider;
+  if (!aiCatalog.length) throw new Error(`Нет доступных текстовых моделей ${providerLabel(provider)}`);
+  drawSettings();
+}
+
+async function clearAiKey() {
+  const provider = aiProvider;
+  aiCatalogRevision += 1;
+  aiKeyRevision += 1;
+  await saveRequest(`ai:key:${provider}`, MESSAGE.AI_CONFIG_PATCH, { provider, clearApiKey: true }, (data) => {
+    adoptAiConfig(data);
+    resetAiCatalog();
+    $('aiKey').value = '';
     drawSettings();
   });
 }
 
-async function saveDeepseekModel() {
+async function saveAiSettings() {
+  const provider = aiProvider;
+  const model = $('aiModel').value;
+  if (aiCatalogProvider !== provider || !aiCatalog.includes(model)) throw new Error('Сначала загрузите и выберите модель');
   aiModelRevision += 1;
-  aiModel = $('deepseekModel').value === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
-  await saveRequest('ai:model', MESSAGE.AI_CONFIG_PATCH, { model: aiModel });
+  await saveRequest(`ai:settings:${provider}`, MESSAGE.AI_CONFIG_PATCH, { provider, model, activate: true }, (data) => {
+    adoptAiConfig(data);
+    drawSettings();
+  });
 }
 
 async function loadAiSettings() {
@@ -576,8 +656,10 @@ async function loadAiSettings() {
   try {
     const data = await request(MESSAGE.AI_CONFIG_GET);
     if (revision !== aiLoadRevision) return data;
-    if (keyRevision === aiKeyRevision) hasApiKey = Boolean(data.hasApiKey);
-    if (modelRevision === aiModelRevision) aiModel = data.model === 'deepseek-v4-pro' ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
+    if (keyRevision === aiKeyRevision && modelRevision === aiModelRevision) {
+      adoptAiConfig(data);
+      aiProvider = aiConfig.activeProvider;
+    }
     aiLoaded = true;
     hydrationErrors.delete('ai');
     drawSettings();
@@ -615,7 +697,7 @@ async function hydratePage(aiPromise) {
       hydrationErrors.delete('onPlayers');
       players = snapshot.players;
       render();
-      if (!connectable) setStatus('На служебных страницах подключение недоступно. Внешний вид и DeepSeek можно настроить без плеера.');
+      if (!connectable) setStatus('На служебных страницах подключение недоступно. Внешний вид и перевод можно настроить без плеера.');
       else if (!players.length) setStatus('Нажмите «Подключить к плееру» на странице с видео.');
       else setStatus(`Найдено в памяти: ${players.length}. Если плеер сменился, повторите поиск.`);
     },
@@ -667,9 +749,19 @@ $('retrySave').addEventListener('click', () => {
 $('retrySettings').addEventListener('click', () => { void hydratePage(loadAiSettings()); });
 $('activate').addEventListener('click', () => activate().catch((error) => setStatus(error.message, true)));
 $('restartSearch').addEventListener('click', () => activate(true).catch((error) => setStatus(error.message, true)));
-$('saveDeepseekKey').addEventListener('click', () => saveDeepseekKey(false).catch((error) => setStatus(error.message, true)));
-$('clearDeepseekKey').addEventListener('click', () => saveDeepseekKey(true).catch((error) => setStatus(error.message, true)));
-$('deepseekModel').addEventListener('change', () => saveDeepseekModel().catch((error) => setStatus(error.message, true)));
+$('aiProvider').addEventListener('change', () => {
+  aiProvider = $('aiProvider').value === 'openai' ? 'openai' : 'deepseek';
+  aiCatalogRevision += 1;
+  aiModelRevision += 1;
+  resetAiCatalog();
+  $('aiKey').value = '';
+  drawSettings();
+});
+$('aiKey').addEventListener('input', () => drawSettings());
+$('aiModel').addEventListener('change', () => drawSettings());
+$('loadAiModels').addEventListener('click', () => loadAiModels().catch((error) => setStatus(error.message, true)));
+$('clearAiKey').addEventListener('click', () => clearAiKey().catch((error) => setStatus(error.message, true)));
+$('saveAiSettings').addEventListener('click', () => saveAiSettings().catch((error) => setStatus(error.message, true)));
 $('subtitleFile').addEventListener('change', (event) => importFile(event.target.files?.[0]).catch((error) => setStatus(error.message, true)));
 $('createYoutubeSubtitles').addEventListener('click', () => createYoutubeSubtitles());
 $('retryYoutubeSubtitles').addEventListener('click', () => loadYoutubeSubtitles());

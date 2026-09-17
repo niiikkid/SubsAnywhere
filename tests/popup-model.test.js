@@ -32,7 +32,13 @@ test('loadPopupSnapshot reads state and players without issuing any write messag
     calls.push({ type, payload });
     if (type === MESSAGE.STATE_GET) return { state: { settings: {}, externalTracks: [] } };
     if (type === MESSAGE.PLAYER_GET) return { players };
-    if (type === MESSAGE.AI_CONFIG_GET) return { hasApiKey: true };
+    if (type === MESSAGE.AI_CONFIG_GET) return {
+      activeProvider: 'openai',
+      providers: {
+        deepseek: { hasApiKey: false, model: '' },
+        openai: { hasApiKey: true, model: 'gpt-5-mini' },
+      },
+    };
     throw new Error(`unexpected ${type}`);
   };
 
@@ -42,7 +48,8 @@ test('loadPopupSnapshot reads state and players without issuing any write messag
   assert.equal(calls[0].payload.pageKey, 'https://example.test/video');
   assert.equal(snapshot.players.length, 2);
   assert.equal(snapshot.state.settings.secondTrackId, '');
-  assert.equal(snapshot.hasApiKey, true);
+  assert.equal(snapshot.ai.activeProvider, 'openai');
+  assert.equal(snapshot.ai.providers.openai.hasApiKey, true);
 });
 
 test('subtitle decoder prefers UTF-8 and falls back to Windows-1251', () => {

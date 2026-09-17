@@ -32,7 +32,7 @@ function makeDocument() {
     'controls', 'status', 'player', 'originalTrack',
     'fontSize', 'subtitleColor', 'subtitleBackground', 'subtitleBackgroundColor', 'subtitleBackgroundOpacity', 'subtitleBackgroundOpacityValue', 'fontSizeValue', 'externalList',
     'syncBox', 'syncTrack', 'offsetSeconds', 'timeScalePercent', 'activate', 'restartSearch', 'subtitleFile',
-    'deepseekKey', 'deepseekModel', 'saveDeepseekKey', 'clearDeepseekKey', 'aiKeyState',
+    'aiProvider', 'aiKey', 'aiKeyLabel', 'aiModel', 'aiModelHint', 'loadAiModels', 'clearAiKey', 'saveAiSettings', 'aiKeyState',
     'youtubeSubtitles', 'youtubeSubtitleStatus', 'createYoutubeSubtitles',
     'youtubeProgressBox', 'youtubeProgress', 'youtubeProgressValue', 'youtubeProgressDetail', 'youtubeLanguage',
     'playerTab', 'appearanceTab', 'settingsTab', 'playerPanel', 'appearancePanel', 'settingsPanel',
@@ -60,6 +60,13 @@ const deferred = () => {
   const promise = new Promise((done) => { resolve = done; });
   return { promise, resolve };
 };
+const aiInfo = ({ activeProvider = 'deepseek', deepseekKey = false, deepseekModel = '', openaiKey = false, openaiModel = '' } = {}) => ({
+  activeProvider,
+  providers: {
+    deepseek: { hasApiKey: deepseekKey, model: deepseekModel },
+    openai: { hasApiKey: openaiKey, model: openaiModel },
+  },
+});
 let popupInstance = 0;
 async function bootPopup(overrides = {}, tab = { id: 77, url: 'https://video.example/episode-1' }) {
   const document = makeDocument();
@@ -67,7 +74,7 @@ async function bootPopup(overrides = {}, tab = { id: 77, url: 'https://video.exa
   const handlers = {
     'dualCaptions.state.get': () => ({ state: {} }),
     'dualCaptions.player.get': () => ({ players: [] }),
-    'dualCaptions.ai.get': () => ({ hasApiKey: false, model: 'deepseek-v4-flash' }),
+    'dualCaptions.ai.get': () => aiInfo(),
     'dualCaptions.state.patch': () => ({ state: {} }),
     ...overrides,
   };
@@ -164,10 +171,11 @@ test('state and AI hydrate while the cached player request is still pending', as
   const { elements, messages } = await bootPopup({
     'dualCaptions.player.get': () => cache.promise,
     'dualCaptions.state.get': () => ({ state: { settings: { fontSize: 34 } } }),
-    'dualCaptions.ai.get': () => ({ hasApiKey: true, model: 'deepseek-v4-pro' }),
+    'dualCaptions.ai.get': () => aiInfo({ deepseekKey: true, deepseekModel: 'deepseek-v4-pro' }),
   });
   assert.equal(elements.fontSize.value, 34);
-  assert.equal(elements.deepseekModel.value, 'deepseek-v4-pro');
+  assert.equal(elements.aiProvider.value, 'deepseek');
+  assert.equal(elements.aiModel.disabled, true);
   assert.equal(elements.controls.hidden, false);
   assert.equal(messages.find((message) => message.type === 'dualCaptions.player.get').cachedOnly, true);
   cache.resolve({ players: [] });
@@ -298,9 +306,10 @@ test('failed saves remain visible across other successes and retry the latest va
 test('AI hydrates before tab lookup while page edits wait for an exact persistence scope', async () => {
   const tab = deferred();
   const { elements, messages } = await bootPopup({
-    'dualCaptions.ai.get': () => ({ hasApiKey: true, model: 'deepseek-v4-pro' }),
+    'dualCaptions.ai.get': () => aiInfo({ deepseekKey: true, deepseekModel: 'deepseek-v4-pro' }),
   }, tab.promise);
-  assert.equal(elements.deepseekModel.value, 'deepseek-v4-pro');
+  assert.equal(elements.aiProvider.value, 'deepseek');
+  assert.equal(elements.aiModel.disabled, true);
   assert.equal(elements.fontSize.disabled, true);
   elements.fontSize.value = 40;
   elements.fontSize.listeners.get('input')();
@@ -319,7 +328,7 @@ test('failed settings hydration remains visible and can be retried without reset
     },
     'dualCaptions.ai.get': () => {
       if (fail) throw new Error('AI config unavailable');
-      return { hasApiKey: true, model: 'deepseek-v4-pro' };
+      return aiInfo({ deepseekKey: true, deepseekModel: 'deepseek-v4-pro' });
     },
   });
   assert.equal(elements.retrySettings.hidden, false);
@@ -331,7 +340,8 @@ test('failed settings hydration remains visible and can be retried without reset
   await tick();
   assert.equal(elements.fontSize.value, 35);
   assert.equal(elements.subtitleColor.value, '#112233');
-  assert.equal(elements.deepseekModel.value, 'deepseek-v4-pro');
+  assert.equal(elements.aiProvider.value, 'deepseek');
+  assert.equal(elements.aiModel.disabled, true);
   assert.equal(elements.retrySettings.hidden, true);
   assert.equal(messages.filter((message) => message.type === 'dualCaptions.state.patch').length, 1);
 });
@@ -343,7 +353,8 @@ test('restricted tabs keep appearance and AI editable without requesting player 
   elements.fontSize.value = 32;
   elements.fontSize.listeners.get('input')();
   assert.equal(messages.at(-1).pageKey, 'chrome://extensions/');
-  assert.equal(elements.deepseekModel.disabled, false);
+  assert.equal(elements.aiProvider.disabled, false);
+  assert.equal(elements.aiModel.disabled, true);
   assert.match(elements.status.textContent, /служебн/);
   await tick();
 });
@@ -438,7 +449,7 @@ test('deleting an SRT clears its selection without resetting a newer appearance 
 test('validation errors are visible while the settings panel is open', async () => {
   const { elements } = await bootPopup();
   elements.settingsTab.listeners.get('click')();
-  elements.saveDeepseekKey.listeners.get('click')();
+  elements.loadAiModels.listeners.get('click')();
   await tick();
   assert.match(elements.saveStatus.textContent, /Вставьте API-ключ/);
   assert.equal(elements.saveStatus.classList.values.has('error'), true);
@@ -460,62 +471,70 @@ test('late player selection cannot reset appearance edited while connecting', as
   assert.equal(elements.fontSize.value, 41);
 });
 
-test('late AI hydration and key replies preserve edited model and newly typed key', async () => {
+test('late AI hydration and key replies preserve the provider choice and newly typed key', async () => {
   const loading = deferred();
   const saving = deferred();
   const { elements } = await bootPopup({
     'dualCaptions.ai.get': () => loading.promise,
-    'dualCaptions.ai.patch': (message) => 'apiKey' in message ? saving.promise : { hasApiKey: false, model: message.model },
+    'dualCaptions.ai.patch': () => saving.promise,
+    'dualCaptions.ai.models.get': () => ({ provider: 'openai', models: ['gpt-5', 'gpt-5-mini'] }),
   });
-  elements.deepseekModel.value = 'deepseek-v4-pro';
-  elements.deepseekModel.listeners.get('change')();
-  elements.deepseekKey.value = 'test-key-one';
-  elements.saveDeepseekKey.listeners.get('click')();
-  elements.deepseekKey.value = 'test-key-two';
-  loading.resolve({ hasApiKey: false, model: 'deepseek-v4-flash' });
+  elements.aiProvider.value = 'openai';
+  elements.aiProvider.listeners.get('change')();
+  elements.aiKey.value = 'test-key-one';
+  elements.loadAiModels.listeners.get('click')();
+  elements.aiKey.value = 'test-key-two';
+  loading.resolve(aiInfo({ deepseekKey: true, deepseekModel: 'deepseek-chat' }));
   await tick();
-  assert.equal(elements.deepseekModel.value, 'deepseek-v4-pro');
-  saving.resolve({ hasApiKey: true, model: 'deepseek-v4-flash' });
+  assert.equal(elements.aiProvider.value, 'openai');
+  saving.resolve(aiInfo({ openaiKey: true }));
   await tick();
-  assert.equal(elements.deepseekKey.value, 'test-key-two');
-  assert.equal(elements.deepseekModel.value, 'deepseek-v4-pro');
+  await tick();
+  assert.equal(elements.aiKey.value, 'test-key-two');
+  assert.equal(elements.aiModel.value, 'gpt-5');
 });
 
-test('saving a key immediately after choosing Pro keeps the chosen model', async () => {
-  const document = makeDocument();
-  const messages = [];
-  let releaseModelPatch;
-  const modelPatch = new Promise((resolve) => { releaseModelPatch = resolve; });
-  globalThis.document = document;
-  globalThis.chrome = {
-    tabs: { query: async () => [{ id: 77, url: 'https://video.example/episode-1' }] },
-    runtime: {
-      async sendMessage(message) {
-        messages.push(structuredClone(message));
-        if (message.type === 'dualCaptions.state.get') return { ok: true, data: { state: {} } };
-        if (message.type === 'dualCaptions.player.get') return { ok: true, data: { players: [] } };
-        if (message.type === 'dualCaptions.ai.get') return { ok: true, data: { hasApiKey: false, model: 'deepseek-v4-flash' } };
-        if (message.type === 'dualCaptions.ai.patch' && !('apiKey' in message)) {
-          await modelPatch;
-          return { ok: true, data: { hasApiKey: false, model: 'deepseek-v4-pro' } };
-        }
-        if (message.type === 'dualCaptions.ai.patch') return { ok: true, data: { hasApiKey: true, model: message.model } };
-        throw new Error(`Unexpected message: ${message.type}`);
-      },
-    },
-    permissions: { request: async () => true },
-  };
+test('OpenAI becomes active only after a loaded model is explicitly saved', async () => {
+  const { elements, messages } = await bootPopup({
+    'dualCaptions.ai.get': () => aiInfo({ openaiKey: true }),
+    'dualCaptions.ai.models.get': () => ({ provider: 'openai', models: ['gpt-5', 'gpt-5-mini'] }),
+    'dualCaptions.ai.patch': (message) => aiInfo({
+      activeProvider: message.activate ? 'openai' : 'deepseek',
+      openaiKey: true,
+      openaiModel: message.model || '',
+    }),
+  });
+  elements.aiProvider.value = 'openai';
+  elements.aiProvider.listeners.get('change')();
+  elements.loadAiModels.listeners.get('click')();
+  await tick();
+  elements.aiModel.value = 'gpt-5-mini';
+  elements.aiModel.listeners.get('change')();
+  elements.saveAiSettings.listeners.get('click')();
+  await tick();
 
-  await import(`../popup.js?ai-model-race-test=${Date.now()}`);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  document.elements.deepseekModel.value = 'deepseek-v4-pro';
-  document.elements.deepseekModel.listeners.get('change')();
-  document.elements.deepseekKey.value = 'secret-key';
-  document.elements.saveDeepseekKey.listeners.get('click')();
+  const activation = messages.find((message) => message.type === 'dualCaptions.ai.patch' && message.activate);
+  assert.deepEqual({ provider: activation.provider, model: activation.model, activate: activation.activate }, {
+    provider: 'openai', model: 'gpt-5-mini', activate: true,
+  });
+});
 
-  const keyPatch = messages.find((message) => message.type === 'dualCaptions.ai.patch' && 'apiKey' in message);
-  assert.equal(keyPatch.model, 'deepseek-v4-pro');
-  releaseModelPatch();
+test('an older model-catalog response cannot replace the newest OpenAI catalog', async () => {
+  const first = deferred();
+  const second = deferred();
+  let requests = 0;
+  const { elements } = await bootPopup({
+    'dualCaptions.ai.get': () => aiInfo({ activeProvider: 'openai', openaiKey: true, openaiModel: 'gpt-5' }),
+    'dualCaptions.ai.models.get': () => ++requests === 1 ? first.promise : second.promise,
+  });
+  elements.loadAiModels.listeners.get('click')();
+  elements.loadAiModels.listeners.get('click')();
+  second.resolve({ provider: 'openai', models: ['gpt-6-astra'] });
+  await tick();
+  assert.equal(elements.aiModel.value, 'gpt-6-astra');
+  first.resolve({ provider: 'openai', models: ['gpt-5'] });
+  await tick();
+  assert.equal(elements.aiModel.value, 'gpt-6-astra');
 });
 
 test('running YouTube downloads poll their own endpoint without blocking appearance', async () => {

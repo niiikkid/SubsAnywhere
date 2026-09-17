@@ -116,7 +116,7 @@ export class BackgroundController {
   #store;
   #registry;
   #credentialStore;
-  #deepSeek;
+  #aiClient;
   #localSubtitles;
   #discoveryTimeoutMs;
   #discoveryQuietMs;
@@ -130,7 +130,7 @@ export class BackgroundController {
     this.#store = store;
     this.#registry = options.registry ?? new PlayerRegistry();
     this.#credentialStore = options.credentialStore;
-    this.#deepSeek = options.deepSeek;
+    this.#aiClient = options.aiClient ?? options.deepSeek;
     this.#localSubtitles = options.localSubtitles;
     this.#discoveryTimeoutMs = options.discoveryTimeoutMs ?? 5000;
     this.#discoveryQuietMs = options.discoveryQuietMs ?? 300;
@@ -222,11 +222,14 @@ export class BackgroundController {
           )));
 
         case MESSAGE.AI_CONFIG_GET:
-          if (!this.#credentialStore) throw new Error('DeepSeek пока недоступен');
+          if (!this.#credentialStore) throw new Error('Настройки ИИ пока недоступны');
           return ok(await this.#credentialStore.publicInfo());
         case MESSAGE.AI_CONFIG_PATCH:
-          if (!this.#credentialStore) throw new Error('DeepSeek пока недоступен');
+          if (!this.#credentialStore) throw new Error('Настройки ИИ пока недоступны');
           return ok(await this.#credentialStore.patch(message));
+        case MESSAGE.AI_MODELS_GET:
+          if (!this.#aiClient) throw new Error('ИИ пока недоступен');
+          return ok({ provider: message.provider, models: await this.#aiClient.listModels(message.provider) });
         case MESSAGE.CAPTION_TRANSLATE:
           await this.#enqueue(sender.tab.id, () => this.#selectedSender(message, sender));
           return ok(await this.#translateCaption(message));
@@ -544,13 +547,13 @@ export class BackgroundController {
   }
 
   async #translateCaption(message) {
-    if (!this.#deepSeek) throw new Error('DeepSeek пока недоступен');
+    if (!this.#aiClient) throw new Error('Перевод через ИИ пока недоступен');
     const text = boundedString(message.text, 500).trim();
     const displayText = boundedString(message.displayText, 500).trim();
     if (!text) return { items: [] };
     if (message?.language === 'zh') {
       if (!displayText) return { items: [] };
-      const translation = await this.#deepSeek.translateChineseCaption(text, displayText);
+      const translation = await this.#aiClient.translateChineseCaption(text, displayText);
       return {
         items: [{
           start: 0,
@@ -563,7 +566,7 @@ export class BackgroundController {
         }],
       };
     }
-    const translation = await this.#deepSeek.translateCaption(text);
+    const translation = await this.#aiClient.translateCaption(text);
     return {
       items: [{
         start: 0,
