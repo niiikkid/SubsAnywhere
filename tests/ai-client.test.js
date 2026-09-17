@@ -473,7 +473,7 @@ test('word explanation uses the active provider and returns only a concise saved
   const client = new AIClient(async (url, options) => {
     requests.push({ url, options });
     return Response.json({ choices: [{ message: { content: JSON.stringify({
-      explanation: '你好 — обычное приветствие. 你 значит «ты», 好 — «хорошо». Подходит и знакомым, и незнакомым.',
+      explanation: 'Nǐ hǎo — обычное приветствие. Nǐ значит «ты», hǎo — «хорошо». Подходит и знакомым, и незнакомым.',
     }) } }] });
   }, { async getActive() { return { provider: 'deepseek', apiKey: 'secret-key', model: 'deepseek-chat' }; } });
 
@@ -487,4 +487,13 @@ test('word explanation uses the active provider and returns only a concise saved
   assert.equal(JSON.parse(requests[0].options.body).messages[1].content, JSON.stringify({
     language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет',
   }));
+  assert.match(JSON.parse(requests[0].options.body).messages[0].content, /never write Han characters/i);
+});
+
+test('word explanation rejects Chinese characters instead of saving them', async () => {
+  const client = new AIClient(async () => Response.json({ choices: [{ message: { content: JSON.stringify({
+    explanation: '你好 — приветствие.',
+  }) } }] }), { async getActive() { return { provider: 'deepseek', apiKey: 'test-key', model: 'deepseek-chat' }; } });
+
+  await assert.rejects(client.explainWord({ language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет' }), /иероглифы/);
 });
