@@ -9,21 +9,15 @@
   <script src="/words/words.js" defer></script>
 </head>
 <body>
-  <header class="site-header"><span class="brand">SubsAnywhere</span><span class="local-label">Локальный словарь</span></header>
+  <header class="site-header"><span class="brand">SubsAnywhere</span><span class="local-label">Словарь</span></header>
   <main>
-    <section class="intro" aria-labelledby="title">
-      <div><p class="eyebrow">Из субтитров — в память</p><h1 id="title">Мой словарь</h1>
-      <p class="description">Сохраняйте слова в расширении. Повторяйте здесь.<br>Выучили слово? Удалите его из списка одной кнопкой.</p></div>
-      <button id="refresh" type="button">Обновить список</button>
-    </section>
     <section class="vocabulary" aria-label="Сохранённые слова">
       <div class="toolbar">
-        <div class="search-field"><label for="search">Поиск по слову, пиньиню или переводу</label>
-          <input id="search" type="search" placeholder="Например: 你好, ni hao, привет" autocomplete="off" maxlength="1000">
-        </div>
-        <div class="language-field"><label for="language">Язык</label><select id="language">
+        <input id="search" type="search" aria-label="Поиск по слову, пиньиню или переводу" placeholder="Поиск по слову, пиньиню или переводу" autocomplete="off" maxlength="1000">
+        <select id="language" aria-label="Язык">
           <option value="">Все языки</option><option value="zh">Китайский</option><option value="en">Английский</option>
-        </select></div>
+        </select>
+        <button id="refresh" type="button">Обновить</button>
       </div>
       <div class="list-heading"><h2>На повторение</h2><span id="count" aria-live="polite">—</span></div>
       <p id="status" class="status" role="status" aria-live="polite">Загрузка словаря…</p>

@@ -8,7 +8,6 @@
   const status = document.getElementById("status");
   const empty = document.getElementById("empty");
   const refresh = document.getElementById("refresh");
-  const dateFormat = new Intl.DateTimeFormat("ru", { day: "numeric", month: "short", year: "numeric" });
   let words = [];
   let loaded = false;
   let busy = false;
@@ -68,15 +67,6 @@
         pinyin.lang = "zh-Latn";
         main.append(pinyin);
       }
-      const metadata = element("div", "word-meta", "");
-      metadata.append(element("span", "", word.language === "zh" ? "Китайский" : "Английский"));
-      const date = new Date(word.created_at);
-      if (!Number.isNaN(date.getTime())) {
-        const time = element("time", "", dateFormat.format(date));
-        time.dateTime = word.created_at;
-        metadata.append(time);
-      }
-      main.append(metadata);
       const remove = element("button", "learned", "Выучено ✓");
       remove.type = "button";
       remove.disabled = busy;
