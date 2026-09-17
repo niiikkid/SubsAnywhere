@@ -19,13 +19,27 @@ function normalizeWord(value) {
   return { language, text, pinyin, translation };
 }
 
+function storedExplanation(value) {
+  if (typeof value !== 'string' || value.length > 1200 || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new Error('Некорректное объяснение слова');
+  }
+  return value.normalize('NFC').trim().replace(/\s+/gu, ' ');
+}
+
+function normalizeExplanation(value) {
+  const explanation = storedExplanation(value);
+  if (!explanation) throw new Error('Некорректное объяснение слова');
+  return explanation;
+}
+
 function savedWord(value) {
   const word = normalizeWord(value);
   if (!Number.isSafeInteger(value.id) || value.id < 1 || typeof value.created_at !== 'string'
     || typeof value.learned !== 'boolean') {
     throw new Error('Некорректный ответ словаря');
   }
-  return { ...word, id: value.id, created_at: value.created_at, learned: value.learned };
+  const explanation = value.explanation === undefined ? '' : storedExplanation(value.explanation);
+  return { ...word, id: value.id, created_at: value.created_at, learned: value.learned, explanation };
 }
 
 export class VocabularyClient {
@@ -33,11 +47,11 @@ export class VocabularyClient {
 
   constructor(fetchImpl) { this.#fetch = fetchImpl; }
 
-  async #request(method, body) {
+  async #request(path, method, body) {
     const signal = AbortSignal.timeout(8000);
     let response;
     try {
-      response = await this.#fetch(`${BASE_URL}/api/words`, {
+      response = await this.#fetch(`${BASE_URL}${path}`, {
         method, signal, credentials: 'omit', redirect: 'error', cache: 'no-store',
         headers: { 'X-SubsAnywhere-Client': 'extension-v1', ...(body ? { 'Content-Type': 'application/json' } : {}) },
         ...(body ? { body: JSON.stringify(body) } : {}),
@@ -54,7 +68,7 @@ export class VocabularyClient {
   }
 
   async list() {
-    const payload = await this.#request('GET');
+    const payload = await this.#request('/api/words', 'GET');
     try {
       if (!Array.isArray(payload?.words)) throw new Error();
       return { words: payload.words.map(savedWord) };
@@ -63,7 +77,7 @@ export class VocabularyClient {
 
   async save(value) {
     const word = normalizeWord(value);
-    const payload = await this.#request('POST', word);
+    const payload = await this.#request('/api/words', 'POST', word);
     let saved;
     try { saved = savedWord(payload?.word); }
     catch { throw new Error('Некорректный ответ словаря'); }
@@ -75,6 +89,20 @@ export class VocabularyClient {
       item.language, item.language === 'en' ? item.text.toLowerCase() : item.text, item.pinyin.toLowerCase(),
     ]);
     if (!confirmed || key(confirmed) !== key(word)) throw new Error('Не удалось подтвердить сохранение. Повторите попытку');
+    return { word: confirmed };
+  }
+
+  async saveExplanation(id, value) {
+    if (!Number.isSafeInteger(id) || id < 1) throw new Error('Некорректный идентификатор слова');
+    const explanation = normalizeExplanation(value);
+    const payload = await this.#request('/api/words/explanation', 'POST', { id, explanation });
+    let saved;
+    try { saved = savedWord(payload?.word); }
+    catch { throw new Error('Некорректный ответ словаря'); }
+    if (saved.id !== id || saved.explanation !== explanation) throw new Error('Сервер не подтвердил объяснение слова');
+    const { words } = await this.list();
+    const confirmed = words.find((item) => item.id === id && item.explanation === explanation);
+    if (!confirmed) throw new Error('Объяснение слова не сохранилось. Повторите попытку');
     return { word: confirmed };
   }
 }

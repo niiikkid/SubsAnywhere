@@ -908,7 +908,7 @@ class SubtitleService:
         }
 
 
-WORDS_ROUTES = frozenset({"/api/words", "/api/words/learned"})
+WORDS_ROUTES = frozenset({"/api/words", "/api/words/learned", "/api/words/explanation"})
 WORDS_ASSETS = {
     "/words": ("index.html", "text/html; charset=utf-8"),
     "/words/words.js": ("words.js", "text/javascript; charset=utf-8"),
@@ -1054,10 +1054,18 @@ def handler_for(service, words_store=None):
                     data = json.loads(body.decode("utf-8"), object_pairs_hook=unique_object, parse_constant=reject_constant)
                     if self.path == "/api/words":
                         payload = {"word": vocabulary.add(data)}
-                    else:
+                    elif self.path == "/api/words/learned":
                         if not isinstance(data, dict) or set(data) != {"id", "learned"} or type(data["learned"]) is not bool:
                             raise ValueError("Expected word ID and learned state")
                         word = vocabulary.set_learned(data["id"], data["learned"])
+                        if word is None:
+                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Word not found"})
+                            return
+                        payload = {"word": word}
+                    else:
+                        if not isinstance(data, dict) or set(data) != {"id", "explanation"}:
+                            raise ValueError("Expected word ID and explanation")
+                        word = vocabulary.set_explanation(data["id"], data["explanation"])
                         if word is None:
                             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Word not found"})
                             return

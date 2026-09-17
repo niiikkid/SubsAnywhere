@@ -12,7 +12,8 @@ from pathlib import Path
 MAX_WORD_BODY_BYTES = 16384
 MAX_SAFE_ID = 9007199254740991
 WORD_FIELDS = {"language", "text", "pinyin", "translation"}
-PUBLIC_COLUMNS = "id, language, text, pinyin, translation, created_at, learned"
+MAX_EXPLANATION_CHARS = 1200
+PUBLIC_COLUMNS = "id, language, text, pinyin, translation, explanation, created_at, learned"
 HAN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f\U00030000-\U000323af]")
 
 
@@ -88,6 +89,7 @@ class WordsStore:
                     text TEXT NOT NULL,
                     pinyin TEXT NOT NULL,
                     translation TEXT NOT NULL,
+                    explanation TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     learned INTEGER NOT NULL DEFAULT 0 CHECK (learned IN (0, 1)),
                     text_key TEXT NOT NULL,
@@ -98,6 +100,8 @@ class WordsStore:
             columns = {row[1] for row in connection.execute("PRAGMA table_info(words)")}
             if "learned" not in columns:
                 connection.execute("ALTER TABLE words ADD COLUMN learned INTEGER NOT NULL DEFAULT 0 CHECK (learned IN (0, 1))")
+            if "explanation" not in columns:
+                connection.execute("ALTER TABLE words ADD COLUMN explanation TEXT NOT NULL DEFAULT ''")
             with connection:
                 yield connection
         finally:
@@ -139,6 +143,16 @@ class WordsStore:
             raise ValueError("Invalid learned state")
         with self._connection() as connection:
             connection.execute("UPDATE words SET learned = ? WHERE id = ?", (int(learned), identifier))
+            row = connection.execute(
+                f"SELECT {PUBLIC_COLUMNS} FROM words WHERE id = ?", (identifier,)
+            ).fetchone()
+            return self._public_word(row) if row else None
+
+    def set_explanation(self, identifier, explanation: str) -> dict | None:
+        identifier = validate_word_id(identifier)
+        explanation = _field(explanation, MAX_EXPLANATION_CHARS)
+        with self._connection() as connection:
+            connection.execute("UPDATE words SET explanation = ? WHERE id = ?", (explanation, identifier))
             row = connection.execute(
                 f"SELECT {PUBLIC_COLUMNS} FROM words WHERE id = ?", (identifier,)
             ).fetchone()

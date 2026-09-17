@@ -17,6 +17,7 @@ export const MESSAGE = Object.freeze({
   CAPTION_TRANSLATE: 'dualCaptions.caption.translate',
   WORDS_LIST: 'dualCaptions.words.list',
   WORDS_SAVE: 'dualCaptions.words.save',
+  WORD_EXPLAIN: 'dualCaptions.words.explain',
   LOCAL_SUBTITLE_EXISTING: 'dualCaptions.localSubtitle.existing',
   LOCAL_SUBTITLE_GENERATE: 'dualCaptions.localSubtitle.generate',
   LOCAL_SUBTITLE_STATUS: 'dualCaptions.localSubtitle.status',

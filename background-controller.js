@@ -4,7 +4,7 @@ import { MESSAGE, failure, ok } from './protocol.js';
 const CONTENT_SCRIPT_ID = 'dual-captions-player-discovery-v1';
 const CONTENT_MESSAGES = new Set([
   MESSAGE.PLAYER_REPORT, MESSAGE.CONTENT_POSITION_PATCH, MESSAGE.TRACK_CACHE_BUILTIN, MESSAGE.CAPTION_TRANSLATE,
-  MESSAGE.WORDS_LIST, MESSAGE.WORDS_SAVE,
+  MESSAGE.WORDS_LIST, MESSAGE.WORDS_SAVE, MESSAGE.WORD_EXPLAIN,
 ]);
 const SERIALIZED_MESSAGES = new Set([
   MESSAGE.PLAYER_REPORT, MESSAGE.PLAYER_SELECT, MESSAGE.STATE_PATCH, MESSAGE.CONTENT_POSITION_PATCH,
@@ -163,7 +163,9 @@ export class BackgroundController {
       // Extension pages may themselves occupy tabs; that is not a content sender.
       if (!fromContent) sender = { id: sender.id, url: sender.url };
       // Reports must be able to enter the tab queue while recovery awaits their acknowledgement.
-      if (fromContent && message.type !== MESSAGE.PLAYER_REPORT) await this.#recoverSelectedSender(message, sender);
+      const fromWordsPanel = fromContent && this.#isWordsPanelSender(sender);
+      if (message.type === MESSAGE.WORD_EXPLAIN && !fromWordsPanel) throw new Error('Объяснение доступно только из панели слов');
+      if (fromContent && !fromWordsPanel && message.type !== MESSAGE.PLAYER_REPORT) await this.#recoverSelectedSender(message, sender);
       const operation = () => this.#dispatch(message, sender);
       return await (SERIALIZED_MESSAGES.has(message.type)
         ? this.#enqueue(sender.tab?.id ?? message.tabId, operation) : operation());
@@ -242,6 +244,16 @@ export class BackgroundController {
           if (!this.#vocabulary) throw new Error('Словарь недоступен. Запустите сервер в Docker');
           return ok(message.type === MESSAGE.WORDS_SAVE
             ? await this.#vocabulary.save(message.word) : await this.#vocabulary.list());
+        case MESSAGE.WORD_EXPLAIN: {
+          if (!this.#isWordsPanelSender(sender)) throw new Error('Объяснение доступно только из панели слов');
+          if (!this.#vocabulary || !this.#aiClient) throw new Error('Объяснение пока недоступно');
+          if (!Number.isSafeInteger(message.id) || message.id < 1) throw new Error('Некорректный идентификатор слова');
+          const { words } = await this.#vocabulary.list();
+          const word = words.find((item) => item.id === message.id);
+          if (!word) throw new Error('Слово не найдено');
+          if (word.explanation) return ok({ word });
+          return ok(await this.#vocabulary.saveExplanation(word.id, await this.#aiClient.explainWord(word)));
+        }
         case MESSAGE.LOCAL_SUBTITLE_EXISTING:
           if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');
           return ok(await this.#localSubtitles.existing(message.videoId, message.language));
@@ -276,6 +288,15 @@ export class BackgroundController {
       return true;
     }
     throw new Error('Сообщение доступно только окну расширения');
+  }
+
+  #isWordsPanelSender(sender) {
+    try {
+      const url = new URL(sender?.url);
+      return url.origin === 'http://127.0.0.1:43817' && url.pathname === '/words' && !url.search && !url.hash;
+    } catch {
+      return false;
+    }
   }
 
   #pageKey(message, sender) {

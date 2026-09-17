@@ -32,7 +32,10 @@ if (typeof document !== "undefined") (() => {
   const studyWord = document.getElementById("study-word");
   const studyPinyin = document.getElementById("study-pinyin");
   const studyTranslation = document.getElementById("study-translation");
+  const studyExplanation = document.getElementById("study-explanation");
+  const studyExplanationText = document.getElementById("study-explanation-text");
   const studyFinish = document.getElementById("study-finish");
+  const studyExplain = document.getElementById("study-explain");
   const studyNext = document.getElementById("study-next");
   const studyRestart = document.getElementById("study-restart");
   let words = [];
@@ -41,6 +44,7 @@ if (typeof document !== "undefined") (() => {
   let view = "review";
   let studyWords = [];
   let studyPosition = 0;
+  let studyExplanationOpen = false;
 
   function searchable(value) {
     return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/gu, " ").trim();
@@ -69,7 +73,8 @@ if (typeof document !== "undefined") (() => {
     const data = await request("/api/words");
     if (!data || !Array.isArray(data.words) || data.words.some(word => (
       !word || !Number.isSafeInteger(word.id) || word.id < 1 || !["zh", "en"].includes(word.language)
-      || !["text", "pinyin", "translation", "created_at"].every(key => typeof word[key] === "string")
+      || !["text", "pinyin", "translation", "created_at", "explanation"].every(key => typeof word[key] === "string")
+      || word.explanation.length > 1200
       || typeof word.learned !== "boolean"
     ))) throw new Error("Сервер вернул неверный формат словаря. Обновите сервер и повторите попытку.");
     return data.words;
@@ -105,7 +110,21 @@ if (typeof document !== "undefined") (() => {
       learned.title = word.learned ? "Вернуть слово в список на повторение" : "Отметить слово как выученное";
       learned.setAttribute("aria-label", `${learned.title}: «${word.text}»`);
       learned.addEventListener("click", () => setLearned(word, !word.learned));
-      row.append(main, element("p", "word-translation", word.translation), learned);
+      const translation = element("div", "word-translation", "");
+      translation.append(element("p", "", word.translation));
+      let details;
+      if (word.explanation) {
+        details = element("details", "word-explanation", "");
+        details.append(element("summary", "", "Короткое объяснение"), element("p", "", word.explanation));
+        translation.append(details);
+      }
+      const explain = element("button", "explain", word.explanation ? "Объяснение" : "Объяснить");
+      explain.type = "button";
+      explain.disabled = busy;
+      explain.addEventListener("click", () => word.explanation ? details.toggleAttribute("open") : explainWord(word));
+      const actions = element("div", "word-actions", "");
+      actions.append(explain, learned);
+      row.append(main, translation, actions);
       fragment.append(row);
     }
     list.replaceChildren(fragment);
@@ -134,6 +153,7 @@ if (typeof document !== "undefined") (() => {
     studyCard.hidden = complete;
     studyFinish.hidden = !complete;
     studyNext.hidden = complete;
+    studyExplain.hidden = complete;
     studyRestart.hidden = !complete;
     if (complete) return;
     const word = studyWords[studyPosition];
@@ -144,12 +164,17 @@ if (typeof document !== "undefined") (() => {
     studyPinyin.lang = "zh-Latn";
     studyPinyin.hidden = !word.pinyin;
     studyTranslation.textContent = word.translation;
+    studyExplain.disabled = busy;
+    studyExplain.textContent = word.explanation ? "Показать объяснение" : "Объяснить";
+    studyExplanation.hidden = !word.explanation || !studyExplanationOpen;
+    studyExplanationText.textContent = word.explanation || "";
   }
 
   function startStudy() {
     studyWords = studyDeck(words);
     if (!studyWords.length) return;
     studyPosition = 0;
+    studyExplanationOpen = false;
     listControls.hidden = true;
     wordPanel.hidden = true;
     studyMode.hidden = false;
@@ -209,6 +234,49 @@ if (typeof document !== "undefined") (() => {
     }
   }
 
+  function requestExplanation(id) {
+    const requestId = crypto.randomUUID().replace(/-/gu, "");
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => finish(new Error("Расширение не ответило. Перезагрузите его на странице chrome://extensions.")), 45000);
+      function receive(event) {
+        const data = event.data;
+        if (event.source !== window || event.origin !== location.origin || !data || data.type !== "subsanywhere.words.explain.result" || data.requestId !== requestId) return;
+        finish(data.ok ? data.word : new Error(data.error || "Не удалось получить объяснение"));
+      }
+      function finish(result) {
+        clearTimeout(timeout);
+        window.removeEventListener("message", receive);
+        result instanceof Error ? reject(result) : resolve(result);
+      }
+      window.addEventListener("message", receive);
+      window.postMessage({ type: "subsanywhere.words.explain", requestId, id }, location.origin);
+    });
+  }
+
+  async function explainWord(word) {
+    if (busy) return;
+    busy = true;
+    message("ИИ готовит короткое объяснение…");
+    render();
+    renderStudy();
+    try {
+      const fresh = await requestExplanation(word.id);
+      if (!fresh || fresh.id !== word.id || typeof fresh.explanation !== "string" || !fresh.explanation) {
+        throw new Error("Расширение не подтвердило объяснение слова.");
+      }
+      words = words.map(item => item.id === fresh.id ? fresh : item);
+      studyWords = studyWords.map(item => item.id === fresh.id ? fresh : item);
+      studyExplanationOpen = true;
+      message(`Объяснение для «${word.text}» сохранено.`);
+    } catch (error) {
+      message(error instanceof Error ? error.message : "Не удалось получить объяснение.", true);
+    } finally {
+      busy = false;
+      render();
+      renderStudy();
+    }
+  }
+
   search.addEventListener("input", render);
   language.addEventListener("change", render);
   reviewTab.addEventListener("click", () => { view = "review"; render(); });
@@ -218,13 +286,25 @@ if (typeof document !== "undefined") (() => {
   studyExit.addEventListener("click", exitStudy);
   studyNext.addEventListener("click", () => {
     studyPosition = nextStudyPosition(studyPosition, studyWords.length);
+    studyExplanationOpen = false;
     renderStudy();
     (studyPosition >= studyWords.length ? studyRestart : studyWord).focus();
   });
   studyRestart.addEventListener("click", () => {
     studyPosition = 0;
+    studyExplanationOpen = false;
     renderStudy();
     studyWord.focus();
+  });
+  studyExplain.addEventListener("click", () => {
+    const word = studyWords[studyPosition];
+    if (!word) return;
+    if (word.explanation) {
+      studyExplanationOpen = !studyExplanationOpen;
+      renderStudy();
+      return;
+    }
+    explainWord(word);
   });
   window.addEventListener("focus", load);
   load();

@@ -14,7 +14,7 @@ const vocabulary = new VocabularyClient(globalThis.fetch.bind(globalThis));
 const controller = new BackgroundController(chrome, store, { credentialStore, aiClient, localSubtitles, vocabulary });
 
 const protectedMessages = new Set([
-  MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.AI_MODELS_GET, MESSAGE.CAPTION_TRANSLATE,
+  MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.AI_MODELS_GET, MESSAGE.CAPTION_TRANSLATE, MESSAGE.WORD_EXPLAIN,
 ]);
 const storageProtection = (async () => {
   try {

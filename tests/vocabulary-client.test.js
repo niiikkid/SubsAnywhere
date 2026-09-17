@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { VocabularyClient } from '../vocabulary-client.js';
 
 const entry = { language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет' };
-const saved = { ...entry, id: 1, created_at: '2026-01-01T00:00:00Z', learned: false };
+const saved = { ...entry, id: 1, created_at: '2026-01-01T00:00:00Z', learned: false, explanation: '' };
 
 test('vocabulary saves bounded JSON and verifies the persisted entry by reading it back', async () => {
   const calls = [];
@@ -43,4 +43,19 @@ test('vocabulary rejects invalid identities before touching the server', async (
     await assert.rejects(client.save(word));
   }
   assert.equal(calls, 0);
+});
+
+test('vocabulary saves an explanation only after the server confirms it in the word list', async () => {
+  const explanation = '你好 — обычное приветствие. Подходит и знакомым, и незнакомым.';
+  const explained = { ...saved, explanation };
+  const calls = [];
+  const client = new VocabularyClient(async (url, options) => {
+    calls.push({ url, options });
+    return Response.json(options.method === 'POST' ? { word: explained } : { words: [explained] });
+  });
+
+  assert.deepEqual(await client.saveExplanation(saved.id, explanation), { word: explained });
+  assert.equal(calls[0].url, 'http://127.0.0.1:43817/api/words/explanation');
+  assert.deepEqual(JSON.parse(calls[0].options.body), { id: saved.id, explanation });
+  assert.equal(calls[1].options.method, 'GET');
 });

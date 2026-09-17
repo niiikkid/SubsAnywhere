@@ -31,8 +31,9 @@ class WordsStoreTests(unittest.TestCase):
     def test_persists_deduplicates_and_marks_words_learned_without_removing_them(self):
         self.assertFalse(self.path.exists())
         first = self.store.add(ZH)
-        self.assertEqual(set(first), {"id", "language", "text", "pinyin", "translation", "created_at", "learned"})
+        self.assertEqual(set(first), {"id", "language", "text", "pinyin", "translation", "explanation", "created_at", "learned"})
         self.assertFalse(first["learned"])
+        self.assertEqual(first["explanation"], "")
         self.assertRegex(first["created_at"], r"^\d{4}-\d{2}-\d{2}T.*Z$")
         reopened = WordsStore(self.path)
         duplicate = reopened.add({**ZH, "translation": "другое значение"})
@@ -47,6 +48,9 @@ class WordsStoreTests(unittest.TestCase):
         self.assertEqual(reopened.list(), [second, learned])
         restored = reopened.set_learned(first["id"], False)
         self.assertEqual(restored, first)
+        explained = reopened.set_explanation(first["id"], "你好 — обычное приветствие. 你 значит «ты», 好 — «хорошо».")
+        self.assertEqual(explained["explanation"], "你好 — обычное приветствие. 你 значит «ты», 好 — «хорошо».")
+        self.assertEqual(WordsStore(self.path).list()[1]["explanation"], explained["explanation"])
         self.assertIsNone(reopened.set_learned(9999, True))
 
     def test_migrates_existing_vocabulary_without_losing_words(self):
@@ -177,7 +181,11 @@ class WordsHTTPTests(unittest.TestCase):
         self.assertEqual(json.loads(self.request("POST", payload=ZH)[2])["word"], word)
         status, _, body = self.request("POST", "/api/words/learned", {"id": word["id"], "learned": True}, {"Origin": self.origin})
         self.assertEqual((status, json.loads(body)), (200, {"word": {**word, "learned": True}}))
-        self.assertEqual(json.loads(self.request()[2]), {"words": [{**word, "learned": True}]})
+        explanation = "你好 — обычное приветствие. 你 значит «ты», 好 — «хорошо»."
+        status, _, body = self.request("POST", "/api/words/explanation", {"id": word["id"], "explanation": explanation}, {"Origin": self.origin})
+        explained = {**word, "learned": True, "explanation": explanation}
+        self.assertEqual((status, json.loads(body)), (200, {"word": explained}))
+        self.assertEqual(json.loads(self.request()[2]), {"words": [explained]})
 
     def test_api_returns_complete_list_without_hidden_limit(self):
         saved = [self.store.add({**EN, "text": f"word {index}"}) for index in range(205)]
@@ -236,6 +244,9 @@ class WordsHTTPTests(unittest.TestCase):
                         {"id": "1", "learned": True}, {"id": 1}, {"id": 1, "learned": 1},
                         {"id": 1, "learned": True, "extra": "x"}):
             self.assertEqual(self.request("POST", "/api/words/learned", payload=payload)[0], 400)
+        for payload in ({"id": 0, "explanation": "объяснение"}, {"id": 1, "explanation": ""},
+                        {"id": 1, "explanation": "x" * 1201}, {"id": 1, "explanation": 1}):
+            self.assertEqual(self.request("POST", "/api/words/explanation", payload=payload)[0], 400)
         for payload in ({**EN, "text": "你好"}, {**ZH, "translation": "x" * 1001}, {**EN, "pinyin": "x"}):
             self.assertEqual(self.request("POST", payload=payload)[0], 400)
         self.assertEqual(self.store.list(), [])

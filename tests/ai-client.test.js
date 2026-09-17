@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  AIClient,
   AiCredentialStore,
   buildAIRequest,
   buildModelListRequest,
@@ -465,4 +466,25 @@ test('Chinese source identity never truncates an oversized source into a savable
 test('punctuation-only labels cannot acquire savable Han through unique-match fallback', async () => {
   const { result } = await chineseGlossaryFixture('你好', 'nǐhǎo ,', [{ text: '你好', pinyin: ',', translation: 'запятая' }]);
   assert.equal(result.glossary.some((term) => 'text' in term), false);
+});
+
+test('word explanation uses the active provider and returns only a concise saved explanation', async () => {
+  const requests = [];
+  const client = new AIClient(async (url, options) => {
+    requests.push({ url, options });
+    return Response.json({ choices: [{ message: { content: JSON.stringify({
+      explanation: '你好 — обычное приветствие. 你 значит «ты», 好 — «хорошо». Подходит и знакомым, и незнакомым.',
+    }) } }] });
+  }, { async getActive() { return { provider: 'deepseek', apiKey: 'secret-key', model: 'deepseek-chat' }; } });
+
+  const explanation = await client.explainWord({
+    id: 1, language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет', learned: false,
+  });
+
+  assert.match(explanation, /обычное приветствие/);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, 'https://api.deepseek.com/chat/completions');
+  assert.equal(JSON.parse(requests[0].options.body).messages[1].content, JSON.stringify({
+    language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет',
+  }));
 });

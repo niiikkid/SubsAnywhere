@@ -8,6 +8,11 @@
   "host_permissions": ["https://api.deepseek.com/*", "https://api.openai.com/*", "http://127.0.0.1:43817/*"],
   "optional_host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js", "type": "module" },
+  "content_scripts": [{
+    "matches": ["http://127.0.0.1:43817/*"],
+    "js": ["words-bridge.js"],
+    "run_at": "document_start"
+  }],
   "action": {
     "default_title": "SubsAnywhere",
     "default_popup": "popup.html"
