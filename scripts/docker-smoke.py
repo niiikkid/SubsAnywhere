@@ -30,11 +30,14 @@ def main():
             raise RuntimeError(result.stderr or result.stdout)
         return result.stdout.strip()
 
-    def request(path, origin=None):
+    def request(path, origin=None, payload=None):
         headers = {"X-SubsAnywhere-Client": "extension-v1"}
         if origin:
             headers["Origin"] = origin
-        query = urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers)
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+        query = urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers,
+                                       data=None if payload is None else json.dumps(payload).encode())
         try:
             with urllib.request.urlopen(query, timeout=8) as response:
                 return response.status, json.loads(response.read())
@@ -61,9 +64,23 @@ path.write_text("1\\n00:00:01,000 --> 00:00:02,000\\n你好\\n", encoding="utf-8
         code, ready = request("/api/subtitles/generated?video_id=rwnyaH6cTDE", origin)
         assert code == 200 and ready["status"] == "ready", ready
         assert "nǐ hǎo" in ready["srt"] and "你好" in ready["srt"], ready
+        word = {"language": "zh", "text": "你好", "pinyin": "nǐ hǎo", "translation": "привет"}
+        code, saved = request("/api/words", origin, word)
+        assert code == 200 and saved["word"]["text"] == "你好", saved
+        assert request("/api/words", origin, word)[1] == saved
+        assert request("/api/words", "https://untrusted.example")[0] == 403
+        assert request("/api/words", origin)[1]["words"] == [saved["word"]]
         compose("restart", "subtitles")
         compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "90", "subtitles")
         assert request("/api/subtitles/generated?video_id=rwnyaH6cTDE", origin)[1]["srt"] == ready["srt"]
+        assert request("/api/words", origin)[1]["words"] == [saved["word"]]
+        panel_origin = f"http://127.0.0.1:{port}"
+        assert request("/api/words/remove", panel_origin, {"id": saved["word"]["id"]}) == (200, {"removed": True})
+        assert request("/api/words", origin)[1]["words"] == []
+        with urllib.request.urlopen(f"{panel_origin}/words", timeout=8) as panel:
+            assert panel.status == 200 and b'word-list' in panel.read()
+            assert "frame-ancestors 'none'" in panel.headers["Content-Security-Policy"]
+        print("PASS: Docker vocabulary save/readback/dedup, persistence across restart, panel same-origin deletion and static assets.")
         print("PASS: Docker health, non-root user, API validation, hostile-origin rejection, real pinyin conversion and SRT persistence across restart. No YouTube, AI or model downloads.")
         print(json.dumps(health, ensure_ascii=False))
     finally:

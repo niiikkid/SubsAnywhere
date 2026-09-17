@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Мой словарь — SubsAnywhere</title>
+  <link rel="stylesheet" href="/words/words.css">
+  <script src="/words/words.js" defer></script>
+</head>
+<body>
+  <header class="site-header"><span class="brand">SubsAnywhere</span><span class="local-label">Локальный словарь</span></header>
+  <main>
+    <section class="intro" aria-labelledby="title">
+      <div><p class="eyebrow">Из субтитров — в память</p><h1 id="title">Мой словарь</h1>
+      <p class="description">Сохраняйте слова в расширении. Повторяйте здесь.<br>Выучили слово? Удалите его из списка одной кнопкой.</p></div>
+      <button id="refresh" type="button">Обновить список</button>
+    </section>
+    <section class="vocabulary" aria-label="Сохранённые слова">
+      <div class="toolbar">
+        <div class="search-field"><label for="search">Поиск по слову, пиньиню или переводу</label>
+          <input id="search" type="search" placeholder="Например: 你好, ni hao, привет" autocomplete="off" maxlength="1000">
+        </div>
+        <div class="language-field"><label for="language">Язык</label><select id="language">
+          <option value="">Все языки</option><option value="zh">Китайский</option><option value="en">Английский</option>
+        </select></div>
+      </div>
+      <div class="list-heading"><h2>На повторение</h2><span id="count" aria-live="polite">—</span></div>
+      <p id="status" class="status" role="status" aria-live="polite">Загрузка словаря…</p>
+      <ul id="word-list" aria-label="Слова" aria-busy="true"></ul>
+      <div id="empty" class="empty" hidden></div>
+      <noscript><p class="empty">Для поиска и удаления слов включите JavaScript. Слова останутся на сервере.</p></noscript>
+    </section>
+    <footer>Слова хранятся на вашем локальном сервере. Никаких облачных запросов с этой страницы.</footer>
+  </main>
+</body>
+</html>

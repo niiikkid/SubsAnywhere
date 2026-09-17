@@ -1,6 +1,7 @@
 import { AIClient, AiCredentialStore } from './ai-client.js';
 import { BackgroundController } from './background-controller.js';
 import { LocalSubtitleClient } from './local-subtitles-client.js';
+import { VocabularyClient } from './vocabulary-client.js';
 import { StateStore } from './state-store.js';
 import { MESSAGE, failure } from './protocol.js';
 
@@ -9,7 +10,8 @@ const store = new StateStore(storage);
 const credentialStore = new AiCredentialStore(storage);
 const aiClient = new AIClient(globalThis.fetch.bind(globalThis), credentialStore);
 const localSubtitles = new LocalSubtitleClient(globalThis.fetch.bind(globalThis));
-const controller = new BackgroundController(chrome, store, { credentialStore, aiClient, localSubtitles });
+const vocabulary = new VocabularyClient(globalThis.fetch.bind(globalThis));
+const controller = new BackgroundController(chrome, store, { credentialStore, aiClient, localSubtitles, vocabulary });
 
 const protectedMessages = new Set([
   MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.AI_MODELS_GET, MESSAGE.CAPTION_TRANSLATE,

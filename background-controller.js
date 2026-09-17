@@ -4,6 +4,7 @@ import { MESSAGE, failure, ok } from './protocol.js';
 const CONTENT_SCRIPT_ID = 'dual-captions-player-discovery-v1';
 const CONTENT_MESSAGES = new Set([
   MESSAGE.PLAYER_REPORT, MESSAGE.CONTENT_POSITION_PATCH, MESSAGE.TRACK_CACHE_BUILTIN, MESSAGE.CAPTION_TRANSLATE,
+  MESSAGE.WORDS_LIST, MESSAGE.WORDS_SAVE,
 ]);
 const SERIALIZED_MESSAGES = new Set([
   MESSAGE.PLAYER_REPORT, MESSAGE.PLAYER_SELECT, MESSAGE.STATE_PATCH, MESSAGE.CONTENT_POSITION_PATCH,
@@ -118,6 +119,7 @@ export class BackgroundController {
   #credentialStore;
   #aiClient;
   #localSubtitles;
+  #vocabulary;
   #discoveryTimeoutMs;
   #discoveryQuietMs;
   #contentRegistration;
@@ -132,6 +134,7 @@ export class BackgroundController {
     this.#credentialStore = options.credentialStore;
     this.#aiClient = options.aiClient ?? options.deepSeek;
     this.#localSubtitles = options.localSubtitles;
+    this.#vocabulary = options.vocabulary;
     this.#discoveryTimeoutMs = options.discoveryTimeoutMs ?? 5000;
     this.#discoveryQuietMs = options.discoveryQuietMs ?? 300;
   }
@@ -233,6 +236,12 @@ export class BackgroundController {
         case MESSAGE.CAPTION_TRANSLATE:
           await this.#enqueue(sender.tab.id, () => this.#selectedSender(message, sender));
           return ok(await this.#translateCaption(message));
+        case MESSAGE.WORDS_LIST:
+        case MESSAGE.WORDS_SAVE:
+          await this.#enqueue(sender.tab.id, () => this.#selectedSender(message, sender));
+          if (!this.#vocabulary) throw new Error('Словарь недоступен. Запустите сервер в Docker');
+          return ok(message.type === MESSAGE.WORDS_SAVE
+            ? await this.#vocabulary.save(message.word) : await this.#vocabulary.list());
         case MESSAGE.LOCAL_SUBTITLE_EXISTING:
           if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');
           return ok(await this.#localSubtitles.existing(message.videoId, message.language));

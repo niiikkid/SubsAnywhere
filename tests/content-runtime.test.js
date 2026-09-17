@@ -64,6 +64,23 @@ test('inline glossary segments preserve source, repeated phrases and pinyin boun
   assert.equal(runtime.glossarySegments(text, []).map((segment) => segment.text).join(''), text);
 });
 
+test('mapped pinyin terms retain their own Han across homophones and whitespace', async () => {
+  const runtime = await loadRuntime();
+  const glossary = [
+    { pinyin: 'tā', translation: 'без привязки' },
+    { text: '她', pinyin: 'tā', translation: 'она', pinyinStart: 3, pinyinEnd: 5 },
+    { text: '他', pinyin: 'tā', translation: 'он', pinyinStart: 0, pinyinEnd: 2 },
+  ];
+  const source = '  tā   tā  ';
+  const segments = runtime.glossarySegments(source, [{ glossary }]);
+  assert.equal(segments.map((segment) => segment.text).join(''), source);
+  assert.deepEqual(Array.from(segments.filter((segment) => segment.term), ({term}) => term.text), ['他', '她']);
+  const invalid = runtime.glossarySegments('tā', [{ glossary: [
+    { text: '他', pinyin: 'tā', translation: 'он', pinyinStart: 5, pinyinEnd: 7 },
+  ] }]);
+  assert.equal(invalid.some((segment) => segment.term), false);
+});
+
 test('chooseVideo returns the largest visible candidate and its stable document index', async () => {
   const runtime = await loadRuntime();
   const small = fakeVideo(200, 100);

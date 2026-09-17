@@ -5,3 +5,7 @@
 !local-server/*.py
 !local-server/pyproject.toml
 !local-server/uv.lock
+!local-server/web/
+!local-server/web/index.html
+!local-server/web/words.css
+!local-server/web/words.js

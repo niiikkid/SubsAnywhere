@@ -11,6 +11,7 @@ ENV PYTHONUNBUFFERED=1 \
     SUBSANYWHERE_HOST=0.0.0.0 \
     SUBSANYWHERE_PORT=43817 \
     SUBSANYWHERE_OUTPUT_DIR=/data/subtitles \
+    SUBSANYWHERE_WORDS_DB=/data/words.sqlite3 \
     SUBSANYWHERE_ASR_PYTHON=/app/.venv/bin/python \
     SUBSANYWHERE_MODELS_DIR=/models \
     SUBSANYWHERE_COOKIES_BROWSER="" \
@@ -36,6 +37,7 @@ WORKDIR /app
 COPY local-server/pyproject.toml local-server/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-editable
 COPY local-server/*.py ./
+COPY local-server/web/ ./web/
 USER 10001:10001
 EXPOSE 43817
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

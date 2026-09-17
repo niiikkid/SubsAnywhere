@@ -207,16 +207,23 @@ try {
     document.body.append(video);
     window.fixtureListeners = [];
     window.fixtureRequests = 0;
+    window.fixtureWords = [];
     window.chrome = { runtime: {
       onMessage: { addListener: fn => fixtureListeners.push(fn), removeListener() {} },
       sendMessage: async message => {
+        if (message.type === 'dualCaptions.words.list') return { ok: true, data: { words: fixtureWords } };
+        if (message.type === 'dualCaptions.words.save') {
+          const word = { ...message.word, id: fixtureWords.length + 1 };
+          fixtureWords.push(word);
+          return { ok: true, data: { word } };
+        }
         if (message.type !== 'dualCaptions.caption.translate') return { ok: true };
         fixtureRequests++;
         return { ok: true, data: { items: [{ start: 0, end: message.displayText.length,
           dictionary: 'Учебный пример перевода', isSentenceTranslation: true,
           glossary: window.fixtureGlossary ?? (message.language === 'zh' ? [
-            { pinyin: 'nǐ hǎo', translation: 'здравствуйте, приветствую вас' },
-            { pinyin: 'shì jiè', translation: 'мир, окружающий нас мир во всём его многообразии' },
+            { text: '你好', pinyin: 'nǐ hǎo', translation: 'здравствуйте, приветствую вас' },
+            { text: '世界', pinyin: 'shì jiè', translation: 'мир, окружающий нас мир во всём его многообразии' },
           ] : [
             { text: 'Hello', translation: 'здравствуйте, приветствую вас' },
             { text: 'world', translation: 'мир, окружающий нас мир во всём его многообразии' },
@@ -256,10 +263,27 @@ try {
     assert.equal(geometry, true, 'Translations stay above source, smaller and inside wrapping cells');
     assert.equal(await displayEval(`document.querySelector('.subs-anywhere-original').getBoundingClientRect().width < 750`),
       true, 'A short glossary must not paint a full-width background');
+    assert.equal(await displayEval(`(async () => {
+      const cell = document.querySelector('.dual-captions-word-cell');
+      cell.click();
+      const tooltip = document.querySelector('[role="tooltip"]');
+      if (!tooltip.textContent.includes('здравствуйте, приветствую вас')
+        || tooltip.textContent.includes('Учебный пример перевода') || tooltip.textContent.includes('многообразии')) return false;
+      tooltip.querySelector('.dual-captions-save-word').click();
+      await new Promise(resolve => setTimeout(resolve, 20));
+      cell.focus(); cell.blur();
+      const saved = cell.getAttribute('data-word-saved') === 'true'
+        && getComputedStyle(cell).backgroundColor === 'rgba(80, 170, 115, 0.18)'
+        && tooltip.querySelector('.dual-captions-save-word').textContent === '✓ Сохранено';
+      cell.click();
+      return saved;
+    })()`), true, 'A cell exposes only its own full meaning and retains subtle saved highlighting');
     const { data } = await cdp('Page.captureScreenshot', { format: 'png' }, displaySession);
     await writeFile(join(artifacts, `inline-${language}-smoke.png`), Buffer.from(data, 'base64'));
   }
   assert.equal(await displayEval('fixtureRequests'), 2);
+  assert.deepEqual(await displayEval('fixtureWords.map(({text, pinyin}) => ({text, pinyin}))'),
+    [{ text: 'Hello', pinyin: '' }, { text: '你好', pinyin: 'nǐ hǎo' }]);
   const bookstore = JSON.parse(await readFile(join(root, 'tests/fixtures/bookstore-captions.json'), 'utf8'));
   const longCaption = bookstore.captions[2];
   await displayEval(`(async () => {
@@ -362,6 +386,62 @@ try {
   assert.equal(stressResults.length, stressCases.length);
   assert.ok(stressResults.every(result => result.bounded && !result.overflow && result.preserved), JSON.stringify(stressResults));
   assert.ok(stressResults.some(result => result.scrollable), 'The height-overflow fallback must actually be exercised');
+  if (process.env.SUBSANYWHERE_LIVE_WORDS === '1') {
+    // Explicit temporary fixture against the running local Docker, never AI.
+    const testText = `测试词${Date.now()}`;
+    const saved = await reopened.evaluate(`(async () => {
+      const { VocabularyClient } = await import('./vocabulary-client.js');
+      window.liveVocabulary = new VocabularyClient(fetch.bind(window));
+      return liveVocabulary.save({ language: 'zh', text: ${JSON.stringify(testText)},
+        pinyin: 'cè shì cí', translation: 'Временная проверка словаря' });
+    })()`);
+    try {
+      const { targetId } = await cdp('Target.createTarget', { url: 'http://127.0.0.1:43817/words' });
+      const { sessionId } = await cdp('Target.attachToTarget', { targetId, flatten: true });
+      await cdp('Runtime.enable', {}, sessionId);
+      await cdp('Emulation.setDeviceMetricsOverride', { width: 1100, height: 760, deviceScaleFactor: 1, mobile: false }, sessionId);
+      const panelEval = async (expression) => {
+        const result = await cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId);
+        if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+        return result.result.value;
+      };
+      await panelEval(`(async () => {
+        const deadline = Date.now() + 8000;
+        while (!document.querySelector('.word-row')?.textContent.includes(${JSON.stringify(testText)})) {
+          if (Date.now() > deadline) throw new Error('Saved word did not appear in panel');
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        const search = document.getElementById('search');
+        search.value = 'ce shi ci'; search.dispatchEvent(new Event('input'));
+        if (![...document.querySelectorAll('.word-row')].some(row => row.textContent.includes(${JSON.stringify(testText)}))) throw new Error('Pinyin search failed');
+        search.value = ${JSON.stringify(testText)}; search.dispatchEvent(new Event('input'));
+        if (document.querySelectorAll('.word-row').length !== 1) throw new Error('Han search failed');
+      })()`);
+      const { data } = await cdp('Page.captureScreenshot', { format: 'png' }, sessionId);
+      await writeFile(join(artifacts, 'words-panel-smoke.png'), Buffer.from(data, 'base64'));
+      await panelEval(`(async () => {
+        document.querySelector('.learned').click();
+        const deadline = Date.now() + 8000;
+        while (document.querySelector('.word-row') || document.getElementById('refresh').disabled) {
+          if (Date.now() > deadline) throw new Error('Learned word did not disappear');
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      })()`);
+      assert.equal(await reopened.evaluate(`liveVocabulary.list().then(({words}) => words.some(word => word.id === ${saved.word.id}))`), false);
+      console.log('PASS: real extension VocabularyClient → Docker SQLite → browser panel/search → learned removal, confirmed by extension readback. Temporary fixture removed.');
+    } finally {
+      // Clean up only this unique fixture if an assertion failed before deletion.
+      await reopened.evaluate(`(async () => {
+        const {words} = await liveVocabulary.list();
+        if (!words.some(word => word.id === ${saved.word.id})) return;
+        const response = await fetch('http://127.0.0.1:43817/api/words/remove', {
+          method: 'POST', headers: {'Content-Type': 'application/json', 'X-SubsAnywhere-Client': 'extension-v1'},
+          body: JSON.stringify({id: ${saved.word.id}}), credentials: 'omit', redirect: 'error'
+        });
+        if (!response.ok || (await liveVocabulary.list()).words.some(word => word.id === ${saved.word.id})) throw new Error('Could not clean up temporary vocabulary fixture');
+      })()`);
+    }
+  }
   assert.deepEqual(errors, [], 'Chrome must not report runtime exceptions');
   console.log(`PASS: balanced bookstore caption; edge positions and bounded tooltips; ${stressResults.length} short/long/empty-glossary/multiline cases; lossless tall-caption scrolling; cached mode toggles; paused player resize.`);
   console.log('PASS: inline mode persists across popup reopen; English/pinyin glossary cells truncate long meanings and expose the full hover text in real Chrome (offline fixtures).');

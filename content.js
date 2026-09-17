@@ -11,6 +11,8 @@
     CONTENT_TRACKS: 'dualCaptions.content.tracks',
     TRACK_CACHE_BUILTIN: 'dualCaptions.track.cacheBuiltin',
     CONTENT_POSITION_PATCH: 'dualCaptions.content.positionPatch',
+    WORDS_LIST: 'dualCaptions.words.list',
+    WORDS_SAVE: 'dualCaptions.words.save',
 
     CONTENT_RESET: 'dualCaptions.content.reset',
   });
@@ -39,7 +41,13 @@
       sentenceTranslationLine: null,
       characterLine: null,
       captionLayoutKey: '',
+      wordCells: [],
+      wordButton: null,
     };
+    let savedWords = new Map();
+    let wordsRequest = null;
+    let lastWordsSync = -Infinity;
+    let wordsRevision = 0;
     const builtInTrackResolver = runtime.createBuiltInTrackResolver();
     const originalTrackModes = new Map();
     const localBuiltInTracks = new Map();
@@ -61,6 +69,8 @@
 
     function cancelPendingWork() {
       lifecycle += 1;
+      wordsRevision += 1;
+      lastWordsSync = -Infinity;
       queuedTranslations.length = 0;
       queuedTranslationSet.clear();
       clearTimeout(translationTimer);
@@ -146,6 +156,91 @@
       state.tooltip = null;
       state.tooltipItem = null;
       state.tooltipAnchor = null;
+      state.wordButton = null;
+    }
+
+    function wordKey(word) {
+      if (!word) return '';
+      const clean = (value) => String(value ?? '').normalize('NFC').trim().replace(/\s+/gu, ' ');
+      return JSON.stringify([word.language, word.language === 'en' ? clean(word.text).toLowerCase() : clean(word.text),
+        clean(word.pinyin).toLowerCase()]);
+    }
+
+    function updateSavedWords() {
+      for (const { cell, key } of state.wordCells) {
+        const saved = Boolean(key && savedWords.has(key));
+        cell.style.backgroundColor = saved ? 'rgba(80, 170, 115, .18)' : '';
+        cell.style.borderColor = saved ? 'rgba(110, 195, 140, .42)' : '';
+        cell.setAttribute('data-word-saved', String(saved));
+      }
+      if (state.wordButton && !state.wordButton.saving) {
+        const saved = savedWords.has(wordKey(state.tooltipItem?.word));
+        state.wordButton.textContent = saved ? '✓ Сохранено' : 'Сохранить слово';
+        state.wordButton.disabled = saved || !state.tooltipItem?.word;
+      }
+    }
+
+    function syncWords(force = false) {
+      if (!state.active || destroyed || wordsRequest || (!force && Date.now() - lastWordsSync < 15000)) return;
+      lastWordsSync = Date.now();
+      const generation = lifecycle;
+      const revision = wordsRevision;
+      wordsRequest = Promise.resolve().then(() => sendMessage({ type: MESSAGE.WORDS_LIST }))
+        .then((response) => {
+          if (generation !== lifecycle || revision !== wordsRevision || destroyed
+            || !response?.ok || !Array.isArray(response.data?.words)) return;
+          savedWords = new Map(response.data.words.map((word) => [wordKey(word), word]));
+          updateSavedWords();
+        }).catch(() => undefined).finally(() => { wordsRequest = null; });
+    }
+
+    function cellWord(segment, descriptor) {
+      const term = segment.term;
+      if (!term || !segment.translation) return null;
+      if (descriptor.characters) {
+        if (typeof term.text !== 'string' || !/\p{Script=Han}/u.test(term.text)
+          || !descriptor.characters.includes(term.text) || typeof term.pinyin !== 'string') return null;
+        return { language: 'zh', text: term.text, pinyin: term.pinyin, translation: segment.translation };
+      }
+      return { language: 'en', text: segment.text, pinyin: '', translation: segment.translation };
+    }
+
+    function appendWordButton(tooltip, item) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'dual-captions-save-word';
+      button.style.cssText = 'display:block;margin-top:10px;padding:7px 10px;border:1px solid rgba(150,185,165,.4);border-radius:6px;background:rgba(100,155,120,.12);color:#e5ede8;font:600 12px/1.3 Arial,sans-serif;cursor:pointer;';
+      const status = document.createElement('div');
+      status.setAttribute('role', 'status');
+      status.style.cssText = 'margin-top:5px;font-size:11px;color:#c4cbd6;';
+      if (!item.word) status.textContent = item.dictionary === 'Перевод этой ячейки пока отсутствует'
+        ? 'Сохранение доступно после перевода.' : 'ИИ не указал иероглифы этой ячейки. Сохранение недоступно.';
+      button.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        if (!item.word || button.disabled || button.saving) return;
+        const generation = lifecycle;
+        wordsRevision += 1;
+        button.saving = true;
+        button.disabled = true;
+        button.textContent = 'Сохраняем…';
+        status.textContent = '';
+        try {
+          const response = await sendMessage({ type: MESSAGE.WORDS_SAVE, word: item.word });
+          if (!response?.ok || !response.data?.word) throw new Error(response?.error || 'Не удалось сохранить слово. Проверьте сервер Docker');
+          if (generation !== lifecycle || destroyed) return;
+          savedWords.set(wordKey(response.data.word), response.data.word);
+          status.textContent = 'Добавлено в неизвестные слова';
+        } catch (error) {
+          if (generation === lifecycle && !destroyed) status.textContent = error.message || 'Не удалось сохранить слово';
+        } finally {
+          button.saving = false;
+          wordsRevision += 1;
+          if (generation === lifecycle && !destroyed) updateSavedWords();
+          if (state.tooltip === tooltip) positionTooltip();
+        }
+      });
+      tooltip.append(button, status);
+      state.wordButton = button;
     }
 
     function dismissMeaningPreview() {
@@ -186,17 +281,15 @@
       element.addEventListener('focus', () => {
         element.style.outline = '2px solid #adc3ff';
         element.style.outlineOffset = '2px';
-        element.style.background = 'rgba(120,151,255,.24)';
       });
       element.addEventListener('blur', () => {
         element.style.outline = '';
         element.style.outlineOffset = '';
-        element.style.background = '';
       });
     }
 
     function showTooltip(item, anchor) {
-      if (state.tooltipItem === item) {
+      if (state.tooltipItem === item && state.tooltipAnchor === anchor) {
         dismissTooltip();
         return;
       }
@@ -254,10 +347,13 @@
       } else {
         tooltip.append(close, dictionary);
       }
+      if (item.isVocabularyCell) appendWordButton(tooltip, item);
       state.root.append(tooltip);
       state.tooltip = tooltip;
       state.tooltipItem = item;
       state.tooltipAnchor = anchor;
+      updateSavedWords();
+      if (item.isVocabularyCell) syncWords();
       positionTooltip();
     }
 
@@ -304,7 +400,7 @@
       const bilingual = runtime.splitPinyinCaption(text);
       if (bilingual) {
         return {
-          key: `zh\u0000${bilingual.characters}`,
+          key: `zh\u0000${bilingual.characters}\u0000${bilingual.pinyin}`,
           sourceText: bilingual.characters,
           displayText: bilingual.pinyin,
           language: 'zh',
@@ -460,7 +556,7 @@
       }).finally(() => cachingBuiltInSelections.delete(selectionKey));
     }
 
-    function renderInlineCaption(target, text, items) {
+    function renderInlineCaption(target, text, items, descriptor) {
       const segments = runtime.glossarySegments(text, items);
       const hiddenPinyinParticles = ['de', 'le', 'zhe', 'la'];
       if (!segments.some((segment) => segment.item)) return false;
@@ -515,11 +611,7 @@
           cell.style.cssText = 'display:inline-flex;vertical-align:bottom;flex-direction:column;align-items:center;min-width:0;width:max-content;max-width:calc(100% - .18em);box-sizing:border-box;margin:.12em .09em;padding:.12em .22em;border:1px solid rgba(255,255,255,.13);border-radius:6px;color:inherit;pointer-events:auto;cursor:pointer;overflow-wrap:anywhere;';
           const meaning = document.createElement('span');
           const displayedParticle = segment.text.trim().toLowerCase();
-          const pinyinTerm = Array.isArray(segment.item?.glossary)
-            ? segment.item.glossary.find((term) => (
-              typeof term?.pinyin === 'string' && term.pinyin.trim().toLowerCase() === displayedParticle
-            ))
-            : null;
+          const pinyinTerm = typeof segment.term?.pinyin === 'string' ? segment.term : null;
           const hidesParticleMeaning = hiddenPinyinParticles.includes(displayedParticle)
             && pinyinTerm;
           meaning.textContent = hidesParticleMeaning ? '' : segment.translation;
@@ -538,7 +630,17 @@
           cell.tabIndex = 0;
           cell.setAttribute('role', 'button');
           makeCaptionFocusable(cell);
-          const show = () => showTooltip(segment.item ?? items[0], cell);
+          const word = cellWord(segment, descriptor);
+          const cellItem = {
+            dictionary: segment.translation || 'Перевод этой ячейки пока отсутствует',
+            isSentenceTranslation: true,
+            isVocabularyCell: true,
+            word,
+          };
+          cell.className = 'dual-captions-word-cell';
+          cell.setAttribute('aria-label', `${segment.text}: ${cellItem.dictionary}`);
+          state.wordCells.push({ cell, key: wordKey(word) });
+          const show = () => showTooltip(cellItem, cell);
           cell.addEventListener('click', (event) => { event.stopPropagation(); show(); });
           cell.addEventListener('keydown', (event) => {
             if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); show(); }
@@ -556,6 +658,7 @@
         }
       }
       state.inlineCells = cells;
+      updateSavedWords();
       return true;
     }
 
@@ -566,6 +669,7 @@
       if (state.renderedCaptionKey === key && state.renderedCaptionItems === items) return;
       state.renderedCaptionKey = key;
       state.renderedCaptionItems = items;
+      state.wordCells = [];
       state.inlineCells = null;
       state.sentenceTranslationLine = null;
       state.characterLine = null;
@@ -589,7 +693,7 @@
         state.characterLine = characters;
       }
       if (state.settings.inlineTranslations && items?.length) {
-        if (renderInlineCaption(target, descriptor.displayText, items)) return;
+        if (renderInlineCaption(target, descriptor.displayText, items, descriptor)) return;
       }
       if (!items || !items.length) {
         renderPendingCaption(target, descriptor.displayText);
@@ -741,6 +845,7 @@
         return;
       }
       ensureOverlay();
+      if (state.settings.inlineTranslations) syncWords();
       for (const track of video.textTracks) {
         if (track.kind === 'subtitles' || track.kind === 'captions') {
           if (!originalTrackModes.has(track)) originalTrackModes.set(track, track.mode);
@@ -836,6 +941,7 @@
         state.active = false;
         state.renderedCaptionKey = '';
         state.renderedCaptionItems = null;
+        state.wordCells = [];
         if (state.second) state.second.textContent = '';
         dismissTooltip();
         if (state.root) state.root.style.display = 'none';
@@ -863,6 +969,7 @@
 
     for (const [target, type, listener, options] of [
       [window, 'resize', positionOverlay],
+      [window, 'focus', () => { if (state.settings.inlineTranslations) syncWords(true); }],
       [window, 'scroll', positionOverlay, true],
       [document, 'fullscreenchange', positionOverlay],
       [document, 'webkitfullscreenchange', positionOverlay],

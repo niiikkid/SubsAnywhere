@@ -167,7 +167,7 @@ async function backgroundHarness(setAccessLevel) {
   const handled = [];
   const sandbox = {
     chrome, MESSAGE, failure, console, fetch() { throw new Error('No network in bootstrap tests'); },
-    StateStore: class {}, AiCredentialStore: class {}, AIClient: class {}, LocalSubtitleClient: class {},
+    StateStore: class {}, AiCredentialStore: class {}, AIClient: class {}, LocalSubtitleClient: class {}, VocabularyClient: class {},
     BackgroundController: class {
       async handle(message) { handled.push(message); return { ok: true }; }
       async initialize() {}
@@ -980,12 +980,13 @@ test('completed discovery restores a same-URL replacement only after the stored 
 });
 
 test('the first selected action after a worker restart re-registers before authorization', async () => {
-  for (const type of [MESSAGE.CAPTION_TRANSLATE, MESSAGE.CONTENT_POSITION_PATCH, MESSAGE.TRACK_CACHE_BUILTIN]) {
+  for (const type of [MESSAGE.CAPTION_TRANSLATE, MESSAGE.CONTENT_POSITION_PATCH, MESSAGE.TRACK_CACHE_BUILTIN, MESSAGE.WORDS_LIST, MESSAGE.WORDS_SAVE]) {
     const { chrome, storage, pageKey, sender, player, report } = await persistedSelectedPlayer();
     let translations = 0;
     const controller = new RuntimeBackgroundController(chrome, new StateStore(storage), {
       discoveryTimeoutMs: 50,
       deepSeek: { async translateCaption() { translations += 1; return []; } },
+      vocabulary: { async list() { return { words: [] }; }, async save(word) { return { word }; } },
     });
     let handshakes = 0;
     chrome.onSend = async (tabId, message, options) => {
@@ -996,6 +997,7 @@ test('the first selected action after a worker restart re-registers before autho
       return controller.handle(report, sender);
     };
     const action = { type, text: 'After restart', secondLeft: 72, secondBottom: 27,
+      word: { language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет' },
       sourceKey: `${player.key}\u0000track-0`,
       track: { id: 'builtin-cache-snapshot', sourceType: 'builtin-cache', name: 'English',
         cues: [{ start: 1, end: 2, text: 'Saved caption' }] } };
@@ -1009,6 +1011,7 @@ test('the first selected action after a worker restart re-registers before autho
     assert.equal(state.settings.selectedPlayerKey, player.key);
     assert.equal(state.settings.fontSize, 31);
     assert.equal(translations, type === MESSAGE.CAPTION_TRANSLATE ? 1 : 0);
+    if (type === MESSAGE.WORDS_SAVE) assert.deepEqual(response.data.word, action.word);
     if (type === MESSAGE.CONTENT_POSITION_PATCH) {
       assert.equal(state.settings.secondLeft, 72);
       assert.equal(state.settings.secondBottom, 27);

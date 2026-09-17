@@ -337,3 +337,132 @@ test('DeepSeek rejects model glossary terms that are not exact displayed pinyin 
     { pinyin: 'shì jiè', translation: 'мир' },
   ]);
 });
+
+async function chineseGlossaryFixture(caption, pinyin, glossary) {
+  const requests = [];
+  const client = new DeepSeekClient(async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ translation: 'Полный перевод', glossary }) } }],
+    }));
+  }, { get: async () => ({ provider: 'deepseek', apiKey: 'offline-fixture', model: 'deepseek-chat' }) });
+  const result = await client.translateChineseCaption(caption, pinyin);
+  assert.equal(requests.length, 1, 'source mapping must not cause a repair or per-term request');
+  return { result, request: requests[0] };
+}
+
+test('Chinese glossary requests exact Han source identity in the same completion', async () => {
+  const { result, request } = await chineseGlossaryFixture('你好，世界', 'nǐ hǎo, shì jiè', [
+    { text: '你好', pinyin: 'nǐ hǎo', translation: 'привет' },
+    { text: '世界', pinyin: 'shì jiè', translation: 'мир' },
+  ]);
+
+  assert.deepEqual(result.glossary, [
+    { text: '你好', pinyin: 'nǐ hǎo', translation: 'привет', pinyinStart: 0, pinyinEnd: 6 },
+    { text: '世界', pinyin: 'shì jiè', translation: 'мир', pinyinStart: 8, pinyinEnd: 15 },
+  ]);
+  assert.match(request.messages[0].content, /"text":"exact Chinese source phrase"/);
+  assert.match(request.messages[0].content, /Never infer Chinese characters from pinyin/i);
+  assert.match(request.messages[0].content, /repeated occurrences/i);
+  assert.deepEqual(JSON.parse(request.messages[1].content), { caption: '你好，世界', pinyin: 'nǐ hǎo, shì jiè' });
+});
+
+test('untrustworthy Chinese source text never destroys a valid glossary translation', async () => {
+  for (const text of [undefined, null, 123, {}, '', '世界', '你世界好', '你 好', '<b>你好</b>', '你好\u200b', '你好'.repeat(61)]) {
+    const { result } = await chineseGlossaryFixture('你好', 'nǐ hǎo', [
+      { text, pinyin: 'nǐ hǎo', translation: 'привет' },
+    ]);
+    assert.deepEqual(result, {
+      dictionary: 'Полный перевод', context: 'Полный перевод',
+      glossary: [{ pinyin: 'nǐ hǎo', translation: 'привет' }],
+    });
+  }
+});
+
+test('Chinese source validation rejects markup and non-Han text even when present in caption', async () => {
+  for (const text of ['<b>你好</b>', 'hello', '你好123', '你好\u0000']) {
+    const { result } = await chineseGlossaryFixture(text, 'nǐ hǎo', [
+      { text, pinyin: 'nǐ hǎo', translation: 'привет' },
+    ]);
+    assert.deepEqual(result.glossary, [{ pinyin: 'nǐ hǎo', translation: 'привет' }]);
+  }
+});
+
+test('Chinese source identity preserves exact punctuation and supplementary Han', async () => {
+  const { result } = await chineseGlossaryFixture('𠮷，你好！', 'jí, nǐ hǎo!', [
+    { text: '𠮷，你好！', pinyin: 'jí, nǐ hǎo!', translation: 'привет' },
+  ]);
+  assert.deepEqual(result.glossary, [
+    { text: '𠮷，你好！', pinyin: 'jí, nǐ hǎo!', translation: 'привет', pinyinStart: 0, pinyinEnd: 11 },
+  ]);
+});
+
+test('Chinese homophones and repetitions keep occurrence-specific pinyin offsets', async () => {
+  const { result } = await chineseGlossaryFixture('她他她', 'tā tā tā', [
+    { text: '她', pinyin: 'tā', translation: 'она' },
+    { text: '他', pinyin: 'tā', translation: 'он' },
+    { text: '她', pinyin: 'tā', translation: 'она снова' },
+  ]);
+  assert.deepEqual(result.glossary, [
+    { text: '她', pinyin: 'tā', translation: 'она', pinyinStart: 0, pinyinEnd: 2 },
+    { text: '他', pinyin: 'tā', translation: 'он', pinyinStart: 3, pinyinEnd: 5 },
+    { text: '她', pinyin: 'tā', translation: 'она снова', pinyinStart: 6, pinyinEnd: 8 },
+  ]);
+});
+
+test('partial and reordered homophone glossaries identify the actual Chinese occurrence', async () => {
+  const { result } = await chineseGlossaryFixture('她他', 'tā tā', [
+    { text: '他', pinyin: 'tā', translation: 'он' },
+    { text: '她', pinyin: 'tā', translation: 'она' },
+  ]);
+  assert.deepEqual(result.glossary, [
+    { text: '他', pinyin: 'tā', translation: 'он', pinyinStart: 3, pinyinEnd: 5 },
+    { text: '她', pinyin: 'tā', translation: 'она', pinyinStart: 0, pinyinEnd: 2 },
+  ]);
+  const partial = await chineseGlossaryFixture('她他', 'tā tā', [{ text: '他', pinyin: 'tā', translation: 'он' }]);
+  assert.deepEqual(partial.result.glossary, [result.glossary[0]]);
+});
+
+test('Chinese mapping refuses mismatched syllable positions and exhausted repetitions', async () => {
+  const { result } = await chineseGlossaryFixture('你好', 'nǐ hǎo', [
+    { text: '好', pinyin: 'nǐ', translation: 'ты' },
+    { text: '你好', pinyin: 'nǐ hǎo', translation: 'привет' },
+    { text: '你好', pinyin: 'nǐ hǎo', translation: 'привет снова' },
+  ]);
+  assert.deepEqual(result.glossary, [
+    { pinyin: 'nǐ', translation: 'ты' },
+    { text: '你好', pinyin: 'nǐ hǎo', translation: 'привет', pinyinStart: 0, pinyinEnd: 6 },
+    { pinyin: 'nǐ hǎo', translation: 'привет снова' },
+  ]);
+});
+
+test('joined pinyin allows unique source identity but not ambiguous repeated homophones', async () => {
+  const unique = await chineseGlossaryFixture('你好', 'nǐhǎo', [{ text: '你好', pinyin: 'nǐhǎo', translation: 'привет' }]);
+  assert.deepEqual(unique.result.glossary, [
+    { text: '你好', pinyin: 'nǐhǎo', translation: 'привет', pinyinStart: 0, pinyinEnd: 5 },
+  ]);
+  const ambiguous = await chineseGlossaryFixture('你好拟好', 'nǐhǎo nǐhǎo', [{ text: '拟好', pinyin: 'nǐhǎo', translation: 'подготовить' }]);
+  assert.deepEqual(ambiguous.result.glossary, [{ pinyin: 'nǐhǎo', translation: 'подготовить' }]);
+});
+
+test('Chinese source identity ignores model offsets and never trusts offsets without text', async () => {
+  const { result } = await chineseGlossaryFixture('她他', 'tā tā', [
+    { text: '他', pinyin: 'tā', translation: 'он', pinyinStart: 0, pinyinEnd: 2 },
+    { pinyin: 'tā', translation: 'она', pinyinStart: 3, pinyinEnd: 5 },
+  ]);
+  assert.deepEqual(result.glossary, [
+    { text: '他', pinyin: 'tā', translation: 'он', pinyinStart: 3, pinyinEnd: 5 },
+    { pinyin: 'tā', translation: 'она' },
+  ]);
+});
+
+test('Chinese source identity never truncates an oversized source into a savable term', async () => {
+  const text = '你'.repeat(121);
+  const { result } = await chineseGlossaryFixture(text, 'nǐ', [{ text, pinyin: 'nǐ', translation: 'ты' }]);
+  assert.deepEqual(result.glossary, [{ pinyin: 'nǐ', translation: 'ты' }]);
+});
+
+test('punctuation-only labels cannot acquire savable Han through unique-match fallback', async () => {
+  const { result } = await chineseGlossaryFixture('你好', 'nǐhǎo ,', [{ text: '你好', pinyin: ',', translation: 'запятая' }]);
+  assert.equal(result.glossary.some((term) => 'text' in term), false);
+});

@@ -190,6 +190,112 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
   }
 });
 
+test('inline cell saves only its own translation, highlights repeats and refreshes learned words', async () => {
+  const harness = await makeHarness();
+  const source = 'nǐ hǎo, nǐ hǎo, shì jiè';
+  const word = { language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'здравствуйте, приветствую вас' };
+  let words = [];
+  let rejectSave = true;
+  let translateCalls = 0;
+  let saves = 0;
+  let releaseList;
+  let firstList = true;
+  harness.context.chrome.runtime.sendMessage = async (message) => {
+    if (message.type === 'dualCaptions.words.list') {
+      if (firstList) {
+        firstList = false;
+        return new Promise((resolve) => { releaseList = resolve; });
+      }
+      return { ok: true, data: { words } };
+    }
+    if (message.type === 'dualCaptions.words.save') {
+      saves += 1;
+      assert.deepEqual(JSON.parse(JSON.stringify(message.word)), word);
+      if (rejectSave) return { ok: false, error: 'Запустите сервер Docker' };
+      words = [{ ...word, id: 1 }];
+      return { ok: true, data: { word: words[0] } };
+    }
+    if (message.type !== 'dualCaptions.caption.translate') return { ok: true };
+    translateCalls += 1;
+    return { ok: true, data: { items: [{ start: 0, end: source.length,
+      dictionary: 'Полный перевод всей реплики', isSentenceTranslation: true,
+      glossary: [0, source.indexOf(word.pinyin, word.pinyin.length)].map((start) => ({
+        text: word.text, pinyin: word.pinyin, translation: word.translation,
+        pinyinStart: start, pinyinEnd: start + word.pinyin.length,
+      })) }] } };
+  };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  const settings = { secondTrackId: 'external:mine', inlineTranslations: true };
+  listener({ type: 'dualCaptions.content.fullState', settings,
+    externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: `\u2063${source}\n\u2064你好，你好，世界` }] }],
+  }, {}, () => {});
+  const flush = async () => { for (let index = 0; index < 15; index += 1) await Promise.resolve(); };
+  await flush();
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  const cells = () => overlay.children[0].children[0].children[1].children;
+  const click = (element) => element.dispatch('click', { stopPropagation() {} });
+  const allText = (element) => [element.textContent, ...element.children.map(allText)].join(' ');
+  click(cells()[0]);
+  let tooltip = overlay.children.at(-1);
+  assert.match(allText(tooltip), /здравствуйте, приветствую вас/);
+  assert.doesNotMatch(allText(tooltip), /Полный перевод всей реплики|Слова|Фразы/);
+  const save = tooltip.children.find((child) => child.className === 'dual-captions-save-word');
+  click(save);
+  await flush();
+  assert.match(allText(tooltip), /Docker/);
+  assert.equal(cells()[0].style.backgroundColor, '');
+  assert.equal(save.disabled, false);
+  rejectSave = false;
+  click(save);
+  click(save);
+  await flush();
+  assert.equal(saves, 2, 'Double click must not send two writes');
+  assert.equal(save.textContent, '✓ Сохранено');
+  releaseList({ ok: true, data: { words: [] } });
+  await flush();
+  for (const cell of cells().slice(0, 2)) {
+    assert.equal(cell.style.backgroundColor, 'rgba(80, 170, 115, .18)');
+    cell.dispatch('focus'); cell.dispatch('blur');
+    assert.equal(cell.style.backgroundColor, 'rgba(80, 170, 115, .18)');
+  }
+  click(cells()[2]);
+  tooltip = overlay.children.at(-1);
+  assert.match(allText(tooltip), /Перевод этой ячейки пока отсутствует/);
+  assert.doesNotMatch(allText(tooltip), /Полный перевод всей реплики/);
+  assert.equal(tooltip.children.find((child) => child.className === 'dual-captions-save-word').disabled, true);
+  listener({ type: 'dualCaptions.content.settings', settings: { ...settings, inlineTranslations: false } }, {}, () => {});
+  listener({ type: 'dualCaptions.content.settings', settings }, {}, () => {});
+  assert.equal(cells()[0].style.backgroundColor, 'rgba(80, 170, 115, .18)');
+  words = [];
+  harness.context.dispatch('focus');
+  await flush();
+  assert.equal(cells()[0].style.backgroundColor, '');
+  assert.equal(translateCalls, 1, 'Saving and refreshing must never request another AI translation');
+});
+
+test('Chinese glossary without mapped Han still shows cell translation but cannot save guessed characters', async () => {
+  const harness = await makeHarness();
+  harness.context.chrome.runtime.sendMessage = async (message) => {
+    if (message.type !== 'dualCaptions.caption.translate') return { ok: true, data: { words: [] } };
+    return { ok: true, data: { items: [{ start: 0, end: 6, dictionary: 'Вся фраза',
+      isSentenceTranslation: true, glossary: [{ pinyin: 'nǐ hǎo', translation: 'привет' }] }] } };
+  };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  [...harness.onMessage.listeners][0]({ type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'external:mine', inlineTranslations: true },
+    externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: '\u2063nǐ hǎo\n\u2064你好' }] }],
+  }, {}, () => {});
+  for (let index = 0; index < 12; index += 1) await Promise.resolve();
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  overlay.children[0].children[0].children[1].children[0].dispatch('click', { stopPropagation() {} });
+  const tooltip = overlay.children.at(-1);
+  assert.equal(tooltip.children[1].children[1].textContent, 'привет');
+  assert.equal(tooltip.children.find((child) => child.className === 'dual-captions-save-word').disabled, true);
+});
+
 test('inline pinyin cells hide grammatical meanings for untoned de, le, zhe and la', async () => {
   for (const particle of ['de', 'le', 'zhe', 'la']) {
     const harness = await makeHarness();

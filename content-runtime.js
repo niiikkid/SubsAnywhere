@@ -44,17 +44,46 @@
 
   function glossarySegments(text, items = []) {
     const source = String(text ?? '');
+    // AI offsets refer to whitespace-normalized pinyin. Map them back without
+    // changing the displayed caption or confusing repeated homophones.
+    let normalized = '';
+    const starts = [];
+    const ends = [];
+    for (const match of source.matchAll(/\S+/gu)) {
+      if (normalized) {
+        starts.push(ends.at(-1));
+        ends.push(match.index);
+        normalized += ' ';
+      }
+      for (let index = 0; index < match[0].length; index += 1) {
+        starts.push(match.index + index);
+        ends.push(match.index + index + 1);
+      }
+      normalized += match[0];
+    }
     const terms = [];
     for (const item of Array.isArray(items) ? items : []) {
       for (const term of Array.isArray(item?.glossary) ? item.glossary : []) {
         const label = term?.pinyin ?? term?.text ?? term?.phrase;
         if (typeof label !== 'string' || !label.trim() || typeof term?.translation !== 'string' || !term.translation.trim()) continue;
-        terms.push({ label: label.trim(), translation: term.translation.trim(), item });
+        terms.push({ label: label.trim(), translation: term.translation.trim(), item, term });
       }
     }
     const spans = [];
     const isWord = (character) => /[\p{L}\p{M}\p{N}_]/u.test(character ?? '');
-    for (const term of terms.sort((a, b) => b.label.length - a.label.length)) {
+    const anchored = (entry) => Object.hasOwn(entry.term, 'pinyinStart') || Object.hasOwn(entry.term, 'pinyinEnd');
+    for (const term of terms.sort((a, b) => Number(anchored(b)) - Number(anchored(a)) || b.label.length - a.label.length)) {
+      if (anchored(term)) {
+        const { pinyinStart, pinyinEnd } = term.term;
+        if (!Number.isInteger(pinyinStart) || !Number.isInteger(pinyinEnd) || pinyinStart < 0
+          || pinyinEnd <= pinyinStart || pinyinEnd > normalized.length
+          || normalized.slice(pinyinStart, pinyinEnd) !== term.label) continue;
+        const start = starts[pinyinStart];
+        const end = ends[pinyinEnd - 1];
+        if (!isWord(source[start - 1]) && !isWord(source[end])
+          && !spans.some((span) => start < span.end && end > span.start)) spans.push({ start, end, ...term });
+        continue;
+      }
       let from = 0;
       while (from < source.length) {
         const start = source.indexOf(term.label, from);
@@ -66,7 +95,8 @@
       }
     }
     return captionSegments(source, spans.sort((a, b) => a.start - b.start))
-      .map((segment) => ({ text: segment.text, item: segment.item?.item ?? null, translation: segment.item?.translation ?? '' }));
+      .map((segment) => ({ text: segment.text, item: segment.item?.item ?? null,
+        translation: segment.item?.translation ?? '', term: segment.item?.term ?? null }));
   }
 
   function cueTextAt(cues, videoTime, offsetSeconds = 0, timeScale = 1) {
