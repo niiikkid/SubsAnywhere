@@ -10,7 +10,19 @@ export function nextStudyPosition(position, total) {
   return Math.min(safePosition + 1, safeTotal);
 }
 
+export function previousStudyPosition(position, total) {
+  const safeTotal = Number.isSafeInteger(total) && total > 0 ? total : 0;
+  const safePosition = Number.isSafeInteger(position) ? Math.min(Math.max(position, 0), safeTotal) : 0;
+  return Math.max(safePosition - 1, 0);
+}
+
+export function studyPositionForWord(words = [], id) {
+  if (!Number.isSafeInteger(id) || id < 1) return -1;
+  return studyDeck(words).findIndex((word) => word.id === id);
+}
+
 if (typeof document !== "undefined") (() => {
+  const STUDY_STORAGE_KEY = "subsanywhere.words.study.v1";
   const list = document.getElementById("word-list");
   const search = document.getElementById("search");
   const language = document.getElementById("language");
@@ -35,6 +47,8 @@ if (typeof document !== "undefined") (() => {
   const studyExplanation = document.getElementById("study-explanation");
   const studyExplanationText = document.getElementById("study-explanation-text");
   const studyFinish = document.getElementById("study-finish");
+  const studyBack = document.getElementById("study-back");
+  const studyLearned = document.getElementById("study-learned");
   const studyExplain = document.getElementById("study-explain");
   const studyNext = document.getElementById("study-next");
   const studyRestart = document.getElementById("study-restart");
@@ -53,6 +67,51 @@ if (typeof document !== "undefined") (() => {
   function message(text, error = false) {
     status.textContent = text;
     status.classList.toggle("error", error);
+  }
+
+  function savedStudy() {
+    try {
+      const value = JSON.parse(localStorage.getItem(STUDY_STORAGE_KEY));
+      if (!value || !Array.isArray(value.ids) || !value.ids.length || value.ids.length > 10000
+        || !value.ids.every(id => Number.isSafeInteger(id) && id > 0)
+        || !Number.isSafeInteger(value.position) || value.position < 0 || value.position > value.ids.length) return null;
+      return value;
+    } catch {
+      return null;
+    }
+  }
+
+  function persistStudy() {
+    if (!studyWords.length) return;
+    try {
+      localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify({ ids: studyWords.map(word => word.id), position: studyPosition }));
+    } catch { /* Browser storage can be unavailable; the study itself still works. */ }
+  }
+
+  function clearSavedStudy() {
+    try { localStorage.removeItem(STUDY_STORAGE_KEY); } catch { /* Ignore unavailable browser storage. */ }
+  }
+
+  function showStudy() {
+    listControls.hidden = true;
+    wordPanel.hidden = true;
+    studyMode.hidden = false;
+    renderStudy();
+  }
+
+  function restoreStudy() {
+    const saved = savedStudy();
+    if (!saved || !studyMode.hidden) return;
+    const byId = new Map(words.map(word => [word.id, word]));
+    const restored = saved.ids.map(id => byId.get(id)).filter(Boolean);
+    if (restored.length !== saved.ids.length) {
+      clearSavedStudy();
+      return;
+    }
+    studyWords = restored;
+    studyPosition = Math.min(saved.position, studyWords.length);
+    studyExplanationOpen = false;
+    showStudy();
   }
 
   async function request(path, payload) {
@@ -152,7 +211,10 @@ if (typeof document !== "undefined") (() => {
     studyProgress.textContent = complete ? `Повторено: ${total} из ${total}` : `${studyPosition + 1} из ${total}`;
     studyCard.hidden = complete;
     studyFinish.hidden = !complete;
+    studyBack.hidden = total === 0;
+    studyBack.disabled = busy || studyPosition === 0;
     studyNext.hidden = complete;
+    studyLearned.hidden = complete;
     studyExplain.hidden = complete;
     studyRestart.hidden = !complete;
     if (complete) return;
@@ -164,6 +226,8 @@ if (typeof document !== "undefined") (() => {
     studyPinyin.lang = "zh-Latn";
     studyPinyin.hidden = !word.pinyin;
     studyTranslation.textContent = word.translation;
+    studyLearned.disabled = busy;
+    studyLearned.textContent = word.learned ? "Вернуть на повторение" : "Слово выучено";
     studyExplain.disabled = busy;
     studyExplain.textContent = word.explanation ? "Показать объяснение" : "Объяснить";
     studyExplanation.hidden = !word.explanation || !studyExplanationOpen;
@@ -175,14 +239,15 @@ if (typeof document !== "undefined") (() => {
     if (!studyWords.length) return;
     studyPosition = 0;
     studyExplanationOpen = false;
-    listControls.hidden = true;
-    wordPanel.hidden = true;
-    studyMode.hidden = false;
-    renderStudy();
+    persistStudy();
+    showStudy();
     studyWord.focus();
   }
 
   function exitStudy() {
+    clearSavedStudy();
+    studyWords = [];
+    studyPosition = 0;
     studyMode.hidden = true;
     listControls.hidden = false;
     wordPanel.hidden = false;
@@ -198,6 +263,7 @@ if (typeof document !== "undefined") (() => {
     try {
       words = await readWords();
       loaded = true;
+      restoreStudy();
       message("");
     } catch (error) {
       message(error instanceof TypeError || error.name === "TimeoutError"
@@ -209,7 +275,7 @@ if (typeof document !== "undefined") (() => {
     }
   }
 
-  async function setLearned(word, learned) {
+  async function setLearned(word, learned, preserveStudy = false) {
     if (busy) return;
     busy = true;
     message(learned ? "Отмечаем слово как выученное…" : "Возвращаем слово на повторение…");
@@ -224,13 +290,16 @@ if (typeof document !== "undefined") (() => {
         throw new Error("Состояние слова не сохранилось. Обновите список.");
       }
       words = fresh;
+      studyWords = studyWords.map(item => item.id === word.id ? fresh.find(candidate => candidate.id === word.id) : item);
       message(learned ? `«${word.text}» перенесено в выученные.` : `«${word.text}» возвращено на повторение.`);
-      search.focus();
+      if (preserveStudy) persistStudy();
+      else search.focus();
     } catch {
       message("Не удалось подтвердить состояние слова. Обновите список, чтобы проверить его.", true);
     } finally {
       busy = false;
       render();
+      if (preserveStudy) renderStudy();
     }
   }
 
@@ -284,15 +353,24 @@ if (typeof document !== "undefined") (() => {
   refresh.addEventListener("click", load);
   studyStart.addEventListener("click", startStudy);
   studyExit.addEventListener("click", exitStudy);
+  studyBack.addEventListener("click", () => {
+    studyPosition = previousStudyPosition(studyPosition, studyWords.length);
+    studyExplanationOpen = false;
+    persistStudy();
+    renderStudy();
+    studyWord.focus();
+  });
   studyNext.addEventListener("click", () => {
     studyPosition = nextStudyPosition(studyPosition, studyWords.length);
     studyExplanationOpen = false;
+    persistStudy();
     renderStudy();
     (studyPosition >= studyWords.length ? studyRestart : studyWord).focus();
   });
   studyRestart.addEventListener("click", () => {
     studyPosition = 0;
     studyExplanationOpen = false;
+    persistStudy();
     renderStudy();
     studyWord.focus();
   });
@@ -305,6 +383,10 @@ if (typeof document !== "undefined") (() => {
       return;
     }
     explainWord(word);
+  });
+  studyLearned.addEventListener("click", () => {
+    const word = studyWords[studyPosition];
+    if (word) setLearned(word, !word.learned, true);
   });
   window.addEventListener("focus", load);
   load();

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { studyDeck, nextStudyPosition } from '../local-server/web/words.js';
+import { studyDeck, nextStudyPosition, previousStudyPosition, studyPositionForWord } from '../local-server/web/words.js';
 
 const words = [
   { id: 1, text: '你好', learned: false },
@@ -17,4 +17,16 @@ test('study progress reaches completion only after the final card and stays ther
   assert.equal(nextStudyPosition(1, 2), 2);
   assert.equal(nextStudyPosition(2, 2), 2);
   assert.equal(nextStudyPosition(0, 0), 0);
+});
+
+test('study can return to the previous card without moving before the first word', () => {
+  assert.equal(previousStudyPosition(2, 3), 1);
+  assert.equal(previousStudyPosition(0, 3), 0);
+  assert.equal(previousStudyPosition(3, 3), 2);
+});
+
+test('saved study word restores its exact unlearned card after a page reload', () => {
+  assert.equal(studyPositionForWord(words, 3), 1);
+  assert.equal(studyPositionForWord(words, 2), -1);
+  assert.equal(studyPositionForWord(words, 999), -1);
 });
