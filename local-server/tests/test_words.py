@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -27,10 +28,11 @@ class WordsStoreTests(unittest.TestCase):
         self.path = pathlib.Path(self.temporary.name) / "nested" / "words.sqlite3"
         self.store = WordsStore(self.path)
 
-    def test_persists_deduplicates_without_overwriting_and_removes(self):
+    def test_persists_deduplicates_and_marks_words_learned_without_removing_them(self):
         self.assertFalse(self.path.exists())
         first = self.store.add(ZH)
-        self.assertEqual(set(first), {"id", "language", "text", "pinyin", "translation", "created_at"})
+        self.assertEqual(set(first), {"id", "language", "text", "pinyin", "translation", "created_at", "learned"})
+        self.assertFalse(first["learned"])
         self.assertRegex(first["created_at"], r"^\d{4}-\d{2}-\d{2}T.*Z$")
         reopened = WordsStore(self.path)
         duplicate = reopened.add({**ZH, "translation": "другое значение"})
@@ -40,9 +42,47 @@ class WordsStoreTests(unittest.TestCase):
         self.assertNotEqual(second["id"], first["id"])
         self.assertIsInstance(second["id"], int)
         self.assertGreater(second["id"], 0)
-        self.assertTrue(reopened.remove(first["id"]))
-        self.assertFalse(reopened.remove(first["id"]))
-        self.assertEqual(WordsStore(self.path).list(), [second])
+        learned = reopened.set_learned(first["id"], True)
+        self.assertEqual(learned, {**first, "learned": True})
+        self.assertEqual(reopened.list(), [second, learned])
+        restored = reopened.set_learned(first["id"], False)
+        self.assertEqual(restored, first)
+        self.assertIsNone(reopened.set_learned(9999, True))
+
+    def test_migrates_existing_vocabulary_without_losing_words(self):
+        self.path.parent.mkdir(parents=True)
+        with sqlite3.connect(self.path) as connection:
+            connection.execute("""CREATE TABLE words (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, language TEXT NOT NULL, text TEXT NOT NULL,
+                pinyin TEXT NOT NULL, translation TEXT NOT NULL, created_at TEXT NOT NULL,
+                text_key TEXT NOT NULL, pinyin_key TEXT NOT NULL,
+                UNIQUE (language, text_key, pinyin_key)
+            )""")
+            connection.execute("""INSERT INTO words
+                (language, text, pinyin, translation, created_at, text_key, pinyin_key)
+                VALUES ('en', 'hello', '', 'привет', '2026-01-01T00:00:00.000Z', 'hello', '')""")
+        words = self.store.list()
+        self.assertEqual(len(words), 1)
+        self.assertFalse(words[0]["learned"])
+        self.assertEqual(self.store.set_learned(words[0]["id"], True)["learned"], True)
+
+    def test_concurrent_first_access_migrates_legacy_vocabulary_once(self):
+        self.path.parent.mkdir(parents=True)
+        with sqlite3.connect(self.path) as connection:
+            connection.execute("""CREATE TABLE words (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, language TEXT NOT NULL, text TEXT NOT NULL,
+                pinyin TEXT NOT NULL, translation TEXT NOT NULL, created_at TEXT NOT NULL,
+                text_key TEXT NOT NULL, pinyin_key TEXT NOT NULL,
+                UNIQUE (language, text_key, pinyin_key)
+            )""")
+        barrier = threading.Barrier(16)
+
+        def list_words(_):
+            barrier.wait()
+            return WordsStore(self.path).list()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+            self.assertEqual(list(pool.map(list_words, range(16))), [[]] * 16)
 
     def test_concurrent_independent_stores_share_unique_constraint(self):
         def save(index):
@@ -135,10 +175,9 @@ class WordsHTTPTests(unittest.TestCase):
         self.assertEqual(json.loads(self.request(headers={"Origin": self.origin})[2]), {"words": [word]})
         self.assertEqual(WordsStore(self.store.path).list(), [word])
         self.assertEqual(json.loads(self.request("POST", payload=ZH)[2])["word"], word)
-        status, _, body = self.request("POST", "/api/words/remove", {"id": word["id"]}, {"Origin": self.origin})
-        self.assertEqual((status, json.loads(body)), (200, {"removed": True}))
-        self.assertEqual(self.request("POST", "/api/words/remove", {"id": word["id"]})[0], 404)
-        self.assertEqual(json.loads(self.request()[2]), {"words": []})
+        status, _, body = self.request("POST", "/api/words/learned", {"id": word["id"], "learned": True}, {"Origin": self.origin})
+        self.assertEqual((status, json.loads(body)), (200, {"word": {**word, "learned": True}}))
+        self.assertEqual(json.loads(self.request()[2]), {"words": [{**word, "learned": True}]})
 
     def test_api_returns_complete_list_without_hidden_limit(self):
         saved = [self.store.add({**EN, "text": f"word {index}"}) for index in range(205)]
@@ -193,8 +232,10 @@ class WordsHTTPTests(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/words?x=1", payload=ZH)[0], 413)
         self.assertEqual(self.request(path="/api/words?x=1")[0], 404)
         self.assertEqual(self.request("GET", raw=b"{}", headers={"Content-Type": "application/json"})[0], 413)
-        for payload in ({"id": 0}, {"id": True}, {"id": "1"}, {"id": 1, "extra": "x"}):
-            self.assertEqual(self.request("POST", "/api/words/remove", payload=payload)[0], 400)
+        for payload in ({"id": 0, "learned": True}, {"id": True, "learned": True},
+                        {"id": "1", "learned": True}, {"id": 1}, {"id": 1, "learned": 1},
+                        {"id": 1, "learned": True, "extra": "x"}):
+            self.assertEqual(self.request("POST", "/api/words/learned", payload=payload)[0], 400)
         for payload in ({**EN, "text": "你好"}, {**ZH, "translation": "x" * 1001}, {**EN, "pinyin": "x"}):
             self.assertEqual(self.request("POST", payload=payload)[0], 400)
         self.assertEqual(self.store.list(), [])

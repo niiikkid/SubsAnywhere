@@ -8,9 +8,13 @@
   const status = document.getElementById("status");
   const empty = document.getElementById("empty");
   const refresh = document.getElementById("refresh");
+  const reviewTab = document.getElementById("review-tab");
+  const learnedTab = document.getElementById("learned-tab");
+  const listTitle = document.getElementById("list-title");
   let words = [];
   let loaded = false;
   let busy = false;
+  let view = "review";
 
   function searchable(value) {
     return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/gu, " ").trim();
@@ -40,6 +44,7 @@
     if (!data || !Array.isArray(data.words) || data.words.some(word => (
       !word || !Number.isSafeInteger(word.id) || word.id < 1 || !["zh", "en"].includes(word.language)
       || !["text", "pinyin", "translation", "created_at"].every(key => typeof word[key] === "string")
+      || typeof word.learned !== "boolean"
     ))) throw new Error("Сервер вернул неверный формат словаря. Обновите сервер и повторите попытку.");
     return data.words;
   }
@@ -53,7 +58,8 @@
 
   function render() {
     const query = searchable(search.value);
-    const visible = words.filter(word => (!language.value || word.language === language.value)
+    const inView = words.filter(word => word.learned === (view === "learned"));
+    const visible = inView.filter(word => (!language.value || word.language === language.value)
       && (!query || [word.text, word.pinyin, word.translation].some(value => searchable(value).includes(query))));
     const fragment = document.createDocumentFragment();
     for (const word of visible) {
@@ -67,23 +73,28 @@
         pinyin.lang = "zh-Latn";
         main.append(pinyin);
       }
-      const remove = element("button", "learned", "Выучено ✓");
-      remove.type = "button";
-      remove.disabled = busy;
-      remove.title = "Удалить выученное слово из словаря";
-      remove.setAttribute("aria-label", `Выучено: удалить «${word.text}» из словаря`);
-      remove.addEventListener("click", () => removeWord(word));
-      row.append(main, element("p", "word-translation", word.translation), remove);
+      const learned = element("button", "learned", word.learned ? "Вернуть на повторение" : "Выучено ✓");
+      learned.type = "button";
+      learned.disabled = busy;
+      learned.title = word.learned ? "Вернуть слово в список на повторение" : "Отметить слово как выученное";
+      learned.setAttribute("aria-label", `${learned.title}: «${word.text}»`);
+      learned.addEventListener("click", () => setLearned(word, !word.learned));
+      row.append(main, element("p", "word-translation", word.translation), learned);
       fragment.append(row);
     }
     list.replaceChildren(fragment);
     list.setAttribute("aria-busy", String(busy));
     refresh.disabled = busy;
-    count.textContent = loaded ? `${visible.length} из ${words.length}` : "—";
+    reviewTab.setAttribute("aria-selected", String(view === "review"));
+    learnedTab.setAttribute("aria-selected", String(view === "learned"));
+    listTitle.textContent = view === "learned" ? "Выученные" : "На повторение";
+    list.setAttribute("aria-label", listTitle.textContent);
+    count.textContent = loaded ? `${visible.length} из ${inView.length}` : "—";
     empty.hidden = !loaded || visible.length > 0;
-    empty.textContent = words.length
+    empty.textContent = inView.length
       ? "Ничего не найдено. Попробуйте другой запрос или язык."
-      : "Пока здесь пусто. Сохраните первое слово из подсказки в субтитрах расширения.";
+      : (view === "learned" ? "Пока нет выученных слов. Отмечайте их в списке «На повторение»."
+        : "Пока здесь пусто. Сохраните первое слово из подсказки в субтитрах расширения.");
   }
 
   async function load() {
@@ -105,21 +116,25 @@
     }
   }
 
-  async function removeWord(word) {
+  async function setLearned(word, learned) {
     if (busy) return;
     busy = true;
-    message("Удаление выученного слова…");
+    message(learned ? "Отмечаем слово как выученное…" : "Возвращаем слово на повторение…");
     render();
     try {
-      const result = await request("/api/words/remove", { id: word.id });
-      if (result?.removed !== true) throw new Error("Сервер не подтвердил удаление. Обновите список.");
+      const result = await request("/api/words/learned", { id: word.id, learned });
+      if (result?.word?.id !== word.id || result.word.learned !== learned) {
+        throw new Error("Сервер не подтвердил отметку слова. Обновите список.");
+      }
       const fresh = await readWords();
-      if (fresh.some(item => item.id === word.id)) throw new Error("Слово осталось на сервере. Повторите попытку.");
+      if (fresh.find(item => item.id === word.id)?.learned !== learned) {
+        throw new Error("Состояние слова не сохранилось. Обновите список.");
+      }
       words = fresh;
-      message(`«${word.text}» удалено из словаря.`);
+      message(learned ? `«${word.text}» перенесено в выученные.` : `«${word.text}» возвращено на повторение.`);
       search.focus();
     } catch {
-      message("Не удалось подтвердить удаление. Обновите список, чтобы проверить состояние слова.", true);
+      message("Не удалось подтвердить состояние слова. Обновите список, чтобы проверить его.", true);
     } finally {
       busy = false;
       render();
@@ -128,6 +143,8 @@
 
   search.addEventListener("input", render);
   language.addEventListener("change", render);
+  reviewTab.addEventListener("click", () => { view = "review"; render(); });
+  learnedTab.addEventListener("click", () => { view = "learned"; render(); });
   refresh.addEventListener("click", load);
   window.addEventListener("focus", load);
   load();

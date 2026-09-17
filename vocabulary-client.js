@@ -21,10 +21,11 @@ function normalizeWord(value) {
 
 function savedWord(value) {
   const word = normalizeWord(value);
-  if (!Number.isSafeInteger(value.id) || value.id < 1 || typeof value.created_at !== 'string') {
+  if (!Number.isSafeInteger(value.id) || value.id < 1 || typeof value.created_at !== 'string'
+    || typeof value.learned !== 'boolean') {
     throw new Error('Некорректный ответ словаря');
   }
-  return { ...word, id: value.id, created_at: value.created_at };
+  return { ...word, id: value.id, created_at: value.created_at, learned: value.learned };
 }
 
 export class VocabularyClient {

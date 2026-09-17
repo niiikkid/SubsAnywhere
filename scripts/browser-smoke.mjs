@@ -387,7 +387,7 @@ try {
   assert.ok(stressResults.every(result => result.bounded && !result.overflow && result.preserved), JSON.stringify(stressResults));
   assert.ok(stressResults.some(result => result.scrollable), 'The height-overflow fallback must actually be exercised');
   if (process.env.SUBSANYWHERE_LIVE_WORDS === '1') {
-    // Explicit temporary fixture against the running local Docker, never AI.
+    // Explicit learned fixture against the running local Docker, never AI.
     const testText = `测试词${Date.now()}`;
     const saved = await reopened.evaluate(`(async () => {
       const { VocabularyClient } = await import('./vocabulary-client.js');
@@ -395,7 +395,7 @@ try {
       return liveVocabulary.save({ language: 'zh', text: ${JSON.stringify(testText)},
         pinyin: 'cè shì cí', translation: 'Временная проверка словаря' });
     })()`);
-    try {
+    {
       const { targetId } = await cdp('Target.createTarget', { url: 'http://127.0.0.1:43817/words' });
       const { sessionId } = await cdp('Target.attachToTarget', { targetId, flatten: true });
       await cdp('Runtime.enable', {}, sessionId);
@@ -423,23 +423,20 @@ try {
         document.querySelector('.learned').click();
         const deadline = Date.now() + 8000;
         while (document.querySelector('.word-row') || document.getElementById('refresh').disabled) {
-          if (Date.now() > deadline) throw new Error('Learned word did not disappear');
+          if (Date.now() > deadline) throw new Error('Learned word did not leave the review list');
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       })()`);
-      assert.equal(await reopened.evaluate(`liveVocabulary.list().then(({words}) => words.some(word => word.id === ${saved.word.id}))`), false);
-      console.log('PASS: real extension VocabularyClient → Docker SQLite → browser panel/search → learned removal, confirmed by extension readback. Temporary fixture removed.');
-    } finally {
-      // Clean up only this unique fixture if an assertion failed before deletion.
-      await reopened.evaluate(`(async () => {
-        const {words} = await liveVocabulary.list();
-        if (!words.some(word => word.id === ${saved.word.id})) return;
-        const response = await fetch('http://127.0.0.1:43817/api/words/remove', {
-          method: 'POST', headers: {'Content-Type': 'application/json', 'X-SubsAnywhere-Client': 'extension-v1'},
-          body: JSON.stringify({id: ${saved.word.id}}), credentials: 'omit', redirect: 'error'
-        });
-        if (!response.ok || (await liveVocabulary.list()).words.some(word => word.id === ${saved.word.id})) throw new Error('Could not clean up temporary vocabulary fixture');
+      await panelEval(`(async () => {
+        document.getElementById('learned-tab').click();
+        const deadline = Date.now() + 8000;
+        while (!document.querySelector('.word-row')?.textContent.includes(${JSON.stringify(testText)})) {
+          if (Date.now() > deadline) throw new Error('Learned word did not appear in its separate list');
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
       })()`);
+      assert.equal(await reopened.evaluate(`liveVocabulary.list().then(({words}) => words.some(word => word.id === ${saved.word.id} && word.learned === true))`), true);
+      console.log('PASS: real extension VocabularyClient → Docker SQLite → browser panel/search → separate learned list, confirmed by extension readback. The fixture is retained as a learned word.');
     }
   }
   assert.deepEqual(errors, [], 'Chrome must not report runtime exceptions');

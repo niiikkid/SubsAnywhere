@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { VocabularyClient } from '../vocabulary-client.js';
 
 const entry = { language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет' };
-const saved = { ...entry, id: 1, created_at: '2026-01-01T00:00:00Z' };
+const saved = { ...entry, id: 1, created_at: '2026-01-01T00:00:00Z', learned: false };
 
 test('vocabulary saves bounded JSON and verifies the persisted entry by reading it back', async () => {
   const calls = [];
@@ -29,6 +29,8 @@ test('vocabulary never confirms a lost write or malformed response', async () =>
   await assert.rejects(missing.save(entry), /подтвердить/);
   const invalid = new VocabularyClient(async () => Response.json({ words: [{ ...saved, text: '' }] }));
   await assert.rejects(invalid.list(), /ответ/);
+  const invalidLearnedState = new VocabularyClient(async () => Response.json({ words: [{ ...saved, learned: 0 }] }));
+  await assert.rejects(invalidLearnedState.list(), /ответ/);
   const offline = new VocabularyClient(async () => { throw new Error('offline'); });
   await assert.rejects(offline.save(entry), /Docker/);
 });

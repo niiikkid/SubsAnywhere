@@ -75,12 +75,13 @@ path.write_text("1\\n00:00:01,000 --> 00:00:02,000\\n你好\\n", encoding="utf-8
         assert request("/api/subtitles/generated?video_id=rwnyaH6cTDE", origin)[1]["srt"] == ready["srt"]
         assert request("/api/words", origin)[1]["words"] == [saved["word"]]
         panel_origin = f"http://127.0.0.1:{port}"
-        assert request("/api/words/remove", panel_origin, {"id": saved["word"]["id"]}) == (200, {"removed": True})
-        assert request("/api/words", origin)[1]["words"] == []
+        learned = {**saved["word"], "learned": True}
+        assert request("/api/words/learned", panel_origin, {"id": saved["word"]["id"], "learned": True}) == (200, {"word": learned})
+        assert request("/api/words", origin)[1]["words"] == [learned]
         with urllib.request.urlopen(f"{panel_origin}/words", timeout=8) as panel:
             assert panel.status == 200 and b'word-list' in panel.read()
             assert "frame-ancestors 'none'" in panel.headers["Content-Security-Policy"]
-        print("PASS: Docker vocabulary save/readback/dedup, persistence across restart, panel same-origin deletion and static assets.")
+        print("PASS: Docker vocabulary save/readback/dedup, persistence across restart, panel same-origin learned marking and static assets.")
         print("PASS: Docker health, non-root user, API validation, hostile-origin rejection, real pinyin conversion and SRT persistence across restart. No YouTube, AI or model downloads.")
         print(json.dumps(health, ensure_ascii=False))
     finally:

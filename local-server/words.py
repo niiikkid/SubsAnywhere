@@ -12,7 +12,7 @@ from pathlib import Path
 MAX_WORD_BODY_BYTES = 16384
 MAX_SAFE_ID = 9007199254740991
 WORD_FIELDS = {"language", "text", "pinyin", "translation"}
-PUBLIC_COLUMNS = "id, language, text, pinyin, translation, created_at"
+PUBLIC_COLUMNS = "id, language, text, pinyin, translation, created_at, learned"
 HAN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f\U00030000-\U000323af]")
 
 
@@ -78,6 +78,9 @@ class WordsStore:
         connection.row_factory = sqlite3.Row
         try:
             connection.execute("PRAGMA synchronous = FULL")
+            # Schema upgrades must be serialized: concurrent first requests
+            # against an old database must not race the ADD COLUMN migration.
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS words (
                     id INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id <= 9007199254740991),
@@ -86,11 +89,15 @@ class WordsStore:
                     pinyin TEXT NOT NULL,
                     translation TEXT NOT NULL,
                     created_at TEXT NOT NULL,
+                    learned INTEGER NOT NULL DEFAULT 0 CHECK (learned IN (0, 1)),
                     text_key TEXT NOT NULL,
                     pinyin_key TEXT NOT NULL,
                     UNIQUE (language, text_key, pinyin_key)
                 )
             """)
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(words)")}
+            if "learned" not in columns:
+                connection.execute("ALTER TABLE words ADD COLUMN learned INTEGER NOT NULL DEFAULT 0 CHECK (learned IN (0, 1))")
             with connection:
                 yield connection
         finally:
@@ -99,9 +106,15 @@ class WordsStore:
     def list(self) -> list[dict]:
         with self._connection() as connection:
             # Contract is the complete list, not a silently capped first page.
-            return [dict(row) for row in connection.execute(
+            return [self._public_word(row) for row in connection.execute(
                 f"SELECT {PUBLIC_COLUMNS} FROM words ORDER BY id DESC"
             )]
+
+    @staticmethod
+    def _public_word(row) -> dict:
+        word = dict(row)
+        word["learned"] = bool(word["learned"])
+        return word
 
     def add(self, payload) -> dict:
         word = validate_word(payload)
@@ -118,7 +131,18 @@ class WordsStore:
                 f"SELECT {PUBLIC_COLUMNS} FROM words WHERE language = ? AND text_key = ? AND pinyin_key = ?",
                 (word["language"], text_key, pinyin_key),
             ).fetchone()
-            return dict(row)
+            return self._public_word(row)
+
+    def set_learned(self, identifier, learned: bool) -> dict | None:
+        identifier = validate_word_id(identifier)
+        if type(learned) is not bool:
+            raise ValueError("Invalid learned state")
+        with self._connection() as connection:
+            connection.execute("UPDATE words SET learned = ? WHERE id = ?", (int(learned), identifier))
+            row = connection.execute(
+                f"SELECT {PUBLIC_COLUMNS} FROM words WHERE id = ?", (identifier,)
+            ).fetchone()
+            return self._public_word(row) if row else None
 
     def remove(self, identifier) -> bool:
         identifier = validate_word_id(identifier)

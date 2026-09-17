@@ -22,6 +22,9 @@ button:disabled { opacity: .55; cursor: wait; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .vocabulary { border: 1px solid var(--border); border-radius: 12px; background: #16181b; overflow: hidden; }
 .toolbar { display: grid; grid-template-columns: minmax(0, 1fr) 150px auto; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.view-tabs { display: flex; gap: 6px; padding: 10px 16px 0; }
+.view-tabs button { min-height: 32px; padding: 5px 10px; font-size: 12px; color: var(--muted); }
+.view-tabs button[aria-selected="true"] { color: #edf6f7; border-color: #5c9ba1; background: rgba(74, 176, 184, .14); }
 input { width: 100%; min-height: 38px; padding: 8px 12px; border: 1px solid #3c404a; border-radius: 7px; background: #101215; color: #f0f1f3; }
 input::placeholder { color: #9298a4; opacity: 1; }
 select { width: 100%; }
@@ -46,6 +49,7 @@ footer { margin-top: 24px; color: var(--muted); font-size: 12px; }
   .site-header { padding: 10px 12px; gap: 12px; }
   .toolbar { grid-template-columns: minmax(0, 1fr) auto; padding: 10px; }
   #search { grid-column: 1 / -1; }
+  .view-tabs { padding: 10px 12px 0; }
   .list-heading { padding: 10px 12px 2px; }
   .status { padding: 0 12px; }
   .word-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 10px 12px; }

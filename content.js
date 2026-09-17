@@ -168,10 +168,13 @@
 
     function updateSavedWords() {
       for (const { cell, key } of state.wordCells) {
-        const saved = Boolean(key && savedWords.has(key));
-        cell.style.backgroundColor = saved ? 'rgba(80, 170, 115, .18)' : '';
-        cell.style.borderColor = saved ? 'rgba(110, 195, 140, .42)' : '';
+        const word = key ? savedWords.get(key) : null;
+        const saved = Boolean(word);
+        const learned = word?.learned === true;
+        cell.style.backgroundColor = learned ? 'rgba(74, 176, 184, .16)' : (saved ? 'rgba(80, 170, 115, .18)' : '');
+        cell.style.borderColor = learned ? 'rgba(112, 202, 207, .4)' : (saved ? 'rgba(110, 195, 140, .42)' : '');
         cell.setAttribute('data-word-saved', String(saved));
+        cell.setAttribute('data-word-learned', String(learned));
       }
       if (state.wordButton && !state.wordButton.saving) {
         const saved = savedWords.has(wordKey(state.tooltipItem?.word));

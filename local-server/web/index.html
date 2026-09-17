@@ -19,11 +19,15 @@
         </select>
         <button id="refresh" type="button">Обновить</button>
       </div>
-      <div class="list-heading"><h2>На повторение</h2><span id="count" aria-live="polite">—</span></div>
+      <div class="view-tabs" role="tablist" aria-label="Состояние слов">
+        <button id="review-tab" type="button" role="tab" aria-selected="true">На повторение</button>
+        <button id="learned-tab" type="button" role="tab" aria-selected="false">Выученные</button>
+      </div>
+      <div class="list-heading"><h2 id="list-title">На повторение</h2><span id="count" aria-live="polite">—</span></div>
       <p id="status" class="status" role="status" aria-live="polite">Загрузка словаря…</p>
       <ul id="word-list" aria-label="Слова" aria-busy="true"></ul>
       <div id="empty" class="empty" hidden></div>
-      <noscript><p class="empty">Для поиска и удаления слов включите JavaScript. Слова останутся на сервере.</p></noscript>
+      <noscript><p class="empty">Для поиска и отметки слов включите JavaScript. Слова останутся на сервере.</p></noscript>
     </section>
     <footer>Слова хранятся на вашем локальном сервере. Никаких облачных запросов с этой страницы.</footer>
   </main>

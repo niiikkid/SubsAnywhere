@@ -908,7 +908,7 @@ class SubtitleService:
         }
 
 
-WORDS_ROUTES = frozenset({"/api/words", "/api/words/remove"})
+WORDS_ROUTES = frozenset({"/api/words", "/api/words/learned"})
 WORDS_ASSETS = {
     "/words": ("index.html", "text/html; charset=utf-8"),
     "/words/words.js": ("words.js", "text/javascript; charset=utf-8"),
@@ -1055,12 +1055,13 @@ def handler_for(service, words_store=None):
                     if self.path == "/api/words":
                         payload = {"word": vocabulary.add(data)}
                     else:
-                        if not isinstance(data, dict) or set(data) != {"id"}:
-                            raise ValueError("Expected word ID")
-                        if not vocabulary.remove(data["id"]):
+                        if not isinstance(data, dict) or set(data) != {"id", "learned"} or type(data["learned"]) is not bool:
+                            raise ValueError("Expected word ID and learned state")
+                        word = vocabulary.set_learned(data["id"], data["learned"])
+                        if word is None:
                             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Word not found"})
                             return
-                        payload = {"removed": True}
+                        payload = {"word": word}
                 self._send_json(HTTPStatus.OK, payload)
             except (ValueError, RecursionError):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid vocabulary fields or JSON"})

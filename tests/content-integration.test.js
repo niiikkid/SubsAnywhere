@@ -212,7 +212,7 @@ test('inline cell saves only its own translation, highlights repeats and refresh
       saves += 1;
       assert.deepEqual(JSON.parse(JSON.stringify(message.word)), word);
       if (rejectSave) return { ok: false, error: 'Запустите сервер Docker' };
-      words = [{ ...word, id: 1 }];
+      words = [{ ...word, id: 1, learned: false }];
       return { ok: true, data: { word: words[0] } };
     }
     if (message.type !== 'dualCaptions.caption.translate') return { ok: true };
@@ -260,6 +260,13 @@ test('inline cell saves only its own translation, highlights repeats and refresh
     cell.dispatch('focus'); cell.dispatch('blur');
     assert.equal(cell.style.backgroundColor, 'rgba(80, 170, 115, .18)');
   }
+  words = [{ ...word, id: 1, learned: true }];
+  harness.context.dispatch('focus');
+  await flush();
+  for (const cell of cells().slice(0, 2)) {
+    assert.equal(cell.style.backgroundColor, 'rgba(74, 176, 184, .16)');
+    assert.equal(cell.style.borderColor, 'rgba(112, 202, 207, .4)');
+  }
   click(cells()[2]);
   tooltip = overlay.children.at(-1);
   assert.match(allText(tooltip), /Перевод этой ячейки пока отсутствует/);
@@ -267,7 +274,7 @@ test('inline cell saves only its own translation, highlights repeats and refresh
   assert.equal(tooltip.children.find((child) => child.className === 'dual-captions-save-word').disabled, true);
   listener({ type: 'dualCaptions.content.settings', settings: { ...settings, inlineTranslations: false } }, {}, () => {});
   listener({ type: 'dualCaptions.content.settings', settings }, {}, () => {});
-  assert.equal(cells()[0].style.backgroundColor, 'rgba(80, 170, 115, .18)');
+  assert.equal(cells()[0].style.backgroundColor, 'rgba(74, 176, 184, .16)');
   words = [];
   harness.context.dispatch('focus');
   await flush();
