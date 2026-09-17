@@ -29,6 +29,7 @@ input { width: 100%; min-height: 38px; padding: 8px 12px; border: 1px solid #3c4
 input::placeholder { color: #9298a4; opacity: 1; }
 select { width: 100%; }
 .list-heading { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px 2px; gap: 16px; }
+.list-actions { display: flex; align-items: center; gap: 10px; }
 h2 { margin: 0; font-size: 14px; font-weight: 500; }
 #count { color: var(--muted); font-size: 13px; }
 .status { color: var(--muted); padding: 0 16px; margin: 6px 0 10px; font-size: 13px; overflow-wrap: anywhere; }
@@ -42,6 +43,18 @@ h2 { margin: 0; font-size: 14px; font-weight: 500; }
 .word-translation { margin: 0; color: #d2d5dd; overflow-wrap: anywhere; white-space: pre-wrap; }
 .learned { min-height: 34px; padding: 5px 10px; font-size: 12px; }
 .empty { padding: 40px 24px 48px; color: var(--muted); text-align: center; }
+.study-mode { padding: 20px 16px 18px; min-height: 420px; }
+.study-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.study-progress { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.study-card, .study-finish { display: flex; min-height: 278px; flex-direction: column; justify-content: center; align-items: center; padding: 28px 24px; margin: 18px 0; border: 1px solid var(--border); border-radius: 10px; background: #101215; text-align: center; }
+.study-language { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+.study-word { max-width: 100%; margin: 0; font-size: clamp(36px, 7vw, 72px); font-weight: 500; line-height: 1.15; overflow-wrap: anywhere; }
+.study-pinyin { max-width: 100%; margin: 14px 0 0; color: var(--accent); font-size: clamp(20px, 3vw, 30px); overflow-wrap: anywhere; }
+.study-translation { max-width: 760px; margin: 22px 0 0; color: #dce0eb; font-size: clamp(21px, 3.4vw, 32px); line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; }
+.study-finish h1 { margin: 0; font-size: clamp(28px, 4vw, 42px); font-weight: 500; }
+.study-finish p { margin: 12px 0 0; color: var(--muted); font-size: 16px; }
+.study-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.study-actions button { min-width: 150px; }
 footer { margin-top: 24px; color: var(--muted); font-size: 12px; }
 [hidden] { display: none !important; }
 @media (max-width: 650px) {
@@ -51,6 +64,8 @@ footer { margin-top: 24px; color: var(--muted); font-size: 12px; }
   #search { grid-column: 1 / -1; }
   .view-tabs { padding: 10px 12px 0; }
   .list-heading { padding: 10px 12px 2px; }
+  .study-mode { padding: 14px 12px; min-height: 360px; }
+  .study-card, .study-finish { min-height: 230px; padding: 24px 16px; }
   .status { padding: 0 12px; }
   .word-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 10px 12px; }
   .word-translation { grid-column: 1 / -1; grid-row: 2; }

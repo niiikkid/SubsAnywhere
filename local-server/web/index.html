@@ -6,27 +6,42 @@
   <meta name="color-scheme" content="dark">
   <title>Мой словарь — SubsAnywhere</title>
   <link rel="stylesheet" href="/words/words.css">
-  <script src="/words/words.js" defer></script>
+  <script type="module" src="/words/words.js"></script>
 </head>
 <body>
   <header class="site-header"><span class="brand">SubsAnywhere</span><span class="local-label">Словарь</span></header>
   <main>
     <section class="vocabulary" aria-label="Сохранённые слова">
-      <div class="toolbar">
-        <input id="search" type="search" aria-label="Поиск по слову, пиньиню или переводу" placeholder="Поиск по слову, пиньиню или переводу" autocomplete="off" maxlength="1000">
-        <select id="language" aria-label="Язык">
-          <option value="">Все языки</option><option value="zh">Китайский</option><option value="en">Английский</option>
-        </select>
-        <button id="refresh" type="button">Обновить</button>
+      <div id="list-controls">
+        <div class="toolbar">
+          <input id="search" type="search" aria-label="Поиск по слову, пиньиню или переводу" placeholder="Поиск по слову, пиньиню или переводу" autocomplete="off" maxlength="1000">
+          <select id="language" aria-label="Язык">
+            <option value="">Все языки</option><option value="zh">Китайский</option><option value="en">Английский</option>
+          </select>
+          <button id="refresh" type="button">Обновить</button>
+        </div>
+        <div class="view-tabs" role="tablist" aria-label="Состояние слов">
+          <button id="review-tab" type="button" role="tab" aria-selected="true">На повторение</button>
+          <button id="learned-tab" type="button" role="tab" aria-selected="false">Выученные</button>
+        </div>
       </div>
-      <div class="view-tabs" role="tablist" aria-label="Состояние слов">
-        <button id="review-tab" type="button" role="tab" aria-selected="true">На повторение</button>
-        <button id="learned-tab" type="button" role="tab" aria-selected="false">Выученные</button>
+      <div id="word-panel">
+        <div class="list-heading"><h2 id="list-title">На повторение</h2><div class="list-actions"><span id="count" aria-live="polite">—</span><button id="study-start" type="button">Повторять</button></div></div>
+        <p id="status" class="status" role="status" aria-live="polite">Загрузка словаря…</p>
+        <ul id="word-list" aria-label="Слова" aria-busy="true"></ul>
+        <div id="empty" class="empty" hidden></div>
       </div>
-      <div class="list-heading"><h2 id="list-title">На повторение</h2><span id="count" aria-live="polite">—</span></div>
-      <p id="status" class="status" role="status" aria-live="polite">Загрузка словаря…</p>
-      <ul id="word-list" aria-label="Слова" aria-busy="true"></ul>
-      <div id="empty" class="empty" hidden></div>
+      <section id="study-mode" class="study-mode" aria-labelledby="study-title" hidden>
+        <div class="study-header"><div><h2 id="study-title">Повторение слов</h2><p id="study-progress" class="study-progress" aria-live="polite"></p></div><button id="study-exit" type="button">Выйти</button></div>
+        <div id="study-card" class="study-card">
+          <p id="study-language" class="study-language"></p>
+          <h1 id="study-word" class="study-word" tabindex="-1"></h1>
+          <p id="study-pinyin" class="study-pinyin"></p>
+          <p id="study-translation" class="study-translation"></p>
+        </div>
+        <div id="study-finish" class="study-finish" hidden><h1>Все слова повторены</h1><p>Можно начать новый круг или вернуться к списку.</p></div>
+        <div class="study-actions"><button id="study-next" type="button">Следующее слово</button><button id="study-restart" type="button" hidden>Начать заново</button></div>
+      </section>
       <noscript><p class="empty">Для поиска и отметки слов включите JavaScript. Слова останутся на сервере.</p></noscript>
     </section>
     <footer>Слова хранятся на вашем локальном сервере. Никаких облачных запросов с этой страницы.</footer>

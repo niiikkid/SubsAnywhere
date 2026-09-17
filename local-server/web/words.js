@@ -1,6 +1,16 @@
 "use strict";
 
-(() => {
+export function studyDeck(words = []) {
+  return words.filter((word) => word && word.learned === false);
+}
+
+export function nextStudyPosition(position, total) {
+  const safeTotal = Number.isSafeInteger(total) && total > 0 ? total : 0;
+  const safePosition = Number.isSafeInteger(position) ? Math.min(Math.max(position, 0), safeTotal) : 0;
+  return Math.min(safePosition + 1, safeTotal);
+}
+
+if (typeof document !== "undefined") (() => {
   const list = document.getElementById("word-list");
   const search = document.getElementById("search");
   const language = document.getElementById("language");
@@ -11,10 +21,26 @@
   const reviewTab = document.getElementById("review-tab");
   const learnedTab = document.getElementById("learned-tab");
   const listTitle = document.getElementById("list-title");
+  const listControls = document.getElementById("list-controls");
+  const wordPanel = document.getElementById("word-panel");
+  const studyStart = document.getElementById("study-start");
+  const studyMode = document.getElementById("study-mode");
+  const studyExit = document.getElementById("study-exit");
+  const studyProgress = document.getElementById("study-progress");
+  const studyCard = document.getElementById("study-card");
+  const studyLanguage = document.getElementById("study-language");
+  const studyWord = document.getElementById("study-word");
+  const studyPinyin = document.getElementById("study-pinyin");
+  const studyTranslation = document.getElementById("study-translation");
+  const studyFinish = document.getElementById("study-finish");
+  const studyNext = document.getElementById("study-next");
+  const studyRestart = document.getElementById("study-restart");
   let words = [];
   let loaded = false;
   let busy = false;
   let view = "review";
+  let studyWords = [];
+  let studyPosition = 0;
 
   function searchable(value) {
     return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/gu, " ").trim();
@@ -90,11 +116,53 @@
     listTitle.textContent = view === "learned" ? "Выученные" : "На повторение";
     list.setAttribute("aria-label", listTitle.textContent);
     count.textContent = loaded ? `${visible.length} из ${inView.length}` : "—";
+    const availableForStudy = studyDeck(words).length;
+    studyStart.hidden = view !== "review";
+    studyStart.disabled = busy || availableForStudy === 0;
+    studyStart.textContent = `Повторять (${availableForStudy})`;
     empty.hidden = !loaded || visible.length > 0;
     empty.textContent = inView.length
       ? "Ничего не найдено. Попробуйте другой запрос или язык."
       : (view === "learned" ? "Пока нет выученных слов. Отмечайте их в списке «На повторение»."
         : "Пока здесь пусто. Сохраните первое слово из подсказки в субтитрах расширения.");
+  }
+
+  function renderStudy() {
+    const total = studyWords.length;
+    const complete = studyPosition >= total;
+    studyProgress.textContent = complete ? `Повторено: ${total} из ${total}` : `${studyPosition + 1} из ${total}`;
+    studyCard.hidden = complete;
+    studyFinish.hidden = !complete;
+    studyNext.hidden = complete;
+    studyRestart.hidden = !complete;
+    if (complete) return;
+    const word = studyWords[studyPosition];
+    studyLanguage.textContent = word.language === "zh" ? "Китайский" : "Английский";
+    studyWord.textContent = word.text;
+    studyWord.lang = word.language;
+    studyPinyin.textContent = word.pinyin;
+    studyPinyin.lang = "zh-Latn";
+    studyPinyin.hidden = !word.pinyin;
+    studyTranslation.textContent = word.translation;
+  }
+
+  function startStudy() {
+    studyWords = studyDeck(words);
+    if (!studyWords.length) return;
+    studyPosition = 0;
+    listControls.hidden = true;
+    wordPanel.hidden = true;
+    studyMode.hidden = false;
+    renderStudy();
+    studyWord.focus();
+  }
+
+  function exitStudy() {
+    studyMode.hidden = true;
+    listControls.hidden = false;
+    wordPanel.hidden = false;
+    render();
+    studyStart.focus();
   }
 
   async function load() {
@@ -146,6 +214,18 @@
   reviewTab.addEventListener("click", () => { view = "review"; render(); });
   learnedTab.addEventListener("click", () => { view = "learned"; render(); });
   refresh.addEventListener("click", load);
+  studyStart.addEventListener("click", startStudy);
+  studyExit.addEventListener("click", exitStudy);
+  studyNext.addEventListener("click", () => {
+    studyPosition = nextStudyPosition(studyPosition, studyWords.length);
+    renderStudy();
+    (studyPosition >= studyWords.length ? studyRestart : studyWord).focus();
+  });
+  studyRestart.addEventListener("click", () => {
+    studyPosition = 0;
+    renderStudy();
+    studyWord.focus();
+  });
   window.addEventListener("focus", load);
   load();
 })();
