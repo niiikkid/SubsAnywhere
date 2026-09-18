@@ -4,6 +4,8 @@ import { VocabularyClient } from '../vocabulary-client.js';
 
 const entry = { language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет' };
 const saved = { ...entry, id: 1, created_at: '2026-01-01T00:00:00Z', learned: false, explanation: '' };
+const sentenceEntry = { language: 'zh', text: '我已经吃过饭了。', pinyin: 'wǒ yǐjīng chī guò fàn le.', translation: 'Я уже поел.' };
+const savedSentence = { ...sentenceEntry, id: 7, created_at: '2026-01-02T00:00:00Z', learned: false, explanation: '' };
 
 test('vocabulary saves bounded JSON and verifies the persisted entry by reading it back', async () => {
   const calls = [];
@@ -58,4 +60,29 @@ test('vocabulary saves an explanation only after the server confirms it in the w
   assert.equal(calls[0].url, 'http://127.0.0.1:43817/api/words/explanation');
   assert.deepEqual(JSON.parse(calls[0].options.body), { id: saved.id, explanation });
   assert.equal(calls[1].options.method, 'GET');
+});
+
+test('sentences use their own API and are confirmed by reading the sentence list back', async () => {
+  const calls = [];
+  const client = new VocabularyClient(async (url, options) => {
+    calls.push({ url, options });
+    return Response.json(options.method === 'POST' ? { sentence: savedSentence } : { sentences: [savedSentence] });
+  });
+  assert.deepEqual(await client.saveSentence(sentenceEntry), { sentence: savedSentence });
+  assert.equal(calls[0].url, 'http://127.0.0.1:43817/api/sentences');
+  assert.deepEqual(JSON.parse(calls[0].options.body), sentenceEntry);
+  assert.equal(calls[1].url, 'http://127.0.0.1:43817/api/sentences');
+});
+
+test('sentence grammar explanations are saved only after readback confirmation', async () => {
+  const explanation = 'Yǐjīng и le показывают уже завершившееся действие. По-русски смысл передаётся словом «уже» и прошедшим временем.';
+  const explained = { ...savedSentence, explanation };
+  const calls = [];
+  const client = new VocabularyClient(async (url, options) => {
+    calls.push({ url, options });
+    return Response.json(options.method === 'POST' ? { sentence: explained } : { sentences: [explained] });
+  });
+  assert.deepEqual(await client.saveSentenceExplanation(savedSentence.id, explanation), { sentence: explained });
+  assert.equal(calls[0].url, 'http://127.0.0.1:43817/api/sentences/explanation');
+  assert.deepEqual(JSON.parse(calls[0].options.body), { id: savedSentence.id, explanation });
 });

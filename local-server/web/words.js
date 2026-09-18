@@ -21,8 +21,17 @@ export function studyPositionForWord(words = [], id) {
   return studyDeck(words).findIndex((word) => word.id === id);
 }
 
+export function learningText(item, kind = "words") {
+  if (!item || typeof item.text !== "string") return "";
+  return kind === "sentences" && item.language === "zh" && typeof item.pinyin === "string"
+    ? item.pinyin : item.text;
+}
+
 if (typeof document !== "undefined") (() => {
-  const STUDY_STORAGE_KEY = "subsanywhere.words.study.v1";
+  const STUDY_STORAGE_KEYS = {
+    words: "subsanywhere.words.study.v1",
+    sentences: "subsanywhere.sentences.study.v1"
+  };
   const list = document.getElementById("word-list");
   const search = document.getElementById("search");
   const language = document.getElementById("language");
@@ -30,6 +39,9 @@ if (typeof document !== "undefined") (() => {
   const status = document.getElementById("status");
   const empty = document.getElementById("empty");
   const refresh = document.getElementById("refresh");
+  const entityTabs = document.getElementById("entity-tabs");
+  const wordsTab = document.getElementById("words-tab");
+  const sentencesTab = document.getElementById("sentences-tab");
   const reviewTab = document.getElementById("review-tab");
   const learnedTab = document.getElementById("learned-tab");
   const listTitle = document.getElementById("list-title");
@@ -37,6 +49,7 @@ if (typeof document !== "undefined") (() => {
   const wordPanel = document.getElementById("word-panel");
   const studyStart = document.getElementById("study-start");
   const studyMode = document.getElementById("study-mode");
+  const studyTitle = document.getElementById("study-title");
   const studyExit = document.getElementById("study-exit");
   const studyProgress = document.getElementById("study-progress");
   const studyCard = document.getElementById("study-card");
@@ -47,18 +60,26 @@ if (typeof document !== "undefined") (() => {
   const studyExplanation = document.getElementById("study-explanation");
   const studyExplanationText = document.getElementById("study-explanation-text");
   const studyFinish = document.getElementById("study-finish");
+  const studyFinishTitle = document.getElementById("study-finish-title");
   const studyBack = document.getElementById("study-back");
   const studyLearned = document.getElementById("study-learned");
   const studyExplain = document.getElementById("study-explain");
   const studyNext = document.getElementById("study-next");
   const studyRestart = document.getElementById("study-restart");
   let words = [];
+  let sentences = [];
   let loaded = false;
   let busy = false;
   let view = "review";
+  let kind = "words";
   let studyWords = [];
   let studyPosition = 0;
   let studyExplanationOpen = false;
+
+  const currentItems = () => kind === "sentences" ? sentences : words;
+  const noun = (form) => kind === "sentences"
+    ? ({ one: "предложение", many: "предложения", genitive: "предложений" })[form]
+    : ({ one: "слово", many: "слова", genitive: "слов" })[form];
 
   function searchable(value) {
     return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/gu, " ").trim();
@@ -71,7 +92,7 @@ if (typeof document !== "undefined") (() => {
 
   function savedStudy() {
     try {
-      const value = JSON.parse(localStorage.getItem(STUDY_STORAGE_KEY));
+      const value = JSON.parse(localStorage.getItem(STUDY_STORAGE_KEYS[kind]));
       if (!value || !Array.isArray(value.ids) || !value.ids.length || value.ids.length > 10000
         || !value.ids.every(id => Number.isSafeInteger(id) && id > 0)
         || !Number.isSafeInteger(value.position) || value.position < 0 || value.position > value.ids.length) return null;
@@ -84,15 +105,16 @@ if (typeof document !== "undefined") (() => {
   function persistStudy() {
     if (!studyWords.length) return;
     try {
-      localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify({ ids: studyWords.map(word => word.id), position: studyPosition }));
+      localStorage.setItem(STUDY_STORAGE_KEYS[kind], JSON.stringify({ ids: studyWords.map(word => word.id), position: studyPosition }));
     } catch { /* Browser storage can be unavailable; the study itself still works. */ }
   }
 
   function clearSavedStudy() {
-    try { localStorage.removeItem(STUDY_STORAGE_KEY); } catch { /* Ignore unavailable browser storage. */ }
+    try { localStorage.removeItem(STUDY_STORAGE_KEYS[kind]); } catch { /* Ignore unavailable browser storage. */ }
   }
 
   function showStudy() {
+    entityTabs.hidden = true;
     listControls.hidden = true;
     wordPanel.hidden = true;
     studyMode.hidden = false;
@@ -102,7 +124,7 @@ if (typeof document !== "undefined") (() => {
   function restoreStudy() {
     const saved = savedStudy();
     if (!saved || !studyMode.hidden) return;
-    const byId = new Map(words.map(word => [word.id, word]));
+    const byId = new Map(currentItems().map(item => [item.id, item]));
     const restored = saved.ids.map(id => byId.get(id)).filter(Boolean);
     if (restored.length !== saved.ids.length) {
       clearSavedStudy();
@@ -128,15 +150,16 @@ if (typeof document !== "undefined") (() => {
     return response.json();
   }
 
-  async function readWords() {
-    const data = await request("/api/words");
-    if (!data || !Array.isArray(data.words) || data.words.some(word => (
-      !word || !Number.isSafeInteger(word.id) || word.id < 1 || !["zh", "en"].includes(word.language)
-      || !["text", "pinyin", "translation", "created_at", "explanation"].every(key => typeof word[key] === "string")
-      || word.explanation.length > 1200
-      || typeof word.learned !== "boolean"
-    ))) throw new Error("Сервер вернул неверный формат словаря. Обновите сервер и повторите попытку.");
-    return data.words;
+  async function readItems(type) {
+    const key = type === "sentences" ? "sentences" : "words";
+    const data = await request(`/api/${key}`);
+    if (!data || !Array.isArray(data[key]) || data[key].some(item => (
+      !item || !Number.isSafeInteger(item.id) || item.id < 1 || !["zh", "en"].includes(item.language)
+      || !["text", "pinyin", "translation", "created_at", "explanation"].every(field => typeof item[field] === "string")
+      || item.explanation.length > 1200
+      || typeof item.learned !== "boolean"
+    ))) throw new Error("Сервер вернул неверный формат списка. Обновите сервер и повторите попытку.");
+    return data[key];
   }
 
   function element(tag, className, text) {
@@ -148,17 +171,17 @@ if (typeof document !== "undefined") (() => {
 
   function render() {
     const query = searchable(search.value);
-    const inView = words.filter(word => word.learned === (view === "learned"));
+    const inView = currentItems().filter(word => word.learned === (view === "learned"));
     const visible = inView.filter(word => (!language.value || word.language === language.value)
       && (!query || [word.text, word.pinyin, word.translation].some(value => searchable(value).includes(query))));
     const fragment = document.createDocumentFragment();
     for (const word of visible) {
       const row = element("li", "word-row", "");
       const main = element("div", "word-main", "");
-      const text = element("h3", "word-text", word.text);
-      text.lang = word.language;
+      const text = element("h3", `word-text${kind === "sentences" ? " sentence-text" : ""}`, learningText(word, kind));
+      text.lang = kind === "sentences" && word.language === "zh" ? "zh-Latn" : word.language;
       main.append(text);
-      if (word.pinyin) {
+      if (kind === "words" && word.pinyin) {
         const pinyin = element("p", "word-pinyin", word.pinyin);
         pinyin.lang = "zh-Latn";
         main.append(pinyin);
@@ -166,18 +189,20 @@ if (typeof document !== "undefined") (() => {
       const learned = element("button", "learned", word.learned ? "Вернуть на повторение" : "Выучено ✓");
       learned.type = "button";
       learned.disabled = busy;
-      learned.title = word.learned ? "Вернуть слово в список на повторение" : "Отметить слово как выученное";
-      learned.setAttribute("aria-label", `${learned.title}: «${word.text}»`);
+      learned.title = word.learned ? `Вернуть ${noun("one")} в список на повторение` : `Отметить ${noun("one")} как выученное`;
+      learned.setAttribute("aria-label", `${learned.title}: «${learningText(word, kind)}»`);
       learned.addEventListener("click", () => setLearned(word, !word.learned));
       const translation = element("div", "word-translation", "");
       translation.append(element("p", "", word.translation));
       let details;
       if (word.explanation) {
         details = element("details", "word-explanation", "");
-        details.append(element("summary", "", "Короткое объяснение"), element("p", "", word.explanation));
+        details.append(element("summary", "", kind === "sentences" ? "Разбор грамматики" : "Короткое объяснение"), element("p", "", word.explanation));
         translation.append(details);
       }
-      const explain = element("button", "explain", word.explanation ? "Объяснение" : "Объяснить");
+      const explain = element("button", "explain", word.explanation
+        ? (kind === "sentences" ? "Разбор" : "Объяснение")
+        : (kind === "sentences" ? "Разобрать" : "Объяснить"));
       explain.type = "button";
       explain.disabled = busy;
       explain.addEventListener("click", () => word.explanation ? details.toggleAttribute("open") : explainWord(word));
@@ -189,25 +214,33 @@ if (typeof document !== "undefined") (() => {
     list.replaceChildren(fragment);
     list.setAttribute("aria-busy", String(busy));
     refresh.disabled = busy;
+    wordsTab.disabled = busy;
+    sentencesTab.disabled = busy;
     reviewTab.setAttribute("aria-selected", String(view === "review"));
     learnedTab.setAttribute("aria-selected", String(view === "learned"));
+    wordsTab.setAttribute("aria-selected", String(kind === "words"));
+    sentencesTab.setAttribute("aria-selected", String(kind === "sentences"));
+    search.placeholder = kind === "sentences" ? "Поиск по пиньиню или переводу" : "Поиск по слову, пиньиню или переводу";
+    search.setAttribute("aria-label", search.placeholder);
     listTitle.textContent = view === "learned" ? "Выученные" : "На повторение";
-    list.setAttribute("aria-label", listTitle.textContent);
+    list.setAttribute("aria-label", `${listTitle.textContent}: ${kind === "sentences" ? "предложения" : "слова"}`);
     count.textContent = loaded ? `${visible.length} из ${inView.length}` : "—";
-    const availableForStudy = studyDeck(words).length;
+    const availableForStudy = studyDeck(currentItems()).length;
     studyStart.hidden = view !== "review";
     studyStart.disabled = busy || availableForStudy === 0;
     studyStart.textContent = `Повторять (${availableForStudy})`;
     empty.hidden = !loaded || visible.length > 0;
     empty.textContent = inView.length
       ? "Ничего не найдено. Попробуйте другой запрос или язык."
-      : (view === "learned" ? "Пока нет выученных слов. Отмечайте их в списке «На повторение»."
-        : "Пока здесь пусто. Сохраните первое слово из подсказки в субтитрах расширения.");
+      : (view === "learned" ? `Пока нет выученных ${noun("genitive")}. Отмечайте их в списке «На повторение».`
+        : `Пока здесь пусто. Сохраните первое ${noun("one")} из субтитров расширения.`);
   }
 
   function renderStudy() {
     const total = studyWords.length;
     const complete = studyPosition >= total;
+    studyTitle.textContent = `Повторение ${noun("genitive")}`;
+    studyFinishTitle.textContent = `Все ${noun("many")} повторены`;
     studyProgress.textContent = complete ? `Повторено: ${total} из ${total}` : `${studyPosition + 1} из ${total}`;
     studyCard.hidden = complete;
     studyFinish.hidden = !complete;
@@ -220,22 +253,24 @@ if (typeof document !== "undefined") (() => {
     if (complete) return;
     const word = studyWords[studyPosition];
     studyLanguage.textContent = word.language === "zh" ? "Китайский" : "Английский";
-    studyWord.textContent = word.text;
-    studyWord.lang = word.language;
-    studyPinyin.textContent = word.pinyin;
+    studyWord.textContent = learningText(word, kind);
+    studyWord.lang = kind === "sentences" && word.language === "zh" ? "zh-Latn" : word.language;
+    studyPinyin.textContent = kind === "words" ? word.pinyin : "";
     studyPinyin.lang = "zh-Latn";
-    studyPinyin.hidden = !word.pinyin;
+    studyPinyin.hidden = kind !== "words" || !word.pinyin;
     studyTranslation.textContent = word.translation;
     studyLearned.disabled = busy;
-    studyLearned.textContent = word.learned ? "Вернуть на повторение" : "Слово выучено";
+    studyLearned.textContent = word.learned ? "Вернуть на повторение" : `${kind === "sentences" ? "Предложение" : "Слово"} выучено`;
     studyExplain.disabled = busy;
-    studyExplain.textContent = word.explanation ? "Показать объяснение" : "Объяснить";
+    studyExplain.textContent = word.explanation
+      ? (kind === "sentences" ? "Показать разбор" : "Показать объяснение")
+      : (kind === "sentences" ? "Разобрать" : "Объяснить");
     studyExplanation.hidden = !word.explanation || !studyExplanationOpen;
     studyExplanationText.textContent = word.explanation || "";
   }
 
   function startStudy() {
-    studyWords = studyDeck(words);
+    studyWords = studyDeck(currentItems());
     if (!studyWords.length) return;
     studyPosition = 0;
     studyExplanationOpen = false;
@@ -249,6 +284,7 @@ if (typeof document !== "undefined") (() => {
     studyWords = [];
     studyPosition = 0;
     studyMode.hidden = true;
+    entityTabs.hidden = false;
     listControls.hidden = false;
     wordPanel.hidden = false;
     render();
@@ -261,7 +297,7 @@ if (typeof document !== "undefined") (() => {
     message("Обновление словаря…");
     render();
     try {
-      words = await readWords();
+      [words, sentences] = await Promise.all([readItems("words"), readItems("sentences")]);
       loaded = true;
       restoreStudy();
       message("");
@@ -278,24 +314,26 @@ if (typeof document !== "undefined") (() => {
   async function setLearned(word, learned, preserveStudy = false) {
     if (busy) return;
     busy = true;
-    message(learned ? "Отмечаем слово как выученное…" : "Возвращаем слово на повторение…");
+    message(learned ? `Отмечаем ${noun("one")} как выученное…` : `Возвращаем ${noun("one")} на повторение…`);
     render();
     try {
-      const result = await request("/api/words/learned", { id: word.id, learned });
-      if (result?.word?.id !== word.id || result.word.learned !== learned) {
-        throw new Error("Сервер не подтвердил отметку слова. Обновите список.");
+      const key = kind === "sentences" ? "sentence" : "word";
+      const result = await request(`/api/${kind}/learned`, { id: word.id, learned });
+      if (result?.[key]?.id !== word.id || result[key].learned !== learned) {
+        throw new Error(`Сервер не подтвердил отметку ${noun("one")}. Обновите список.`);
       }
-      const fresh = await readWords();
+      const fresh = await readItems(kind);
       if (fresh.find(item => item.id === word.id)?.learned !== learned) {
-        throw new Error("Состояние слова не сохранилось. Обновите список.");
+        throw new Error(`Состояние ${noun("one")} не сохранилось. Обновите список.`);
       }
-      words = fresh;
+      if (kind === "sentences") sentences = fresh;
+      else words = fresh;
       studyWords = studyWords.map(item => item.id === word.id ? fresh.find(candidate => candidate.id === word.id) : item);
-      message(learned ? `«${word.text}» перенесено в выученные.` : `«${word.text}» возвращено на повторение.`);
+      message(learned ? `«${learningText(word, kind)}» перенесено в выученные.` : `«${learningText(word, kind)}» возвращено на повторение.`);
       if (preserveStudy) persistStudy();
       else search.focus();
     } catch {
-      message("Не удалось подтвердить состояние слова. Обновите список, чтобы проверить его.", true);
+      message(`Не удалось подтвердить состояние ${noun("one")}. Обновите список, чтобы проверить его.`, true);
     } finally {
       busy = false;
       render();
@@ -304,13 +342,14 @@ if (typeof document !== "undefined") (() => {
   }
 
   function requestExplanation(id) {
+    const requestKind = kind;
     const requestId = crypto.randomUUID().replace(/-/gu, "");
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => finish(new Error("Расширение не ответило. Перезагрузите его на странице chrome://extensions.")), 45000);
       function receive(event) {
         const data = event.data;
         if (event.source !== window || event.origin !== location.origin || !data || data.type !== "subsanywhere.words.explain.result" || data.requestId !== requestId) return;
-        finish(data.ok ? data.word : new Error(data.error || "Не удалось получить объяснение"));
+        finish(data.ok ? (requestKind === "sentences" ? data.sentence : data.word) : new Error(data.error || "Не удалось получить объяснение"));
       }
       function finish(result) {
         clearTimeout(timeout);
@@ -318,25 +357,27 @@ if (typeof document !== "undefined") (() => {
         result instanceof Error ? reject(result) : resolve(result);
       }
       window.addEventListener("message", receive);
-      window.postMessage({ type: "subsanywhere.words.explain", requestId, id }, location.origin);
+      window.postMessage({ type: "subsanywhere.words.explain", requestId, id, kind: requestKind }, location.origin);
     });
   }
 
   async function explainWord(word) {
     if (busy) return;
+    const requestKind = kind;
     busy = true;
-    message("ИИ готовит короткое объяснение…");
+    message(kind === "sentences" ? "ИИ готовит короткий разбор грамматики…" : "ИИ готовит короткое объяснение…");
     render();
     renderStudy();
     try {
       const fresh = await requestExplanation(word.id);
       if (!fresh || fresh.id !== word.id || typeof fresh.explanation !== "string" || !fresh.explanation) {
-        throw new Error("Расширение не подтвердило объяснение слова.");
+        throw new Error(kind === "sentences" ? "Расширение не подтвердило разбор предложения." : "Расширение не подтвердило объяснение слова.");
       }
-      words = words.map(item => item.id === fresh.id ? fresh : item);
+      if (requestKind === "sentences") sentences = sentences.map(item => item.id === fresh.id ? fresh : item);
+      else words = words.map(item => item.id === fresh.id ? fresh : item);
       studyWords = studyWords.map(item => item.id === fresh.id ? fresh : item);
       studyExplanationOpen = true;
-      message(`Объяснение для «${word.text}» сохранено.`);
+      message(`${kind === "sentences" ? "Разбор" : "Объяснение"} для «${learningText(word, kind)}» сохранён.`);
     } catch (error) {
       message(error instanceof Error ? error.message : "Не удалось получить объяснение.", true);
     } finally {
@@ -348,6 +389,8 @@ if (typeof document !== "undefined") (() => {
 
   search.addEventListener("input", render);
   language.addEventListener("change", render);
+  wordsTab.addEventListener("click", () => { kind = "words"; search.value = ""; render(); restoreStudy(); });
+  sentencesTab.addEventListener("click", () => { kind = "sentences"; search.value = ""; render(); restoreStudy(); });
   reviewTab.addEventListener("click", () => { view = "review"; render(); });
   learnedTab.addEventListener("click", () => { view = "learned"; render(); });
   refresh.addEventListener("click", load);

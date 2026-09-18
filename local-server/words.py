@@ -59,6 +59,29 @@ def validate_word(payload) -> dict:
     return {"language": language, "text": text, "pinyin": pinyin, "translation": translation}
 
 
+def validate_sentence(payload) -> dict:
+    if not isinstance(payload, dict) or set(payload) != WORD_FIELDS:
+        raise ValueError("Expected language, text, pinyin and translation")
+    language = payload["language"]
+    if not isinstance(language, str) or language not in {"zh", "en"}:
+        raise ValueError("Invalid sentence language")
+    text = _field(payload["text"], 500, collapse=True)
+    pinyin = _field(payload["pinyin"], 500, allow_empty=language == "en", collapse=True)
+    translation = _field(payload["translation"], 1200)
+    if language == "zh":
+        if not HAN.search(text):
+            raise ValueError("Chinese sentence must contain Han characters")
+        if not any("LATIN" in unicodedata.name(char, "") for char in pinyin) or any(
+            char.isalpha() and "LATIN" not in unicodedata.name(char, "") for char in pinyin
+        ):
+            raise ValueError("Invalid sentence pinyin")
+    elif pinyin or not re.search(r"[A-Za-z]", text) or any(
+        char.isalpha() and "LATIN" not in unicodedata.name(char, "") for char in text
+    ):
+        raise ValueError("English sentence requires English text and empty pinyin")
+    return {"language": language, "text": text, "pinyin": pinyin, "translation": translation}
+
+
 def validate_word_id(value) -> int:
     if type(value) is not int or not 1 <= value <= MAX_SAFE_ID:
         raise ValueError("Invalid word ID")
@@ -102,6 +125,21 @@ class WordsStore:
                 connection.execute("ALTER TABLE words ADD COLUMN learned INTEGER NOT NULL DEFAULT 0 CHECK (learned IN (0, 1))")
             if "explanation" not in columns:
                 connection.execute("ALTER TABLE words ADD COLUMN explanation TEXT NOT NULL DEFAULT ''")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS sentences (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id <= 9007199254740991),
+                    language TEXT NOT NULL CHECK (language IN ('zh', 'en')),
+                    text TEXT NOT NULL,
+                    pinyin TEXT NOT NULL,
+                    translation TEXT NOT NULL,
+                    explanation TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    learned INTEGER NOT NULL DEFAULT 0 CHECK (learned IN (0, 1)),
+                    text_key TEXT NOT NULL,
+                    pinyin_key TEXT NOT NULL,
+                    UNIQUE (language, text_key, pinyin_key)
+                )
+            """)
             with connection:
                 yield connection
         finally:
@@ -137,6 +175,30 @@ class WordsStore:
             ).fetchone()
             return self._public_word(row)
 
+    def list_sentences(self) -> list[dict]:
+        with self._connection() as connection:
+            return [self._public_word(row) for row in connection.execute(
+                f"SELECT {PUBLIC_COLUMNS} FROM sentences ORDER BY id DESC"
+            )]
+
+    def add_sentence(self, payload) -> dict:
+        sentence = validate_sentence(payload)
+        text_key = sentence["text"].lower() if sentence["language"] == "en" else sentence["text"]
+        pinyin_key = sentence["pinyin"].lower()
+        created_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        with self._connection() as connection:
+            connection.execute("""
+                INSERT INTO sentences (language, text, pinyin, translation, created_at, text_key, pinyin_key)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (language, text_key, pinyin_key) DO NOTHING
+            """, (sentence["language"], sentence["text"], sentence["pinyin"], sentence["translation"],
+                  created_at, text_key, pinyin_key))
+            row = connection.execute(
+                f"SELECT {PUBLIC_COLUMNS} FROM sentences WHERE language = ? AND text_key = ? AND pinyin_key = ?",
+                (sentence["language"], text_key, pinyin_key),
+            ).fetchone()
+            return self._public_word(row)
+
     def set_learned(self, identifier, learned: bool) -> dict | None:
         identifier = validate_word_id(identifier)
         if type(learned) is not bool:
@@ -155,6 +217,27 @@ class WordsStore:
             connection.execute("UPDATE words SET explanation = ? WHERE id = ?", (explanation, identifier))
             row = connection.execute(
                 f"SELECT {PUBLIC_COLUMNS} FROM words WHERE id = ?", (identifier,)
+            ).fetchone()
+            return self._public_word(row) if row else None
+
+    def set_sentence_learned(self, identifier, learned: bool) -> dict | None:
+        identifier = validate_word_id(identifier)
+        if type(learned) is not bool:
+            raise ValueError("Invalid learned state")
+        with self._connection() as connection:
+            connection.execute("UPDATE sentences SET learned = ? WHERE id = ?", (int(learned), identifier))
+            row = connection.execute(
+                f"SELECT {PUBLIC_COLUMNS} FROM sentences WHERE id = ?", (identifier,)
+            ).fetchone()
+            return self._public_word(row) if row else None
+
+    def set_sentence_explanation(self, identifier, explanation: str) -> dict | None:
+        identifier = validate_word_id(identifier)
+        explanation = _field(explanation, MAX_EXPLANATION_CHARS)
+        with self._connection() as connection:
+            connection.execute("UPDATE sentences SET explanation = ? WHERE id = ?", (explanation, identifier))
+            row = connection.execute(
+                f"SELECT {PUBLIC_COLUMNS} FROM sentences WHERE id = ?", (identifier,)
             ).fetchone()
             return self._public_word(row) if row else None
 

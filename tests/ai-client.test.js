@@ -493,7 +493,29 @@ test('word explanation uses the active provider and returns only a concise saved
 test('word explanation rejects Chinese characters instead of saving them', async () => {
   const client = new AIClient(async () => Response.json({ choices: [{ message: { content: JSON.stringify({
     explanation: '你好 — приветствие.',
-  }) } }] }), { async getActive() { return { provider: 'deepseek', apiKey: 'test-key', model: 'deepseek-chat' }; } });
+  }) } }] }), { async getActive() { return { provider: 'deepseek', apiKey: 'fixture-key', model: 'deepseek-chat' }; } });
 
   await assert.rejects(client.explainWord({ language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет' }), /иероглифы/);
+});
+
+test('sentence explanation asks for a concise Russian grammar comparison and uses pinyin for Chinese', async () => {
+  const requests = [];
+  const client = new AIClient(async (url, options) => {
+    requests.push({ url, options });
+    return Response.json({ choices: [{ message: { content: JSON.stringify({
+      explanation: 'Yǐjīng и le показывают, что действие уже завершилось. По-русски это обычно передаётся словом «уже» и прошедшим временем.',
+    }) } }] });
+  }, { async getActive() { return { provider: 'deepseek', apiKey: 'fixture-key', model: 'deepseek-chat' }; } });
+
+  const explanation = await client.explainSentence({
+    language: 'zh', text: '我已经吃过饭了。', pinyin: 'wǒ yǐjīng chī guò fàn le.', translation: 'Я уже поел.',
+  });
+  assert.match(explanation, /Yǐjīng/iu);
+  const body = JSON.parse(requests[0].options.body);
+  assert.match(body.messages[0].content, /grammar/i);
+  assert.match(body.messages[0].content, /Russian-speaking learner/i);
+  assert.match(body.messages[0].content, /never write Han characters/i);
+  assert.deepEqual(JSON.parse(body.messages[1].content), {
+    language: 'zh', text: '我已经吃过饭了。', pinyin: 'wǒ yǐjīng chī guò fàn le.', translation: 'Я уже поел.',
+  });
 });

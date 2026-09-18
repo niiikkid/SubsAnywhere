@@ -13,6 +13,8 @@
     CONTENT_POSITION_PATCH: 'dualCaptions.content.positionPatch',
     WORDS_LIST: 'dualCaptions.words.list',
     WORDS_SAVE: 'dualCaptions.words.save',
+    SENTENCES_LIST: 'dualCaptions.sentences.list',
+    SENTENCES_SAVE: 'dualCaptions.sentences.save',
 
     CONTENT_RESET: 'dualCaptions.content.reset',
   });
@@ -43,11 +45,18 @@
       captionLayoutKey: '',
       wordCells: [],
       wordButton: null,
+      sentenceButton: null,
+      sentenceCharacters: null,
+      sentence: null,
     };
     let savedWords = new Map();
     let wordsRequest = null;
     let lastWordsSync = -Infinity;
     let wordsRevision = 0;
+    let savedSentences = new Map();
+    let sentencesRequest = null;
+    let lastSentencesSync = -Infinity;
+    let sentencesRevision = 0;
     const builtInTrackResolver = runtime.createBuiltInTrackResolver();
     const originalTrackModes = new Map();
     const localBuiltInTracks = new Map();
@@ -70,7 +79,9 @@
     function cancelPendingWork() {
       lifecycle += 1;
       wordsRevision += 1;
+      sentencesRevision += 1;
       lastWordsSync = -Infinity;
+      lastSentencesSync = -Infinity;
       queuedTranslations.length = 0;
       queuedTranslationSet.clear();
       clearTimeout(translationTimer);
@@ -166,6 +177,10 @@
         clean(word.pinyin).toLowerCase()]);
     }
 
+    function sentenceKey(sentence) {
+      return wordKey(sentence);
+    }
+
     function updateSavedWords() {
       for (const { cell, key } of state.wordCells) {
         const word = key ? savedWords.get(key) : null;
@@ -195,6 +210,86 @@
           savedWords = new Map(response.data.words.map((word) => [wordKey(word), word]));
           updateSavedWords();
         }).catch(() => undefined).finally(() => { wordsRequest = null; });
+    }
+
+    function updateSavedSentence() {
+      const saved = Boolean(state.sentence && savedSentences.has(sentenceKey(state.sentence)));
+      if (state.sentenceCharacters) {
+        state.sentenceCharacters.style.color = saved ? 'rgba(151, 213, 169, .88)' : 'inherit';
+        state.sentenceCharacters.style.opacity = saved ? '.88' : '.68';
+      }
+      if (state.sentenceButton && !state.sentenceButton.saving) {
+        state.sentenceButton.textContent = saved ? '✓ Предложение сохранено' : 'Сохранить предложение';
+        state.sentenceButton.disabled = saved || !state.sentence;
+      }
+    }
+
+    function syncSentences(force = false) {
+      if (!state.active || destroyed || sentencesRequest || (!force && Date.now() - lastSentencesSync < 15000)) return;
+      lastSentencesSync = Date.now();
+      const generation = lifecycle;
+      const revision = sentencesRevision;
+      sentencesRequest = Promise.resolve().then(() => sendMessage({ type: MESSAGE.SENTENCES_LIST }))
+        .then((response) => {
+          if (generation !== lifecycle || revision !== sentencesRevision || destroyed
+            || !response?.ok || !Array.isArray(response.data?.sentences)) return;
+          savedSentences = new Map(response.data.sentences.map((sentence) => [sentenceKey(sentence), sentence]));
+          updateSavedSentence();
+        }).catch(() => undefined).finally(() => { sentencesRequest = null; });
+    }
+
+    function captionSentence(descriptor, items) {
+      const sentenceItem = Array.isArray(items)
+        ? items.find((item) => item?.isSentenceTranslation && typeof item.dictionary === 'string' && item.dictionary.trim())
+        : null;
+      if (!sentenceItem) return null;
+      return {
+        language: descriptor.characters ? 'zh' : 'en',
+        text: descriptor.sourceText,
+        pinyin: descriptor.characters ? descriptor.displayText : '',
+        translation: sentenceItem.dictionary.trim(),
+      };
+    }
+
+    function appendSentenceButton(descriptor, items) {
+      if (!descriptor.characters) {
+        state.sentence = null;
+        return;
+      }
+      state.sentence = captionSentence(descriptor, items);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'dual-captions-save-sentence';
+      button.style.cssText = 'display:block;width:max-content;max-width:100%;margin:3px auto 0;padding:2px 7px;border:1px solid rgba(126,190,146,.38);border-radius:5px;background:rgba(66,120,82,.16);color:#dce8df;font:600 10px/1.25 Arial,sans-serif;white-space:normal;cursor:pointer;pointer-events:auto;';
+      button.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        if (!state.sentence || button.disabled || button.saving) return;
+        const sentence = state.sentence;
+        const generation = lifecycle;
+        sentencesRevision += 1;
+        button.saving = true;
+        button.disabled = true;
+        button.textContent = 'Сохраняем предложение…';
+        try {
+          const response = await sendMessage({ type: MESSAGE.SENTENCES_SAVE, sentence });
+          if (!response?.ok || !response.data?.sentence) throw new Error(response?.error || 'Не удалось сохранить предложение');
+          if (generation !== lifecycle || destroyed) return;
+          savedSentences.set(sentenceKey(response.data.sentence), response.data.sentence);
+        } catch (error) {
+          button.failed = true;
+          button.title = error?.message || 'Не удалось сохранить предложение';
+        } finally {
+          button.saving = false;
+          sentencesRevision += 1;
+          if (generation === lifecycle && !destroyed) {
+            updateSavedSentence();
+            if (button.failed && !button.disabled) button.textContent = 'Не удалось сохранить — повторить';
+          }
+        }
+      });
+      state.second.append(button);
+      state.sentenceButton = button;
+      updateSavedSentence();
     }
 
     function cellWord(segment, descriptor) {
@@ -676,6 +771,9 @@
       state.inlineCells = null;
       state.sentenceTranslationLine = null;
       state.characterLine = null;
+      state.sentenceButton = null;
+      state.sentenceCharacters = null;
+      state.sentence = null;
       state.captionLayoutKey = '';
       dismissMeaningPreview();
       dismissTooltip();
@@ -690,16 +788,22 @@
         target = document.createElement('div');
         target.style.cssText = 'pointer-events:auto;';
         const characters = document.createElement('div');
+        characters.className = 'dual-captions-sentence-characters';
         characters.textContent = descriptor.characters;
         characters.style.cssText = 'margin-top:2px;color:inherit;font-size:.72em;font-weight:600;line-height:1.15;opacity:.68;pointer-events:none;';
         state.second.append(target, characters);
         state.characterLine = characters;
+        state.sentenceCharacters = characters;
       }
       if (state.settings.inlineTranslations && items?.length) {
-        if (renderInlineCaption(target, descriptor.displayText, items, descriptor)) return;
+        if (renderInlineCaption(target, descriptor.displayText, items, descriptor)) {
+          appendSentenceButton(descriptor, items);
+          return;
+        }
       }
       if (!items || !items.length) {
         renderPendingCaption(target, descriptor.displayText);
+        appendSentenceButton(descriptor, items);
         if (!items) requestTranslation(descriptor, true);
         return;
       }
@@ -720,6 +824,7 @@
         });
         target.append(phrase);
       }
+      appendSentenceButton(descriptor, items);
     }
 
     function restoreTrackMode(track) {
@@ -849,6 +954,7 @@
       }
       ensureOverlay();
       if (state.settings.inlineTranslations) syncWords();
+      syncSentences();
       for (const track of video.textTracks) {
         if (track.kind === 'subtitles' || track.kind === 'captions') {
           if (!originalTrackModes.has(track)) originalTrackModes.set(track, track.mode);
@@ -972,7 +1078,7 @@
 
     for (const [target, type, listener, options] of [
       [window, 'resize', positionOverlay],
-      [window, 'focus', () => { if (state.settings.inlineTranslations) syncWords(true); }],
+      [window, 'focus', () => { if (state.settings.inlineTranslations) syncWords(true); syncSentences(true); }],
       [window, 'scroll', positionOverlay, true],
       [document, 'fullscreenchange', positionOverlay],
       [document, 'webkitfullscreenchange', positionOverlay],

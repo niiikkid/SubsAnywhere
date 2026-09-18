@@ -2,7 +2,7 @@ name: subsanywhere
 
 services:
   subtitles:
-    image: subsanywhere-server:0.9.0
+    image: subsanywhere-server:0.10.0
     build:
       context: .
     init: true
@@ -40,7 +40,7 @@ services:
         max-file: "3"
 
   model-import:
-    image: subsanywhere-server:0.9.0
+    image: subsanywhere-server:0.10.0
     profiles: [tools]
     init: true
     network_mode: none

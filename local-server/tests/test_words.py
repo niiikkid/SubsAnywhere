@@ -18,6 +18,10 @@ from words import WordsStore, default_words_path
 
 ZH = {"language": "zh", "text": "你好", "pinyin": "nǐ hǎo", "translation": "привет"}
 EN = {"language": "en", "text": "hello", "pinyin": "", "translation": "привет"}
+ZH_SENTENCE = {
+    "language": "zh", "text": "我已经吃过饭了。", "pinyin": "wǒ yǐjīng chī guò fàn le.",
+    "translation": "Я уже поел.",
+}
 CLIENT = {"X-SubsAnywhere-Client": "extension-v1"}
 
 
@@ -100,6 +104,20 @@ class WordsStoreTests(unittest.TestCase):
         self.store.add({**ZH, "text": "行", "pinyin": "xíng"})
         self.store.add({**ZH, "text": "行", "pinyin": "háng"})
         self.assertEqual(len(self.store.list()), 2)
+
+    def test_sentences_are_persisted_separately_with_learning_and_grammar_state(self):
+        sentence = self.store.add_sentence(ZH_SENTENCE)
+        self.assertEqual(set(sentence), {
+            "id", "language", "text", "pinyin", "translation", "explanation", "created_at", "learned",
+        })
+        self.assertFalse(sentence["learned"])
+        self.assertEqual(self.store.list(), [])
+        self.assertEqual(WordsStore(self.path).list_sentences(), [sentence])
+        self.assertTrue(self.store.set_sentence_learned(sentence["id"], True)["learned"])
+        explanation = "Yǐjīng и le показывают, что действие уже завершилось. По-русски это обычно передаётся словом «уже» и прошедшим временем."
+        explained = self.store.set_sentence_explanation(sentence["id"], explanation)
+        self.assertEqual(explained["explanation"], explanation)
+        self.assertEqual(self.store.add_sentence({**ZH_SENTENCE, "translation": "Другой перевод"})["id"], sentence["id"])
 
     def test_normalized_identity_preserves_first_display_and_translation(self):
         first = self.store.add({**EN, "text": "  Hello   World  "})
@@ -186,6 +204,18 @@ class WordsHTTPTests(unittest.TestCase):
         explained = {**word, "learned": True, "explanation": explanation}
         self.assertEqual((status, json.loads(body)), (200, {"word": explained}))
         self.assertEqual(json.loads(self.request()[2]), {"words": [explained]})
+
+    def test_sentence_api_has_an_independent_lifecycle(self):
+        status, _, body = self.request("POST", "/api/sentences", ZH_SENTENCE)
+        self.assertEqual(status, 200)
+        sentence = json.loads(body)["sentence"]
+        self.assertEqual(json.loads(self.request(path="/api/sentences")[2]), {"sentences": [sentence]})
+        status, _, body = self.request("POST", "/api/sentences/learned", {"id": sentence["id"], "learned": True})
+        self.assertEqual((status, json.loads(body)["sentence"]["learned"]), (200, True))
+        explanation = "Yǐjīng и le показывают уже завершившееся действие. По-русски смысл передаётся словом «уже» и прошедшим временем."
+        status, _, body = self.request("POST", "/api/sentences/explanation", {"id": sentence["id"], "explanation": explanation})
+        self.assertEqual((status, json.loads(body)["sentence"]["explanation"]), (200, explanation))
+        self.assertEqual(self.store.list(), [])
 
     def test_api_returns_complete_list_without_hidden_limit(self):
         saved = [self.store.add({**EN, "text": f"word {index}"}) for index in range(205)]

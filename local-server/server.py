@@ -908,7 +908,10 @@ class SubtitleService:
         }
 
 
-WORDS_ROUTES = frozenset({"/api/words", "/api/words/learned", "/api/words/explanation"})
+WORDS_ROUTES = frozenset({
+    "/api/words", "/api/words/learned", "/api/words/explanation",
+    "/api/sentences", "/api/sentences/learned", "/api/sentences/explanation",
+})
 WORDS_ASSETS = {
     "/words": ("index.html", "text/html; charset=utf-8"),
     "/words/words.js": ("words.js", "text/javascript; charset=utf-8"),
@@ -960,7 +963,7 @@ def handler_for(service, words_store=None):
             if self.headers.get_all("Transfer-Encoding") or len(lengths) > 1 or (lengths and not re.fullmatch(r"[0-9]{1,10}", lengths[0])):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid request framing"})
                 return False
-            # JSON bodies are limited to the two exact vocabulary POST routes.
+            # JSON bodies are limited to the exact learning-panel POST routes.
             # Subtitle endpoints retain their no-body contract.
             words_post = self.command == "POST" and self.path in WORDS_ROUTES
             if words_post and not lengths:
@@ -1000,7 +1003,7 @@ def handler_for(service, words_store=None):
             if not self._authorized():
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden client"})
                 return
-            if self.path == "/api/words":
+            if self.path in {"/api/words", "/api/sentences"}:
                 self._run_words(write=False)
                 return
             actions = {
@@ -1030,7 +1033,8 @@ def handler_for(service, words_store=None):
         def _run_words(self, *, write: bool) -> None:
             try:
                 if not write:
-                    payload = {"words": vocabulary.list()}
+                    payload = ({"sentences": vocabulary.list_sentences()} if self.path == "/api/sentences"
+                               else {"words": vocabulary.list()})
                 else:
                     length = int(self.headers["Content-Length"])
                     try:
@@ -1062,7 +1066,7 @@ def handler_for(service, words_store=None):
                             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Word not found"})
                             return
                         payload = {"word": word}
-                    else:
+                    elif self.path == "/api/words/explanation":
                         if not isinstance(data, dict) or set(data) != {"id", "explanation"}:
                             raise ValueError("Expected word ID and explanation")
                         word = vocabulary.set_explanation(data["id"], data["explanation"])
@@ -1070,6 +1074,24 @@ def handler_for(service, words_store=None):
                             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Word not found"})
                             return
                         payload = {"word": word}
+                    elif self.path == "/api/sentences":
+                        payload = {"sentence": vocabulary.add_sentence(data)}
+                    elif self.path == "/api/sentences/learned":
+                        if not isinstance(data, dict) or set(data) != {"id", "learned"} or type(data["learned"]) is not bool:
+                            raise ValueError("Expected sentence ID and learned state")
+                        sentence = vocabulary.set_sentence_learned(data["id"], data["learned"])
+                        if sentence is None:
+                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Sentence not found"})
+                            return
+                        payload = {"sentence": sentence}
+                    else:
+                        if not isinstance(data, dict) or set(data) != {"id", "explanation"}:
+                            raise ValueError("Expected sentence ID and explanation")
+                        sentence = vocabulary.set_sentence_explanation(data["id"], data["explanation"])
+                        if sentence is None:
+                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Sentence not found"})
+                            return
+                        payload = {"sentence": sentence}
                 self._send_json(HTTPStatus.OK, payload)
             except (ValueError, RecursionError):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid vocabulary fields or JSON"})

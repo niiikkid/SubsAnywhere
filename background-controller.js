@@ -5,6 +5,7 @@ const CONTENT_SCRIPT_ID = 'dual-captions-player-discovery-v1';
 const CONTENT_MESSAGES = new Set([
   MESSAGE.PLAYER_REPORT, MESSAGE.CONTENT_POSITION_PATCH, MESSAGE.TRACK_CACHE_BUILTIN, MESSAGE.CAPTION_TRANSLATE,
   MESSAGE.WORDS_LIST, MESSAGE.WORDS_SAVE, MESSAGE.WORD_EXPLAIN,
+  MESSAGE.SENTENCES_LIST, MESSAGE.SENTENCES_SAVE, MESSAGE.SENTENCE_EXPLAIN,
 ]);
 const SERIALIZED_MESSAGES = new Set([
   MESSAGE.PLAYER_REPORT, MESSAGE.PLAYER_SELECT, MESSAGE.STATE_PATCH, MESSAGE.CONTENT_POSITION_PATCH,
@@ -164,7 +165,9 @@ export class BackgroundController {
       if (!fromContent) sender = { id: sender.id, url: sender.url };
       // Reports must be able to enter the tab queue while recovery awaits their acknowledgement.
       const fromWordsPanel = fromContent && this.#isWordsPanelSender(sender);
-      if (message.type === MESSAGE.WORD_EXPLAIN && !fromWordsPanel) throw new Error('Объяснение доступно только из панели слов');
+      if ([MESSAGE.WORD_EXPLAIN, MESSAGE.SENTENCE_EXPLAIN].includes(message.type) && !fromWordsPanel) {
+        throw new Error('Объяснение доступно только из панели обучения');
+      }
       if (fromContent && !fromWordsPanel && message.type !== MESSAGE.PLAYER_REPORT) await this.#recoverSelectedSender(message, sender);
       const operation = () => this.#dispatch(message, sender);
       return await (SERIALIZED_MESSAGES.has(message.type)
@@ -253,6 +256,24 @@ export class BackgroundController {
           if (!word) throw new Error('Слово не найдено');
           if (word.explanation) return ok({ word });
           return ok(await this.#vocabulary.saveExplanation(word.id, await this.#aiClient.explainWord(word)));
+        }
+        case MESSAGE.SENTENCES_LIST:
+        case MESSAGE.SENTENCES_SAVE:
+          await this.#enqueue(sender.tab.id, () => this.#selectedSender(message, sender));
+          if (!this.#vocabulary) throw new Error('Список предложений недоступен. Запустите сервер в Docker');
+          return ok(message.type === MESSAGE.SENTENCES_SAVE
+            ? await this.#vocabulary.saveSentence(message.sentence) : await this.#vocabulary.listSentences());
+        case MESSAGE.SENTENCE_EXPLAIN: {
+          if (!this.#isWordsPanelSender(sender)) throw new Error('Разбор доступен только из панели обучения');
+          if (!this.#vocabulary || !this.#aiClient) throw new Error('Разбор пока недоступен');
+          if (!Number.isSafeInteger(message.id) || message.id < 1) throw new Error('Некорректный идентификатор предложения');
+          const { sentences } = await this.#vocabulary.listSentences();
+          const sentence = sentences.find((item) => item.id === message.id);
+          if (!sentence) throw new Error('Предложение не найдено');
+          if (sentence.explanation) return ok({ sentence });
+          return ok(await this.#vocabulary.saveSentenceExplanation(
+            sentence.id, await this.#aiClient.explainSentence(sentence),
+          ));
         }
         case MESSAGE.LOCAL_SUBTITLE_EXISTING:
           if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');

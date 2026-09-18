@@ -19,6 +19,25 @@ function normalizeWord(value) {
   return { language, text, pinyin, translation };
 }
 
+function normalizeSentence(value) {
+  const string = (text, limit) => {
+    if (typeof text !== 'string' || text.length > limit || /[\u0000-\u001f\u007f]/u.test(text)) {
+      throw new Error('Некорректные данные предложения');
+    }
+    return text.normalize('NFC').trim().replace(/\s+/gu, ' ');
+  };
+  const language = value?.language;
+  if (!['zh', 'en'].includes(language)) throw new Error('Некорректный язык предложения');
+  const text = string(value.text, 500);
+  const pinyin = string(value.pinyin, 500);
+  const translation = string(value.translation, 1200);
+  if (!text || !translation || (language === 'zh' && (!/\p{Script=Han}/u.test(text) || !pinyin))) {
+    throw new Error('Нет текста, пиньиня или перевода этого предложения');
+  }
+  if (language === 'en' && pinyin) throw new Error('Некорректные данные предложения');
+  return { language, text, pinyin, translation };
+}
+
 function storedExplanation(value) {
   if (typeof value !== 'string' || value.length > 1200 || /[\u0000-\u001f\u007f]/u.test(value)) {
     throw new Error('Некорректное объяснение слова');
@@ -40,6 +59,14 @@ function savedWord(value) {
   }
   const explanation = value.explanation === undefined ? '' : storedExplanation(value.explanation);
   return { ...word, id: value.id, created_at: value.created_at, learned: value.learned, explanation };
+}
+
+function savedSentence(value) {
+  const sentence = normalizeSentence(value);
+  if (!Number.isSafeInteger(value.id) || value.id < 1 || typeof value.created_at !== 'string'
+    || typeof value.learned !== 'boolean') throw new Error('Некорректный ответ списка предложений');
+  const explanation = value.explanation === undefined ? '' : storedExplanation(value.explanation);
+  return { ...sentence, id: value.id, created_at: value.created_at, learned: value.learned, explanation };
 }
 
 export class VocabularyClient {
@@ -104,5 +131,41 @@ export class VocabularyClient {
     const confirmed = words.find((item) => item.id === id && item.explanation === explanation);
     if (!confirmed) throw new Error('Объяснение слова не сохранилось. Повторите попытку');
     return { word: confirmed };
+  }
+
+  async listSentences() {
+    const payload = await this.#request('/api/sentences', 'GET');
+    try {
+      if (!Array.isArray(payload?.sentences)) throw new Error();
+      return { sentences: payload.sentences.map(savedSentence) };
+    } catch { throw new Error('Некорректный ответ списка предложений'); }
+  }
+
+  async saveSentence(value) {
+    const sentence = normalizeSentence(value);
+    const payload = await this.#request('/api/sentences', 'POST', sentence);
+    let saved;
+    try { saved = savedSentence(payload?.sentence); }
+    catch { throw new Error('Некорректный ответ списка предложений'); }
+    const { sentences } = await this.listSentences();
+    const confirmed = sentences.find((item) => item.id === saved.id
+      && item.language === saved.language && item.text === saved.text && item.pinyin === saved.pinyin
+      && item.translation === saved.translation);
+    if (!confirmed) throw new Error('Не удалось подтвердить сохранение предложения. Повторите попытку');
+    return { sentence: confirmed };
+  }
+
+  async saveSentenceExplanation(id, value) {
+    if (!Number.isSafeInteger(id) || id < 1) throw new Error('Некорректный идентификатор предложения');
+    const explanation = normalizeExplanation(value);
+    const payload = await this.#request('/api/sentences/explanation', 'POST', { id, explanation });
+    let saved;
+    try { saved = savedSentence(payload?.sentence); }
+    catch { throw new Error('Некорректный ответ списка предложений'); }
+    if (saved.id !== id || saved.explanation !== explanation) throw new Error('Сервер не подтвердил разбор предложения');
+    const { sentences } = await this.listSentences();
+    const confirmed = sentences.find((item) => item.id === id && item.explanation === explanation);
+    if (!confirmed) throw new Error('Разбор предложения не сохранился. Повторите попытку');
+    return { sentence: confirmed };
   }
 }

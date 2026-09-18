@@ -7,12 +7,18 @@ if (location.origin === PANEL_ORIGIN && location.pathname === '/words' && !locat
     const data = event.data;
     if (event.source !== window || event.origin !== PANEL_ORIGIN || !data || data.type !== REQUEST
       || typeof data.requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/u.test(data.requestId)
+      || !['words', 'sentences'].includes(data.kind)
       || !Number.isSafeInteger(data.id) || data.id < 1) return;
 
     let response;
     try {
-      const result = await chrome.runtime.sendMessage({ type: 'dualCaptions.words.explain', id: data.id });
-      response = result?.ok ? { ok: true, word: result.data?.word } : { ok: false, error: result?.error || 'Не удалось получить объяснение' };
+      const sentence = data.kind === 'sentences';
+      const result = await chrome.runtime.sendMessage({
+        type: sentence ? 'dualCaptions.sentences.explain' : 'dualCaptions.words.explain', id: data.id,
+      });
+      response = result?.ok
+        ? { ok: true, [sentence ? 'sentence' : 'word']: result.data?.[sentence ? 'sentence' : 'word'] }
+        : { ok: false, error: result?.error || 'Не удалось получить объяснение' };
     } catch {
       response = { ok: false, error: 'Расширение недоступно. Перезагрузите его на странице chrome://extensions' };
     }

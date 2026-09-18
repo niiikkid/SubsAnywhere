@@ -4,15 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Мой словарь — SubsAnywhere</title>
+  <title>Мои слова и предложения — SubsAnywhere</title>
   <link rel="stylesheet" href="/words/words.css">
   <script type="module" src="/words/words.js"></script>
 </head>
 <body>
-  <header class="site-header"><span class="brand">SubsAnywhere</span><span class="local-label">Словарь</span></header>
+  <header class="site-header"><span class="brand">SubsAnywhere</span><span class="local-label">Обучение</span></header>
   <main>
-    <section class="vocabulary" aria-label="Сохранённые слова">
+    <section class="vocabulary" aria-label="Сохранённые слова и предложения">
       <div id="list-controls">
+        <nav id="entity-tabs" class="entity-tabs" role="tablist" aria-label="Тип материалов">
+          <button id="words-tab" type="button" role="tab" aria-selected="true">Слова</button>
+          <button id="sentences-tab" type="button" role="tab" aria-selected="false">Предложения</button>
+        </nav>
         <div class="toolbar">
           <input id="search" type="search" aria-label="Поиск по слову, пиньиню или переводу" placeholder="Поиск по слову, пиньиню или переводу" autocomplete="off" maxlength="1000">
           <select id="language" aria-label="Язык">
@@ -20,7 +24,7 @@
           </select>
           <button id="refresh" type="button">Обновить</button>
         </div>
-        <div class="view-tabs" role="tablist" aria-label="Состояние слов">
+        <div class="view-tabs" role="tablist" aria-label="Состояние материалов">
           <button id="review-tab" type="button" role="tab" aria-selected="true">На повторение</button>
           <button id="learned-tab" type="button" role="tab" aria-selected="false">Выученные</button>
         </div>
@@ -40,12 +44,12 @@
           <p id="study-translation" class="study-translation"></p>
           <section id="study-explanation" class="study-explanation" hidden><h3>Объяснение</h3><p id="study-explanation-text"></p></section>
         </div>
-        <div id="study-finish" class="study-finish" hidden><h1>Все слова повторены</h1><p>Можно начать новый круг или вернуться к списку.</p></div>
+        <div id="study-finish" class="study-finish" hidden><h1 id="study-finish-title">Все слова повторены</h1><p>Можно начать новый круг или вернуться к списку.</p></div>
         <div class="study-actions"><button id="study-back" type="button">Вернуть назад</button><button id="study-learned" type="button">Слово выучено</button><button id="study-explain" type="button">Объяснить</button><button id="study-next" type="button">Следующее слово</button><button id="study-restart" type="button" hidden>Начать заново</button></div>
       </section>
-      <noscript><p class="empty">Для поиска и отметки слов включите JavaScript. Слова останутся на сервере.</p></noscript>
+      <noscript><p class="empty">Для поиска и отметок включите JavaScript. Слова и предложения останутся на сервере.</p></noscript>
     </section>
-    <footer>Слова и объяснения хранятся на вашем локальном сервере. ИИ вызывается только по кнопке «Объяснить» через настройки расширения.</footer>
+    <footer>Слова, предложения и их разборы хранятся на вашем локальном сервере. ИИ вызывается только по кнопке «Объяснить» или «Разобрать» через настройки расширения.</footer>
   </main>
 </body>
 </html>

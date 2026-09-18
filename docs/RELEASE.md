@@ -1,11 +1,11 @@
 # Выпуск и обслуживание
 
-**Кандидат 0.9.0.** Документ описывает эксплуатационный контракт и критерии приёмки, а не подтверждает прохождение всех проверок. Установка и первый запуск — в [README](../README.md); потоки данных — в [PRIVACY](PRIVACY.md).
+**Кандидат 0.10.0.** Документ описывает эксплуатационный контракт и критерии приёмки, а не подтверждает прохождение всех проверок. Установка и первый запуск — в [README](../README.md); потоки данных — в [PRIVACY](PRIVACY.md).
 
 ## Что запускается
 
 - Chrome загружает распакованное расширение из постоянной папки проекта. Docker запускает только HTTP-сервер для субтитров YouTube и CPU-распознавания.
-- `docker compose up -d --build` собирает локальный образ `subsanywhere-server:0.9.0` и запускает сервис `subtitles`. Это не загрузка готового опубликованного образа.
+- `docker compose up -d --build` собирает локальный образ `subsanywhere-server:0.10.0` и запускает сервис `subtitles`. Это не загрузка готового опубликованного образа.
 - `compose.yaml` публикует `127.0.0.1:43817`, без доступа из локальной сети. Внутри контейнера сервер слушает `0.0.0.0:43817`; не переносите эту настройку на хост и не открывайте порт наружу.
 - Сервер работает от UID/GID `10001:10001`, с read-only корневой ФС, временным `/tmp`, без Linux capabilities и с постоянными томами. CPU-образ включает Python 3.11, Node.js, FFmpeg, yt-dlp, FunASR, PyTorch и pypinyin. Python-зависимости зафиксированы в `local-server/uv.lock`.
 - Модели импортируются отдельно из существующего кэша командой из README. Инструмент `model-import` работает без сети, не перезаписывает имеющиеся модели. Веса не входят в образ.
@@ -138,7 +138,7 @@ New-Item -ItemType Directory -Force -Path backup | Out-Null
 Далее одна команда одинакова для обеих оболочек. `${PWD}` — текущая папка проекта. Если архив с таким именем уже существует, сначала переместите его: следующая команда его заменит.
 
 ```text
-docker run --rm --network none --read-only --user 0:0 --mount type=volume,src=subsanywhere_subtitles,dst=/data,readonly --mount type=volume,src=subsanywhere_models,dst=/models,readonly --mount "type=bind,src=${PWD}/backup,dst=/backup" --entrypoint tar subsanywhere-server:0.9.0 -czf /backup/subsanywhere-data-models.tgz -C / data models
+docker run --rm --network none --read-only --user 0:0 --mount type=volume,src=subsanywhere_subtitles,dst=/data,readonly --mount type=volume,src=subsanywhere_models,dst=/models,readonly --mount "type=bind,src=${PWD}/backup,dst=/backup" --entrypoint tar subsanywhere-server:0.10.0 -czf /backup/subsanywhere-data-models.tgz -C / data models
 ```
 
 Служебный контейнер работает как root для чтения/сохранения владельцев файлов; основной сервер остаётся непривилегированным. Исходные тома смонтированы только для чтения, сеть выключена. Архив содержит чувствительные тексты и историю видео; ограничьте к нему доступ средствами своей ОС. На Linux владельцем архива будет root. Здесь намеренно нет перенаправления двоичного потока через PowerShell.
@@ -146,7 +146,7 @@ docker run --rm --network none --read-only --user 0:0 --mount type=volume,src=su
 Проверьте, что архив читается, и снова запустите сервер (с cookies — используйте оба `-f`):
 
 ```text
-docker run --rm --network none --read-only --user 0:0 --mount "type=bind,src=${PWD}/backup,dst=/backup,readonly" --entrypoint tar subsanywhere-server:0.9.0 -tzf /backup/subsanywhere-data-models.tgz
+docker run --rm --network none --read-only --user 0:0 --mount "type=bind,src=${PWD}/backup,dst=/backup,readonly" --entrypoint tar subsanywhere-server:0.10.0 -tzf /backup/subsanywhere-data-models.tgz
 docker compose up -d
 ```
 
@@ -158,7 +158,7 @@ docker compose up -d
 
 ```text
 docker compose stop subtitles
-docker run --rm --network none --read-only --user 0:0 --mount type=volume,src=subsanywhere-restore_subtitles,dst=/data,volume-nocopy --mount type=volume,src=subsanywhere-restore_models,dst=/models,volume-nocopy --mount "type=bind,src=${PWD}/backup,dst=/backup,readonly" --entrypoint python subsanywhere-server:0.9.0 -c "from pathlib import Path; import subprocess; assert all(not any(Path(p).iterdir()) for p in ['/data', '/models']), 'Target volumes must be empty'; subprocess.run(['tar', '-xzf', '/backup/subsanywhere-data-models.tgz', '-C', '/'], check=True)"
+docker run --rm --network none --read-only --user 0:0 --mount type=volume,src=subsanywhere-restore_subtitles,dst=/data,volume-nocopy --mount type=volume,src=subsanywhere-restore_models,dst=/models,volume-nocopy --mount "type=bind,src=${PWD}/backup,dst=/backup,readonly" --entrypoint python subsanywhere-server:0.10.0 -c "from pathlib import Path; import subprocess; assert all(not any(Path(p).iterdir()) for p in ['/data', '/models']), 'Target volumes must be empty'; subprocess.run(['tar', '-xzf', '/backup/subsanywhere-data-models.tgz', '-C', '/'], check=True)"
 ```
 
 `volume-nocopy` оставляет новые целевые тома пустыми до распаковки. **При ненулевом коде выхода остановитесь:** не запускайте сервер на неполном восстановлении. При успехе:
@@ -227,7 +227,7 @@ Docker получает `cpus`, `mem_limit` и **равный ему `memswap_li
 
 ## Матрица приёмки
 
-Статусы относятся к **конкретному кандидату 0.9.0**, а не ко всем платформам. Код, unit-тест или `healthy` не являются доказательством сценария на реальном сайте. Перед публикацией приложите к каждому выполненному пункту версию/commit, ОС и архитектуру, команды, результат и при необходимости обезличенный снимок экрана. Платные API-запросы и сетевые загрузки выполняются только с отдельного согласия.
+Статусы относятся к **конкретному кандидату 0.10.0**, а не ко всем платформам. Код, unit-тест или `healthy` не являются доказательством сценария на реальном сайте. Перед публикацией приложите к каждому выполненному пункту версию/commit, ОС и архитектуру, команды, результат и при необходимости обезличенный снимок экрана. Платные API-запросы и сетевые загрузки выполняются только с отдельного согласия.
 
 **Подтверждён ограниченный офлайн-прогон:** собранный Linux ARM64 Docker-образ выполнил реальное CPU-распознавание с кэшированными моделями и `--network none`. Вход `SenseVoiceSmall/example/zh.mp3`, длительность `5.616` секунды; получен SRT с одним сегментом `00:00:00,420–00:00:05,450`, TXT и Markdown непустые. Это подтверждает запуск моделей на коротком образце, но не весь путь загрузки YouTube, длительные задания, Windows или amd64.
 
@@ -237,7 +237,7 @@ Docker получает `cpus`, `mem_limit` и **равный ему `memswap_li
 
 | Проверка | Критерий прохождения | Статус |
 |---|---|---|
-| Версии и упаковка | Версии manifest/образа/Python-проекта согласованы; папка загружается в Chrome | 0.9.0 согласована; распакованная папка загружена настоящим Chrome |
+| Версии и упаковка | Версии manifest/образа/Python-проекта согласованы; папка загружается в Chrome | 0.10.0 согласована; распакованная папка требует повторной загрузки в настоящем Chrome |
 | Автотесты | `npm test` и `npm run check` проходят, зафиксирован реальный вывод | Ожидает |
 | Docker без моделей и cookies | Сборка, запуск и корректная идентификация `/health`; отсутствие моделей показано отдельно | Linux ARM64: изолированный Docker-smoke прошёл; API healthy, ASR без моделей явно недоступен |
 | Импорт моделей без сети | Полный кэш импортируется; неполный источник и повторная перезапись отклоняются | Реальный импорт в `subsanywhere_models` и регрессионные проверки отказов прошли |

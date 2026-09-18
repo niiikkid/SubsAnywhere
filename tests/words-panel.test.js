@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { studyDeck, nextStudyPosition, previousStudyPosition, studyPositionForWord } from '../local-server/web/words.js';
+import { studyDeck, nextStudyPosition, previousStudyPosition, studyPositionForWord, learningText } from '../local-server/web/words.js';
 
 const words = [
   { id: 1, text: '你好', learned: false },
@@ -29,4 +29,11 @@ test('saved study word restores its exact unlearned card after a page reload', (
   assert.equal(studyPositionForWord(words, 3), 1);
   assert.equal(studyPositionForWord(words, 2), -1);
   assert.equal(studyPositionForWord(words, 999), -1);
+});
+
+test('Chinese saved sentences are learned through pinyin instead of Han characters', () => {
+  const sentence = { language: 'zh', text: '我已经吃过饭了。', pinyin: 'wǒ yǐjīng chī guò fàn le.' };
+  assert.equal(learningText(sentence, 'sentences'), sentence.pinyin);
+  assert.equal(learningText(sentence, 'words'), sentence.text);
+  assert.equal(learningText({ language: 'en', text: 'I have already eaten.', pinyin: '' }, 'sentences'), 'I have already eaten.');
 });
