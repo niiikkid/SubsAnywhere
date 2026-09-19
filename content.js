@@ -64,6 +64,7 @@
     const cachingBuiltInSelections = new Set();
     const cleanup = [];
     const translationCache = new Map();
+    const translationFailures = new Map();
     const maxCachedTranslations = 80;
     const maxQueuedTranslations = 3;
     let translationInFlight = false;
@@ -476,20 +477,31 @@
       tip.style.top = `${Math.max(8, Math.min(root.height - box.height - 8, top))}px`;
     }
 
-    function renderPendingCaption(target, text) {
+    function renderPendingCaption(target, text, descriptor, failure = '') {
       const caption = document.createElement('span');
       caption.textContent = text;
       caption.tabIndex = 0;
       caption.setAttribute('role', 'button');
       caption.style.cssText = 'pointer-events:auto;cursor:pointer;border-radius:4px;padding:0 2px;color:inherit;text-decoration:underline;text-decoration-color:rgba(174,199,255,.9);text-decoration-style:dotted;text-decoration-thickness:2px;text-underline-offset:3px;transition:background .14s,color .14s;';
       makeCaptionFocusable(caption);
-      const loading = () => showTooltip({
-        dictionary: 'Перевод готовится…',
-        context: 'Нажмите ещё раз через мгновение.',
-      }, caption);
-      caption.addEventListener('click', (event) => { event.stopPropagation(); loading(); });
+      const showStatus = () => {
+        if (failure) {
+          translationFailures.delete(descriptor.key);
+          requestTranslation(descriptor, true);
+          showTooltip({
+            dictionary: failure,
+            context: 'Нажмите, чтобы повторить.',
+          }, caption);
+          return;
+        }
+        showTooltip({
+          dictionary: 'Перевод готовится…',
+          context: 'Нажмите ещё раз через мгновение.',
+        }, caption);
+      };
+      caption.addEventListener('click', (event) => { event.stopPropagation(); showStatus(); });
       caption.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); loading(); }
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showStatus(); }
       });
       target.append(caption);
     }
@@ -515,13 +527,22 @@
     }
 
     function rememberTranslation(key, items) {
+      translationFailures.delete(key);
       translationCache.delete(key);
       translationCache.set(key, items);
       while (translationCache.size > maxCachedTranslations) translationCache.delete(translationCache.keys().next().value);
     }
 
+    function rememberTranslationFailure(key, value) {
+      const message = String(value ?? '').trim().replace(/\s+/gu, ' ').slice(0, 240);
+      translationFailures.delete(key);
+      translationFailures.set(key, message || 'Не удалось получить перевод. Проверьте настройки ИИ и повторите.');
+      while (translationFailures.size > maxCachedTranslations) translationFailures.delete(translationFailures.keys().next().value);
+    }
+
     function requestTranslation(descriptor, priority = false) {
-      if (!descriptor?.key || !descriptor.sourceText || translationCache.has(descriptor.key) || queuedTranslationSet.has(descriptor.key) || inFlightTranslationKeys.has(descriptor.key)) return;
+      if (!descriptor?.key || !descriptor.sourceText || translationCache.has(descriptor.key) || translationFailures.has(descriptor.key)
+        || queuedTranslationSet.has(descriptor.key) || inFlightTranslationKeys.has(descriptor.key)) return;
       if (queuedTranslations.length >= maxQueuedTranslations) {
         if (!priority) return;
         const displaced = queuedTranslations.pop();
@@ -553,9 +574,16 @@
           language: next.language,
         })
           .then((response) => {
-            if (generation === lifecycle && response?.ok === true && Array.isArray(response?.data?.items)) rememberTranslation(next.key, response.data.items);
+            if (generation !== lifecycle) return;
+            if (response?.ok === true && Array.isArray(response?.data?.items)) {
+              rememberTranslation(next.key, response.data.items);
+            } else {
+              rememberTranslationFailure(next.key, response?.error);
+            }
           })
-          .catch(() => undefined)
+          .catch((error) => {
+            if (generation === lifecycle) rememberTranslationFailure(next.key, error?.message);
+          })
           .finally(() => {
             translationInFlight = false;
             if (generation === lifecycle && !destroyed) render();
@@ -763,7 +791,8 @@
     function renderInteractiveCaption(text) {
       const descriptor = translationDescriptor(text);
       const items = translationCache.get(descriptor.key);
-      const key = `${state.settings.secondTrackId}\u0000${descriptor.key}\u0000${state.settings.inlineTranslations}`;
+      const failure = translationFailures.get(descriptor.key) || '';
+      const key = `${state.settings.secondTrackId}\u0000${descriptor.key}\u0000${state.settings.inlineTranslations}\u0000${failure}`;
       if (state.renderedCaptionKey === key && state.renderedCaptionItems === items) return;
       state.renderedCaptionKey = key;
       state.renderedCaptionItems = items;
@@ -802,9 +831,9 @@
         }
       }
       if (!items || !items.length) {
-        renderPendingCaption(target, descriptor.displayText);
+        renderPendingCaption(target, descriptor.displayText, descriptor, failure);
         appendSentenceButton(descriptor, items);
-        if (!items) requestTranslation(descriptor, true);
+        if (!items && !failure) requestTranslation(descriptor, true);
         return;
       }
       for (const segment of runtime.captionSegments(descriptor.displayText, items)) {

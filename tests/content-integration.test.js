@@ -737,6 +737,38 @@ test('production makes the original caption clickable while its translation is l
   );
 });
 
+test('production shows an OpenAI translation error and retries only after a click', async () => {
+  const harness = await makeHarness();
+  let requests = 0;
+  harness.context.chrome.runtime.sendMessage = (message) => {
+    if (message.type !== 'dualCaptions.caption.translate') return Promise.resolve({ ok: true });
+    requests += 1;
+    return Promise.resolve({ ok: false, error: 'OpenAI временно недоступен (400). Попробуйте позже' });
+  };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  listener({
+    type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'track-0', secondBottom: 8, fontSize: 24 },
+    externalTracks: [],
+  }, {}, () => {});
+  for (let index = 0; index < 5; index += 1) await Promise.resolve();
+
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  const token = overlay.children[0].children[0];
+  token.dispatch('click', { stopPropagation() {} });
+  assert.equal(overlay.children.at(-1).children[1].children.map((child) => child.textContent).join(' '),
+    'Обычно OpenAI временно недоступен (400). Попробуйте позже');
+  assert.equal(overlay.children.at(-1).children[2].children.map((child) => child.textContent).join(' '),
+    'Здесь Нажмите, чтобы повторить.');
+  assert.equal(requests, 1, 'a failed translation is not retried continuously');
+
+  harness.scheduled.shift()?.();
+  await Promise.resolve();
+  assert.equal(requests, 2, 'a click explicitly retries the failed current caption');
+});
+
 test('production keeps the full original caption clickable when AI returns no phrases', async () => {
   const harness = await makeHarness();
   harness.context.chrome.runtime.sendMessage = (message) => {
