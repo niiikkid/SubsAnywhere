@@ -652,6 +652,11 @@ test('production shows a full English sentence translation with a phrase list', 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
   const phrase = overlay.children[0].children[0];
   assert.equal(phrase.textContent, 'Built in');
+  const translationLine = overlay.children[0].children[1];
+  assert.equal(translationLine.className, 'dual-captions-sentence-translation');
+  assert.equal(translationLine.textContent, 'Встроено.');
+  assert.match(translationLine.style.cssText, /font-size:\.72em/);
+  assert.match(translationLine.style.cssText, /opacity:\.68/);
   phrase.dispatch('click', { stopPropagation() {} });
   assert.equal(
     overlay.children.at(-1).children[1].children.map((child) => child.textContent).join(' '),
@@ -664,6 +669,30 @@ test('production shows a full English sentence translation with a phrase list', 
 
   phrase.dispatch('click', { stopPropagation() {} });
   assert.equal(overlay.children.length, 2);
+});
+
+test('English inline fallback keeps the completed sentence translation out of the caption', async () => {
+  const harness = await makeHarness();
+  harness.context.chrome.runtime.sendMessage = (message) => {
+    if (message.type === 'dualCaptions.caption.translate') return Promise.resolve({ ok: true, data: {
+      items: [{
+        start: 0, end: 8, text: 'Built in', dictionary: 'Встроено.', context: 'Встроено.',
+        glossary: [{ text: 'missing', translation: 'отсутствует' }], isSentenceTranslation: true,
+      }],
+    } });
+    return Promise.resolve({ ok: true });
+  };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  [...harness.onMessage.listeners][0]({
+    type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'track-0', secondBottom: 8, fontSize: 24, inlineTranslations: true },
+    externalTracks: [],
+  }, {}, () => {});
+  for (let index = 0; index < 4; index += 1) await Promise.resolve();
+
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  assert.equal(overlay.children[0].children.some((child) => child.className === 'dual-captions-sentence-translation'), false);
 });
 
 test('production does not queue a second translation while the same caption is in flight', async () => {

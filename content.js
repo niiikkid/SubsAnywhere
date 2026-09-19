@@ -788,6 +788,18 @@
       return true;
     }
 
+    function appendEnglishSentenceTranslation(items) {
+      const sentenceItem = items.find((item) => item?.isSentenceTranslation && typeof item.dictionary === 'string');
+      const sentenceText = sentenceItem?.dictionary.trim();
+      if (!sentenceText) return;
+      const translation = document.createElement('div');
+      translation.className = 'dual-captions-sentence-translation';
+      translation.textContent = sentenceText;
+      translation.style.cssText = 'margin-top:2px;color:inherit;font-size:.72em;font-weight:600;line-height:1.15;opacity:.68;pointer-events:none;';
+      state.second.append(translation);
+      state.sentenceTranslationLine = translation;
+    }
+
     function renderInteractiveCaption(text) {
       const descriptor = translationDescriptor(text);
       const items = translationCache.get(descriptor.key);
@@ -853,6 +865,7 @@
         });
         target.append(phrase);
       }
+      if (!descriptor.characters && !state.settings.inlineTranslations) appendEnglishSentenceTranslation(items);
       appendSentenceButton(descriptor, items);
     }
 
