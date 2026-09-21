@@ -27,6 +27,16 @@ export function learningText(item, kind = "words") {
     ? item.pinyin : item.text;
 }
 
+export function wordsTsv(words = []) {
+  const cell = (value) => {
+    const text = String(value ?? "").replace(/[\t\r\n]/gu, " ");
+    return /^[=+\-@]/u.test(text) ? `'${text}` : text;
+  };
+  return ["word\tpinyin\ttranslation", ...words.map(word => [
+    cell(word?.text), cell(word?.language === "zh" ? word.pinyin : ""), cell(word?.translation),
+  ].join("\t"))].join("\n") + "\n";
+}
+
 if (typeof document !== "undefined") (() => {
   const STUDY_STORAGE_KEYS = {
     words: "subsanywhere.words.study.v1",
@@ -39,6 +49,12 @@ if (typeof document !== "undefined") (() => {
   const status = document.getElementById("status");
   const empty = document.getElementById("empty");
   const refresh = document.getElementById("refresh");
+  const download = document.getElementById("download");
+  const deleteModal = document.getElementById("delete-modal");
+  const deleteTitle = document.getElementById("delete-title");
+  const deleteText = document.getElementById("delete-text");
+  const deleteCancel = document.getElementById("delete-cancel");
+  const deleteConfirm = document.getElementById("delete-confirm");
   const entityTabs = document.getElementById("entity-tabs");
   const wordsTab = document.getElementById("words-tab");
   const sentencesTab = document.getElementById("sentences-tab");
@@ -75,6 +91,8 @@ if (typeof document !== "undefined") (() => {
   let studyWords = [];
   let studyPosition = 0;
   let studyExplanationOpen = false;
+  let deleteTarget = null;
+  let deleteTrigger = null;
 
   const currentItems = () => kind === "sentences" ? sentences : words;
   const noun = (form) => kind === "sentences"
@@ -109,8 +127,8 @@ if (typeof document !== "undefined") (() => {
     } catch { /* Browser storage can be unavailable; the study itself still works. */ }
   }
 
-  function clearSavedStudy() {
-    try { localStorage.removeItem(STUDY_STORAGE_KEYS[kind]); } catch { /* Ignore unavailable browser storage. */ }
+  function clearSavedStudy(type = kind) {
+    try { localStorage.removeItem(STUDY_STORAGE_KEYS[type]); } catch { /* Ignore unavailable browser storage. */ }
   }
 
   function showStudy() {
@@ -169,6 +187,42 @@ if (typeof document !== "undefined") (() => {
     return node;
   }
 
+  function downloadWords() {
+    const href = URL.createObjectURL(new Blob([wordsTsv(words)], { type: "text/tab-separated-values;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = "subsanywhere-words.tsv";
+    link.click();
+    URL.revokeObjectURL(href);
+  }
+
+  function openDeleteDialog(word, trigger) {
+    if (busy) return;
+    const targetKind = kind;
+    const label = targetKind === "sentences" ? "предложение" : "слово";
+    deleteTarget = { word, kind: targetKind };
+    deleteTrigger = trigger;
+    deleteTitle.textContent = `Удалить ${label}?`;
+    deleteText.textContent = `«${learningText(word, targetKind)}» будет удалено из словаря без возможности восстановления.`;
+    deleteCancel.disabled = false;
+    deleteConfirm.disabled = false;
+    listControls.inert = true;
+    wordPanel.inert = true;
+    deleteModal.hidden = false;
+    deleteConfirm.focus();
+  }
+
+  function closeDeleteDialog({ restoreFocus = true } = {}) {
+    if (busy) return;
+    deleteModal.hidden = true;
+    listControls.inert = false;
+    wordPanel.inert = false;
+    deleteTarget = null;
+    const trigger = deleteTrigger;
+    deleteTrigger = null;
+    if (restoreFocus) trigger?.focus();
+  }
+
   function render() {
     const query = searchable(search.value);
     const inView = currentItems().filter(word => word.learned === (view === "learned"));
@@ -192,6 +246,11 @@ if (typeof document !== "undefined") (() => {
       learned.title = word.learned ? `Вернуть ${noun("one")} в список на повторение` : `Отметить ${noun("one")} как выученное`;
       learned.setAttribute("aria-label", `${learned.title}: «${learningText(word, kind)}»`);
       learned.addEventListener("click", () => setLearned(word, !word.learned));
+      const remove = element("button", "delete", "Удалить");
+      remove.type = "button";
+      remove.disabled = busy;
+      remove.setAttribute("aria-label", `Удалить ${noun("one")}: «${learningText(word, kind)}»`);
+      remove.addEventListener("click", () => openDeleteDialog(word, remove));
       const translation = element("div", "word-translation", "");
       translation.append(element("p", "", word.translation));
       let details;
@@ -207,13 +266,14 @@ if (typeof document !== "undefined") (() => {
       explain.disabled = busy;
       explain.addEventListener("click", () => word.explanation ? details.toggleAttribute("open") : explainWord(word));
       const actions = element("div", "word-actions", "");
-      actions.append(explain, learned);
+      actions.append(explain, learned, remove);
       row.append(main, translation, actions);
       fragment.append(row);
     }
     list.replaceChildren(fragment);
     list.setAttribute("aria-busy", String(busy));
     refresh.disabled = busy;
+    download.disabled = busy || !loaded;
     wordsTab.disabled = busy;
     sentencesTab.disabled = busy;
     reviewTab.setAttribute("aria-selected", String(view === "review"));
@@ -341,6 +401,38 @@ if (typeof document !== "undefined") (() => {
     }
   }
 
+  async function removeItem() {
+    const target = deleteTarget;
+    if (!target || busy) return;
+    const label = target.kind === "sentences" ? "Предложение" : "Слово";
+    busy = true;
+    deleteCancel.disabled = true;
+    deleteConfirm.disabled = true;
+    message(`Удаляем ${target.kind === "sentences" ? "предложение" : "слово"}…`);
+    render();
+    let removed = false;
+    try {
+      const result = await request(`/api/${target.kind}/delete`, { id: target.word.id });
+      if (result?.deleted !== true) throw new Error("Сервер не подтвердил удаление.");
+      const fresh = await readItems(target.kind);
+      if (fresh.some(item => item.id === target.word.id)) throw new Error("Словарь не подтвердил удаление.");
+      if (target.kind === "sentences") sentences = fresh;
+      else words = fresh;
+      clearSavedStudy(target.kind);
+      removed = true;
+      message(`${label} «${learningText(target.word, target.kind)}» удалено.`);
+    } catch (error) {
+      message(error instanceof Error ? error.message : `Не удалось удалить ${target.kind === "sentences" ? "предложение" : "слово"}.`, true);
+    } finally {
+      busy = false;
+      deleteCancel.disabled = false;
+      deleteConfirm.disabled = false;
+      if (removed) closeDeleteDialog({ restoreFocus: false });
+      render();
+      if (removed) search.focus();
+    }
+  }
+
   function requestExplanation(id) {
     const requestKind = kind;
     const requestId = crypto.randomUUID().replace(/-/gu, "");
@@ -394,6 +486,29 @@ if (typeof document !== "undefined") (() => {
   reviewTab.addEventListener("click", () => { view = "review"; render(); });
   learnedTab.addEventListener("click", () => { view = "learned"; render(); });
   refresh.addEventListener("click", load);
+  download.addEventListener("click", downloadWords);
+  deleteCancel.addEventListener("click", () => closeDeleteDialog());
+  deleteConfirm.addEventListener("click", removeItem);
+  deleteModal.addEventListener("click", (event) => { if (event.target === deleteModal) closeDeleteDialog(); });
+  window.addEventListener("keydown", (event) => {
+    if (deleteModal.hidden) return;
+    if (event.key === "Escape") {
+      closeDeleteDialog();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const controls = [deleteCancel, deleteConfirm].filter(control => !control.disabled);
+    if (!controls.length) return;
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && (document.activeElement === first || !deleteModal.contains(document.activeElement))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
   studyStart.addEventListener("click", startStudy);
   studyExit.addEventListener("click", exitStudy);
   studyBack.addEventListener("click", () => {

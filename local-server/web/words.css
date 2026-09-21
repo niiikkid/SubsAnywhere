@@ -24,7 +24,7 @@ button:disabled { opacity: .55; cursor: wait; }
 .entity-tabs { display: flex; gap: 8px; padding: 14px 16px 10px; border-bottom: 1px solid var(--border); }
 .entity-tabs button { min-width: 124px; }
 .entity-tabs button[aria-selected="true"] { color: #f0f3ff; border-color: #707eb8; background: rgba(106, 121, 190, .18); }
-.toolbar { display: grid; grid-template-columns: minmax(0, 1fr) 150px auto; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.toolbar { display: grid; grid-template-columns: minmax(0, 1fr) 150px auto auto; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
 .view-tabs { display: flex; gap: 6px; padding: 10px 16px 0; }
 .view-tabs button { min-height: 32px; padding: 5px 10px; font-size: 12px; color: var(--muted); }
 .view-tabs button[aria-selected="true"] { color: #edf6f7; border-color: #5c9ba1; background: rgba(74, 176, 184, .14); }
@@ -47,7 +47,9 @@ h2 { margin: 0; font-size: 14px; font-weight: 500; }
 .word-translation { margin: 0; color: #d2d5dd; overflow-wrap: anywhere; white-space: pre-wrap; }
 .word-translation > p { margin: 0; }
 .word-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.explain, .learned { min-height: 34px; padding: 5px 10px; font-size: 12px; }
+.explain, .learned, .delete { min-height: 34px; padding: 5px 10px; font-size: 12px; }
+.delete { color: #ffc8c8; border-color: #75454a; background: rgba(145, 55, 64, .16); }
+.delete:hover:not(:disabled), .delete-confirm:hover:not(:disabled) { color: #fff; border-color: #d47880; background: rgba(180, 63, 75, .28); }
 .word-explanation { margin-top: 8px; color: var(--muted); font-size: 13px; white-space: normal; }
 .word-explanation summary { cursor: pointer; color: var(--accent); }
 .word-explanation p { margin: 6px 0 0; color: #d2d5dd; }
@@ -67,6 +69,13 @@ h2 { margin: 0; font-size: 14px; font-weight: 500; }
 .study-finish p { margin: 12px 0 0; color: var(--muted); font-size: 16px; }
 .study-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .study-actions button { min-width: 150px; }
+.delete-modal { position: fixed; z-index: 10; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(4, 5, 7, .76); }
+.delete-dialog { width: min(100%, 420px); padding: 22px; border: 1px solid #593b40; border-radius: 12px; background: #191719; box-shadow: 0 20px 64px rgba(0, 0, 0, .55); }
+.delete-kicker { margin: 0 0 6px; color: #e49ba2; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+.delete-dialog h2 { font-size: 20px; font-weight: 600; }
+.delete-dialog > p:not(.delete-kicker) { margin: 10px 0 0; color: #d6d3d6; overflow-wrap: anywhere; }
+.delete-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+.delete-confirm { color: #fff; border-color: #a5515b; background: #843942; }
 footer { margin-top: 24px; color: var(--muted); font-size: 12px; }
 [hidden] { display: none !important; }
 @media (max-width: 650px) {
@@ -84,4 +93,5 @@ footer { margin-top: 24px; color: var(--muted); font-size: 12px; }
   .word-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 10px 12px; }
   .word-translation { grid-column: 1 / -1; grid-row: 2; }
   .word-actions { grid-column: 2; grid-row: 1; }
+  .delete-dialog { padding: 18px; }
 }

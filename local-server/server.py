@@ -909,9 +909,10 @@ class SubtitleService:
 
 
 WORDS_ROUTES = frozenset({
-    "/api/words", "/api/words/learned", "/api/words/explanation",
-    "/api/sentences", "/api/sentences/learned", "/api/sentences/explanation",
+    "/api/words", "/api/words/learned", "/api/words/explanation", "/api/words/delete",
+    "/api/sentences", "/api/sentences/learned", "/api/sentences/explanation", "/api/sentences/delete",
 })
+WORDS_DELETE_ROUTES = frozenset({"/api/words/delete", "/api/sentences/delete"})
 WORDS_ASSETS = {
     "/words": ("index.html", "text/html; charset=utf-8"),
     "/words/words.js": ("words.js", "text/javascript; charset=utf-8"),
@@ -982,7 +983,8 @@ def handler_for(service, words_store=None):
             allowed_headers = {"x-subsanywhere-client"}
             if self.path in WORDS_ROUTES:
                 allowed_headers.add("content-type")
-            if (not EXTENSION_ORIGIN_PATTERN.fullmatch(origin)
+            if (self.path in WORDS_DELETE_ROUTES
+                    or not EXTENSION_ORIGIN_PATTERN.fullmatch(origin)
                     or self.headers.get("Access-Control-Request-Method", "GET") not in {"GET", "POST"}
                     or not requested_headers.issubset(allowed_headers)):
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden origin"})
@@ -1014,6 +1016,9 @@ def handler_for(service, words_store=None):
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
+            if self.path in WORDS_DELETE_ROUTES and not self._panel_authorized():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden client"})
+                return
             if not self._authorized():
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden client"})
                 return
@@ -1074,6 +1079,13 @@ def handler_for(service, words_store=None):
                             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Word not found"})
                             return
                         payload = {"word": word}
+                    elif self.path == "/api/words/delete":
+                        if not isinstance(data, dict) or set(data) != {"id"}:
+                            raise ValueError("Expected word ID")
+                        if not vocabulary.remove(data["id"]):
+                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Word not found"})
+                            return
+                        payload = {"deleted": True}
                     elif self.path == "/api/sentences":
                         payload = {"sentence": vocabulary.add_sentence(data)}
                     elif self.path == "/api/sentences/learned":
@@ -1084,7 +1096,7 @@ def handler_for(service, words_store=None):
                             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Sentence not found"})
                             return
                         payload = {"sentence": sentence}
-                    else:
+                    elif self.path == "/api/sentences/explanation":
                         if not isinstance(data, dict) or set(data) != {"id", "explanation"}:
                             raise ValueError("Expected sentence ID and explanation")
                         sentence = vocabulary.set_sentence_explanation(data["id"], data["explanation"])
@@ -1092,6 +1104,13 @@ def handler_for(service, words_store=None):
                             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Sentence not found"})
                             return
                         payload = {"sentence": sentence}
+                    else:
+                        if not isinstance(data, dict) or set(data) != {"id"}:
+                            raise ValueError("Expected sentence ID")
+                        if not vocabulary.remove_sentence(data["id"]):
+                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Sentence not found"})
+                            return
+                        payload = {"deleted": True}
                 self._send_json(HTTPStatus.OK, payload)
             except (ValueError, RecursionError):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid vocabulary fields or JSON"})
@@ -1148,6 +1167,10 @@ def handler_for(service, words_store=None):
 
         def _authorized(self) -> bool:
             return self.headers.get_all("X-SubsAnywhere-Client", []) == ["extension-v1"]
+
+        def _panel_authorized(self) -> bool:
+            host = self.headers.get("Host", "").lower()
+            return self._authorized() and self.headers.get_all("Origin", []) == [f"http://{host}"]
 
         def _send_json(self, status: HTTPStatus, payload: dict, cors=True) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

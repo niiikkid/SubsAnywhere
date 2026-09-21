@@ -119,6 +119,16 @@ class WordsStoreTests(unittest.TestCase):
         self.assertEqual(explained["explanation"], explanation)
         self.assertEqual(self.store.add_sentence({**ZH_SENTENCE, "translation": "Другой перевод"})["id"], sentence["id"])
 
+    def test_words_and_sentences_are_permanently_deleted_from_their_own_lists(self):
+        word = self.store.add(ZH)
+        sentence = self.store.add_sentence(ZH_SENTENCE)
+        self.assertTrue(self.store.remove(word["id"]))
+        self.assertFalse(self.store.remove(word["id"]))
+        self.assertEqual(self.store.list(), [])
+        self.assertTrue(self.store.remove_sentence(sentence["id"]))
+        self.assertFalse(self.store.remove_sentence(sentence["id"]))
+        self.assertEqual(self.store.list_sentences(), [])
+
     def test_normalized_identity_preserves_first_display_and_translation(self):
         first = self.store.add({**EN, "text": "  Hello   World  "})
         duplicate = self.store.add({**EN, "text": "hello world", "translation": "другое"})
@@ -216,6 +226,27 @@ class WordsHTTPTests(unittest.TestCase):
         status, _, body = self.request("POST", "/api/sentences/explanation", {"id": sentence["id"], "explanation": explanation})
         self.assertEqual((status, json.loads(body)["sentence"]["explanation"]), (200, explanation))
         self.assertEqual(self.store.list(), [])
+
+    def test_panel_can_permanently_delete_words_and_sentences_after_confirmation(self):
+        word = json.loads(self.request("POST", "/api/words", ZH, {"Origin": self.origin})[2])["word"]
+        sentence = json.loads(self.request("POST", "/api/sentences", ZH_SENTENCE, {"Origin": self.origin})[2])["sentence"]
+        status, _, body = self.request("POST", "/api/words/delete", {"id": word["id"]}, {"Origin": self.origin})
+        self.assertEqual((status, json.loads(body)), (200, {"deleted": True}))
+        self.assertEqual(json.loads(self.request(path="/api/words")[2]), {"words": []})
+        status, _, body = self.request("POST", "/api/sentences/delete", {"id": sentence["id"]}, {"Origin": self.origin})
+        self.assertEqual((status, json.loads(body)), (200, {"deleted": True}))
+        self.assertEqual(json.loads(self.request(path="/api/sentences")[2]), {"sentences": []})
+
+    def test_only_the_same_origin_panel_can_delete_vocabulary(self):
+        word = self.store.add(ZH)
+        extension_origin = "chrome-extension://" + "a" * 32
+        status, _, _ = self.request("POST", "/api/words/delete", {"id": word["id"]}, {"Origin": extension_origin})
+        self.assertEqual(status, 403)
+        self.assertEqual(self.store.list(), [word])
+        headers = {"Origin": extension_origin, "Access-Control-Request-Method": "POST",
+                   "Access-Control-Request-Headers": "X-SubsAnywhere-Client, Content-Type"}
+        self.assertEqual(self.request("OPTIONS", "/api/words/delete", headers=headers)[0], 403)
+        self.assertEqual(self.request("POST", "/api/words/delete", {"id": word["id"]}, {"Origin": self.origin})[0], 200)
 
     def test_api_returns_complete_list_without_hidden_limit(self):
         saved = [self.store.add({**EN, "text": f"word {index}"}) for index in range(205)]

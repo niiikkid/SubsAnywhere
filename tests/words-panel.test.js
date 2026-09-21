@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { studyDeck, nextStudyPosition, previousStudyPosition, studyPositionForWord, learningText } from '../local-server/web/words.js';
+import {
+  studyDeck, nextStudyPosition, previousStudyPosition, studyPositionForWord, learningText, wordsTsv
+} from '../local-server/web/words.js';
 
 const words = [
   { id: 1, text: '你好', learned: false },
@@ -36,4 +38,17 @@ test('Chinese saved sentences are learned through pinyin instead of Han characte
   assert.equal(learningText(sentence, 'sentences'), sentence.pinyin);
   assert.equal(learningText(sentence, 'words'), sentence.text);
   assert.equal(learningText({ language: 'en', text: 'I have already eaten.', pinyin: '' }, 'sentences'), 'I have already eaten.');
+});
+
+test('word export is compact TSV with source, Chinese pronunciation, and Russian translation only', () => {
+  assert.equal(wordsTsv([
+    { language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет' },
+    { language: 'en', text: 'take off', pinyin: '', translation: 'снимать; взлетать' },
+  ]), 'word\tpinyin\ttranslation\n你好\tnǐ hǎo\tпривет\ntake off\t\tснимать; взлетать\n');
+});
+
+test('word export prevents spreadsheet formulas in saved subtitle and translation text', () => {
+  assert.equal(wordsTsv([
+    { language: 'en', text: '=HYPERLINK("https://example.test")', pinyin: '', translation: '+unsafe' },
+  ]), 'word\tpinyin\ttranslation\n\'=HYPERLINK("https://example.test")\t\t\'+unsafe\n');
 });

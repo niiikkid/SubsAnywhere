@@ -22,7 +22,7 @@
           <select id="language" aria-label="Язык">
             <option value="">Все языки</option><option value="zh">Китайский</option><option value="en">Английский</option>
           </select>
-          <button id="refresh" type="button">Обновить</button>
+          <button id="refresh" type="button">Обновить</button><button id="download" type="button" title="Скачать все слова: слово, пиньинь, русский перевод">Скачать TSV</button>
         </div>
         <div class="view-tabs" role="tablist" aria-label="Состояние материалов">
           <button id="review-tab" type="button" role="tab" aria-selected="true">На повторение</button>
@@ -34,6 +34,14 @@
         <p id="status" class="status" role="status" aria-live="polite">Загрузка словаря…</p>
         <ul id="word-list" aria-label="Слова" aria-busy="true"></ul>
         <div id="empty" class="empty" hidden></div>
+      </div>
+      <div id="delete-modal" class="delete-modal" hidden>
+        <section class="delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-text">
+          <p class="delete-kicker">Удаление из словаря</p>
+          <h2 id="delete-title">Удалить?</h2>
+          <p id="delete-text"></p>
+          <div class="delete-dialog-actions"><button id="delete-cancel" type="button">Отмена</button><button id="delete-confirm" class="delete-confirm" type="button">Удалить</button></div>
+        </section>
       </div>
       <section id="study-mode" class="study-mode" aria-labelledby="study-title" hidden>
         <div class="study-header"><div><h2 id="study-title">Повторение слов</h2><p id="study-progress" class="study-progress" aria-live="polite"></p></div><button id="study-exit" type="button">Выйти</button></div>

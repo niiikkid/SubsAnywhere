@@ -245,3 +245,8 @@ class WordsStore:
         identifier = validate_word_id(identifier)
         with self._connection() as connection:
             return connection.execute("DELETE FROM words WHERE id = ?", (identifier,)).rowcount == 1
+
+    def remove_sentence(self, identifier) -> bool:
+        identifier = validate_word_id(identifier)
+        with self._connection() as connection:
+            return connection.execute("DELETE FROM sentences WHERE id = ?", (identifier,)).rowcount == 1
