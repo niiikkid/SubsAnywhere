@@ -577,6 +577,32 @@ test('interrupted generation is an error and server retry resumes status without
   assert.equal(messages.some((message) => message.type === 'dualCaptions.localSubtitle.generate'), false);
 });
 
+test('a stale generation failure cannot hide a ready YouTube subtitle track', async () => {
+  let existingRequests = 0;
+  const { elements, messages } = await bootPopup({
+    'dualCaptions.localSubtitle.status': () => ({
+      status: 'error', source: 'generated', error_code: 'command_failed',
+      error: 'Local command failed; check dependencies, cookies and video availability.',
+    }),
+    'dualCaptions.localSubtitle.existing': () => {
+      existingRequests += 1;
+      return {
+        status: 'ready', source: 'youtube', language: 'en',
+        srt: '1\n00:00:00,000 --> 00:00:01,000\nCaptions\n',
+      };
+    },
+    'dualCaptions.track.upsertLocal': (message) => ({
+      state: { settings: {}, externalTracks: [message.track] },
+    }),
+  }, { id: 88, url: 'https://www.youtube.com/watch?v=8ocWUGARCB0&list=RD8ocWUGARCB0&start_radio=1' });
+
+  assert.equal(existingRequests, 1);
+  assert.match(elements.youtubeSubtitleStatus.textContent, /субтитры.*сохранены|субтитры.*подключены/i);
+  assert.equal(elements.youtubeSubtitleStatus.classList.values.has('error'), false);
+  assert.equal(elements.retryYoutubeSubtitles.hidden, true);
+  assert.equal(messages.filter((message) => message.type === 'dualCaptions.track.upsertLocal').length, 1);
+});
+
 test('a lost generation response requires status recovery instead of enabling duplicate creation', async () => {
   const { elements } = await bootPopup({
     'dualCaptions.localSubtitle.status': () => ({ status: 'missing' }),

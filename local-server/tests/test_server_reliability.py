@@ -433,9 +433,11 @@ class ReliabilityTests(unittest.TestCase):
             "SUBSANYWHERE_HOST": "0.0.0.0", "SUBSANYWHERE_PORT": "43000",
             "SUBSANYWHERE_OUTPUT_DIR": directory, "SUBSANYWHERE_MAX_JOBS": "2",
             "SUBSANYWHERE_ASR_PYTHON": sys.executable, "SUBSANYWHERE_COOKIES_BROWSER": "",
-            "SUBSANYWHERE_COOKIES_FILE": "/read-only/cookies.txt",
             "SUBSANYWHERE_YTDLP_JS_RUNTIME": "node",
         }):
+            cookie = pathlib.Path(directory) / "cookies.txt"
+            cookie.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+            os.environ["SUBSANYWHERE_COOKIES_FILE"] = str(cookie)
             args = server.parse_args([])
             self.assertEqual((args.host, args.port, args.output_dir), ("0.0.0.0", 43000, pathlib.Path(directory)))
             run = mock.Mock(side_effect=missing_captions)
@@ -445,8 +447,17 @@ class ReliabilityTests(unittest.TestCase):
             self.assertEqual(service.existing(VIDEO)["status"], "missing")
             command = run.call_args.args[0]
             self.assertNotIn("--cookies-from-browser", command)
-            self.assertEqual(command[command.index("--cookies") + 1], "/read-only/cookies.txt")
+            self.assertEqual(command[command.index("--cookies") + 1], str(cookie))
             self.assertEqual(command[command.index("--js-runtimes") + 1], "node")
+
+    def test_missing_optional_cookie_file_does_not_break_public_youtube_commands(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = pathlib.Path(directory) / "cookies" / "youtube.txt"
+            service = server.SubtitleService(pathlib.Path(directory), cookies_from_browser="",
+                                             cookies_file=str(missing))
+            command = service._youtube_command()
+        self.assertNotIn("--cookies", command)
+        self.assertNotIn("--cookies-from-browser", command)
 
     def test_existing_requests_share_one_download_and_caption_job_limit(self):
         with tempfile.TemporaryDirectory() as directory:

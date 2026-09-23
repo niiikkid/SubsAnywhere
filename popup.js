@@ -454,17 +454,18 @@ async function pollGeneratedSubtitle(epoch = youtubeEpoch) {
   }
 }
 
-async function pollExistingSubtitle(epoch, generatedReady = false, selectionAtStart = null) {
+async function pollExistingSubtitle(epoch, generatedReady = false, selectionAtStart = null, generatedError = null) {
   if (popupClosed || epoch !== youtubeEpoch) return;
   const result = await request(MESSAGE.LOCAL_SUBTITLE_EXISTING, { videoId: youtubeId, language: state.settings.youtubeLanguage });
   if (popupClosed || epoch !== youtubeEpoch) return;
   if (result.status === 'running') {
     setYoutubeStatus('Скачиваю готовую дорожку YouTube… Можно продолжать настройку внешнего вида.');
-    youtubePollTimer = setTimeout(() => pollExistingSubtitle(epoch, generatedReady, selectionAtStart).catch((error) => youtubeFailure(error, true, epoch)), 1500);
+    youtubePollTimer = setTimeout(() => pollExistingSubtitle(epoch, generatedReady, selectionAtStart, generatedError).catch((error) => youtubeFailure(error, true, epoch)), 1500);
     return;
   }
   if (result.status === 'error') throw new Error(result.error || 'Не удалось скачать дорожку YouTube');
   if (result.language_required) {
+    if (generatedError) return youtubeFailure(generatedError, true, epoch);
     setYoutubeStatus('YouTube не указал язык оригинала. Выберите английский или китайский выше.');
     return;
   }
@@ -478,6 +479,8 @@ async function pollExistingSubtitle(epoch, generatedReady = false, selectionAtSt
     setYoutubeStatus(players.length
       ? 'Субтитры на языке оригинала скачаны и подключены.'
       : 'Субтитры на языке оригинала сохранены. Подключите плеер для просмотра.');
+  } else if (generatedError) {
+    youtubeFailure(generatedError, true, epoch);
   } else {
     setYoutubeStatus('Не найдена подходящая английская или китайская дорожка оригинала. Выберите язык речи и создайте субтитры локально; в режиме «Авто» создание использует китайский.');
   }
@@ -496,7 +499,8 @@ async function loadYoutubeSubtitles() {
     const generated = await request(MESSAGE.LOCAL_SUBTITLE_STATUS, { videoId: youtubeId });
     if (popupClosed || epoch !== youtubeEpoch) return;
     generationSettled = generated.status !== 'running';
-    if (generated.status === 'error') return youtubeFailure(new Error(generated.error || 'Создание субтитров прервано'), true, epoch);
+    const generatedError = generated.status === 'error'
+      ? new Error(generated.error || 'Создание субтитров прервано') : null;
     let generatedReady = false;
     let generatedRunning = false;
     if (generated.status === 'ready') {
@@ -514,7 +518,7 @@ async function loadYoutubeSubtitles() {
     }
     if (!generatedRunning) {
       $('createYoutubeSubtitles').disabled = false;
-      await pollExistingSubtitle(epoch, generatedReady);
+      await pollExistingSubtitle(epoch, generatedReady, null, generatedError);
     }
   } catch (error) {
     youtubeFailure(error, generationSettled, epoch);

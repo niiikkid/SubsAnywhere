@@ -11,7 +11,10 @@ services:
       - "127.0.0.1:${SUBSANYWHERE_HTTP_PORT:-43817}:43817"
     environment:
       SUBSANYWHERE_COOKIES_BROWSER: ""
-      SUBSANYWHERE_COOKIES_FILE: ""
+      # The named volume persists an explicitly imported cookie file across
+      # ordinary `up`, restart, and image rebuild commands. An empty volume is
+      # safe: the server falls back to unauthenticated YouTube requests.
+      SUBSANYWHERE_COOKIES_FILE: /run/cookies/youtube.txt
       SUBSANYWHERE_MAX_JOBS: "1"
       SUBSANYWHERE_WORDS_DB: /data/words.sqlite3
       SUBSANYWHERE_ASR_MODEL: "${SUBSANYWHERE_ASR_MODEL:-auto}"
@@ -22,6 +25,7 @@ services:
     volumes:
       - subtitles:/data
       - models:/models:ro
+      - cookies:/run/cookies:ro
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=1g,mode=1777
@@ -56,3 +60,4 @@ services:
 volumes:
   subtitles:
   models:
+  cookies:

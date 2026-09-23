@@ -282,8 +282,11 @@ class SubtitleService:
         command = [self.yt_dlp, "--ignore-config", "--no-progress", "--no-continue",
                    "--max-filesize", str(MAX_AUDIO_BYTES), "--socket-timeout", "15",
                    "--retries", "2", "--fragment-retries", "2"]
-        # A mounted cookie file takes precedence; never rewrite it from Chrome.
-        if self.cookies_file:
+        # The persistent Docker volume is mounted on every start. It is empty
+        # before the first explicit import, so only pass a real cookie file.
+        # This lets ordinary restarts retain imported cookies without making
+        # public videos fail on a fresh install.
+        if self.cookies_file and Path(self.cookies_file).expanduser().is_file():
             command.extend(["--cookies", self.cookies_file])
         elif self.cookies_from_browser:
             command.extend(["--cookies-from-browser", self.cookies_from_browser])

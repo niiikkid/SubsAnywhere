@@ -164,6 +164,13 @@ class CookieImportTests(unittest.TestCase):
 
 
 class CookieComposeContractTests(unittest.TestCase):
+    def test_default_server_reuses_the_persistent_cookie_volume(self):
+        repository = SCRIPT.parents[1]
+        compose = (repository / "compose.yaml").read_text()
+        self.assertIn("SUBSANYWHERE_COOKIES_FILE: /run/cookies/youtube.txt", compose)
+        self.assertIn("cookies:/run/cookies:ro", compose)
+        self.assertRegex(compose, r"volumes:\n(?:.*\n)*?  cookies:")
+
     def test_overlay_uses_offline_stdin_volume_instead_of_host_secret(self):
         repository = SCRIPT.parents[1]
         overlay = (repository / "compose.cookies.yaml").read_text()
