@@ -204,6 +204,12 @@ test('the own popup page remains trusted when Chrome hosts it in an extension ta
     pageKey: 'https://video.example/', patch: { fontSize: 31 } }, sender);
   assert.equal(result.ok, true);
   assert.equal(store.state.settings.fontSize, 31);
+  const embedded = await controller.handle({ type: MESSAGE.STATE_GET, tabId: 3,
+    pageKey: 'https://video.example/' }, {
+    ...POPUP, url: `${POPUP.url}?embedded=1`,
+    tab: { id: 3, url: 'https://video.example/' }, frameId: 0,
+  });
+  assert.equal(embedded.ok, true);
 });
 
 test('unknown extension and missing sender identities cannot read state', async () => {

@@ -304,7 +304,8 @@ export class BackgroundController {
     if (!this.#chrome.runtime?.id || sender?.id !== this.#chrome.runtime.id) {
       throw new Error('Недоверенный отправитель');
     }
-    if (sender.url === this.#chrome.runtime.getURL('popup.html')) {
+    const popupUrl = this.#chrome.runtime.getURL('popup.html');
+    if (sender.url === popupUrl || sender.url?.startsWith(`${popupUrl}?`)) {
       if (CONTENT_MESSAGES.has(message?.type)) throw new Error('Сообщение доступно только плееру');
       return false;
     }

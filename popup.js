@@ -10,6 +10,9 @@ import { MESSAGE } from './protocol.js';
 import { buildTrackOptions, normalizeState, patchSettings, updateExternalTrackTiming } from './state-core.js';
 
 const $ = (id) => document.getElementById(id);
+const embeddedPanel = new URLSearchParams(globalThis.location?.search || '').get('embedded') === '1'
+  && globalThis.window?.parent && window.parent !== window;
+if (embeddedPanel) document.documentElement.classList.add('embedded');
 const controls = $('controls');
 const status = $('status');
 let tabId;
@@ -48,6 +51,49 @@ let popupClosed = false;
 let selectGeneratedWhenReady = false;
 let selectionRevision = 0;
 let generatedSelectionRevision = 0;
+
+function postPanelMessage(type, payload = {}) {
+  if (!embeddedPanel) return;
+  window.parent.postMessage({ source: 'subs-anywhere-frame', type, ...payload }, '*');
+}
+
+function setupEmbeddedPanel() {
+  if (!embeddedPanel) return;
+  const windowControls = document.querySelector('.panel-window-controls');
+  const header = document.querySelector('.app-header');
+  const dock = $('panelDock');
+  windowControls.hidden = false;
+  $('panelClose').addEventListener('click', () => postPanelMessage('close'));
+  dock.addEventListener('click', () => postPanelMessage('dock-toggle'));
+  window.addEventListener('message', (event) => {
+    if (event.source !== window.parent || event.data?.source !== 'subs-anywhere-host'
+      || event.data?.type !== 'panel-state') return;
+    dock.hidden = !event.data.dockable;
+    dock.textContent = event.data.layout === 'docked' ? '↗' : '↙';
+    dock.title = event.data.layout === 'docked' ? 'Открепить окно' : 'Встроить справа';
+    dock.setAttribute('aria-label', dock.title);
+  });
+  header.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || !event.isPrimary || event.target.closest('button, a, input, select')) return;
+    event.preventDefault();
+    header.classList.add('dragging');
+    header.setPointerCapture?.(event.pointerId);
+    postPanelMessage('drag-start', { screenX: event.screenX, screenY: event.screenY });
+  });
+  header.addEventListener('pointermove', (event) => {
+    if (!header.hasPointerCapture?.(event.pointerId)) return;
+    postPanelMessage('drag-move', { screenX: event.screenX, screenY: event.screenY });
+  });
+  const finishDrag = (event) => {
+    if (!header.hasPointerCapture?.(event.pointerId)) return;
+    header.releasePointerCapture?.(event.pointerId);
+    header.classList.remove('dragging');
+    postPanelMessage('drag-end');
+  };
+  header.addEventListener('pointerup', finishDrag);
+  header.addEventListener('pointercancel', finishDrag);
+  postPanelMessage('ready');
+}
 
 
 function adoptState(value) {
@@ -718,7 +764,13 @@ async function init() {
   render();
   drawSaveFeedback();
   const aiPromise = loadAiSettings();
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  let tab;
+  if (embeddedPanel) {
+    const context = await request(MESSAGE.PANEL_CONTEXT_GET);
+    tab = { id: context.tabId, url: context.url };
+  } else {
+    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  }
   if (!Number.isInteger(tab?.id)) throw new Error('Не удалось определить активную вкладку.');
   tabId = tab.id;
   connectable = /^https?:\/\//i.test(tab.url || '') && !/^https:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore)(\/|$)/i.test(tab.url || '');
@@ -742,6 +794,7 @@ for (const [index, section] of sections.entries()) {
   });
 }
 showSection('player');
+setupEmbeddedPanel();
 document.defaultView?.addEventListener('pagehide', () => {
   popupClosed = true;
   youtubeEpoch += 1;

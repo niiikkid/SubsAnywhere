@@ -30,6 +30,11 @@ export const MESSAGE = Object.freeze({
   CONTENT_TRACKS: 'dualCaptions.content.tracks',
   CONTENT_POSITION_PATCH: 'dualCaptions.content.positionPatch',
   CONTENT_RESET: 'dualCaptions.content.reset',
+  PANEL_STATE_GET: 'dualCaptions.panel.get',
+  PANEL_STATE_PATCH: 'dualCaptions.panel.patch',
+  PANEL_CONTEXT_GET: 'dualCaptions.panel.context',
+  PANEL_TOGGLE: 'dualCaptions.panel.toggle',
+  PANEL_SHOW: 'dualCaptions.panel.show',
 });
 
 export const ok = (data = {}) => ({ ok: true, data });

@@ -12,9 +12,16 @@
     "matches": ["http://127.0.0.1:43817/*"],
     "js": ["words-bridge.js"],
     "run_at": "document_start"
+  }, {
+    "matches": ["http://*/*", "https://*/*"],
+    "js": ["panel-layout.js", "panel-host.js"],
+    "run_at": "document_idle"
+  }],
+  "web_accessible_resources": [{
+    "resources": ["popup.html"],
+    "matches": ["<all_urls>"]
   }],
   "action": {
-    "default_title": "SubsAnywhere",
-    "default_popup": "popup.html"
+    "default_title": "Показать или скрыть SubsAnywhere"
   }
 }
