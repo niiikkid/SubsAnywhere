@@ -73,6 +73,8 @@ if (typeof document !== "undefined") (() => {
   const studyWord = document.getElementById("study-word");
   const studyPinyin = document.getElementById("study-pinyin");
   const studyTranslation = document.getElementById("study-translation");
+  const studyAiTranslations = document.getElementById("study-ai-translations");
+  const studyAiTranslationsList = document.getElementById("study-ai-translations-list");
   const studyExplanation = document.getElementById("study-explanation");
   const studyExplanationText = document.getElementById("study-explanation-text");
   const studyFinish = document.getElementById("study-finish");
@@ -80,6 +82,8 @@ if (typeof document !== "undefined") (() => {
   const studyBack = document.getElementById("study-back");
   const studyLearned = document.getElementById("study-learned");
   const studyExplain = document.getElementById("study-explain");
+  const studyTranslate = document.getElementById("study-translate");
+  const studyDelete = document.getElementById("study-delete");
   const studyNext = document.getElementById("study-next");
   const studyRestart = document.getElementById("study-restart");
   let words = [];
@@ -101,6 +105,13 @@ if (typeof document !== "undefined") (() => {
 
   function searchable(value) {
     return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/gu, " ").trim();
+  }
+
+  function validAiTranslations(value) {
+    return Array.isArray(value) && value.length <= 3 && value.every(item => item && typeof item === "object"
+      && Object.keys(item).length === 2 && typeof item.translation === "string" && item.translation.length > 0
+      && item.translation.length <= 320 && typeof item.usage === "string" && item.usage.length > 0
+      && item.usage.length <= 240);
   }
 
   function message(text, error = false) {
@@ -175,6 +186,7 @@ if (typeof document !== "undefined") (() => {
       !item || !Number.isSafeInteger(item.id) || item.id < 1 || !["zh", "en"].includes(item.language)
       || !["text", "pinyin", "translation", "created_at", "explanation"].every(field => typeof item[field] === "string")
       || item.explanation.length > 1200
+      || (type === "words" && !validAiTranslations(item.ai_translations))
       || typeof item.learned !== "boolean"
     ))) throw new Error("Сервер вернул неверный формат списка. Обновите сервер и повторите попытку.");
     return data[key];
@@ -208,6 +220,7 @@ if (typeof document !== "undefined") (() => {
     deleteConfirm.disabled = false;
     listControls.inert = true;
     wordPanel.inert = true;
+    studyMode.inert = true;
     deleteModal.hidden = false;
     deleteConfirm.focus();
   }
@@ -217,6 +230,7 @@ if (typeof document !== "undefined") (() => {
     deleteModal.hidden = true;
     listControls.inert = false;
     wordPanel.inert = false;
+    studyMode.inert = false;
     deleteTarget = null;
     const trigger = deleteTrigger;
     deleteTrigger = null;
@@ -227,7 +241,8 @@ if (typeof document !== "undefined") (() => {
     const query = searchable(search.value);
     const inView = currentItems().filter(word => word.learned === (view === "learned"));
     const visible = inView.filter(word => (!language.value || word.language === language.value)
-      && (!query || [word.text, word.pinyin, word.translation].some(value => searchable(value).includes(query))));
+      && (!query || [word.text, word.pinyin, word.translation, ...((word.ai_translations || []).flatMap(item => [item.translation, item.usage]))]
+        .some(value => searchable(value).includes(query))));
     const fragment = document.createDocumentFragment();
     for (const word of visible) {
       const row = element("li", "word-row", "");
@@ -253,6 +268,18 @@ if (typeof document !== "undefined") (() => {
       remove.addEventListener("click", () => openDeleteDialog(word, remove));
       const translation = element("div", "word-translation", "");
       translation.append(element("p", "", word.translation));
+      if (kind === "words" && word.ai_translations.length) {
+        const aiTranslations = element("section", "ai-translations", "");
+        aiTranslations.append(element("h4", "", "Перевод ИИ"));
+        const alternatives = element("ol", "", "");
+        for (const item of word.ai_translations) {
+          const alternative = element("li", "", "");
+          alternative.append(element("strong", "", item.translation), element("span", "", item.usage));
+          alternatives.append(alternative);
+        }
+        aiTranslations.append(alternatives);
+        translation.append(aiTranslations);
+      }
       let details;
       if (word.explanation) {
         details = element("details", "word-explanation", "");
@@ -266,6 +293,13 @@ if (typeof document !== "undefined") (() => {
       explain.disabled = busy;
       explain.addEventListener("click", () => word.explanation ? details.toggleAttribute("open") : explainWord(word));
       const actions = element("div", "word-actions", "");
+      if (kind === "words" && word.language === "zh") {
+        const translate = element("button", "ai-translate", word.ai_translations.length ? "Получить заново" : "Получить перевод");
+        translate.type = "button";
+        translate.disabled = busy;
+        translate.addEventListener("click", () => translateWord(word));
+        actions.append(translate);
+      }
       actions.append(explain, learned, remove);
       row.append(main, translation, actions);
       fragment.append(row);
@@ -309,6 +343,10 @@ if (typeof document !== "undefined") (() => {
     studyNext.hidden = complete;
     studyLearned.hidden = complete;
     studyExplain.hidden = complete;
+    studyTranslate.hidden = true;
+    studyDelete.hidden = complete;
+    studyAiTranslations.hidden = true;
+    studyAiTranslationsList.replaceChildren();
     studyRestart.hidden = !complete;
     if (complete) return;
     const word = studyWords[studyPosition];
@@ -319,6 +357,21 @@ if (typeof document !== "undefined") (() => {
     studyPinyin.lang = "zh-Latn";
     studyPinyin.hidden = kind !== "words" || !word.pinyin;
     studyTranslation.textContent = word.translation;
+    const chineseWord = kind === "words" && word.language === "zh";
+    const aiTranslations = chineseWord ? word.ai_translations : [];
+    studyTranslate.hidden = !chineseWord;
+    studyTranslate.disabled = busy;
+    studyTranslate.textContent = aiTranslations.length ? "Получить заново" : "Получить перевод";
+    if (aiTranslations.length) {
+      const alternatives = document.createDocumentFragment();
+      for (const item of aiTranslations) {
+        const alternative = element("li", "", "");
+        alternative.append(element("strong", "", item.translation), element("span", "", item.usage));
+        alternatives.append(alternative);
+      }
+      studyAiTranslationsList.replaceChildren(alternatives);
+      studyAiTranslations.hidden = false;
+    }
     studyLearned.disabled = busy;
     studyLearned.textContent = word.learned ? "Вернуть на повторение" : `${kind === "sentences" ? "Предложение" : "Слово"} выучено`;
     studyExplain.disabled = busy;
@@ -327,6 +380,8 @@ if (typeof document !== "undefined") (() => {
       : (kind === "sentences" ? "Разобрать" : "Объяснить");
     studyExplanation.hidden = !word.explanation || !studyExplanationOpen;
     studyExplanationText.textContent = word.explanation || "";
+    studyDelete.disabled = busy;
+    studyDelete.textContent = `Удалить ${noun("one")}`;
   }
 
   function startStudy() {
@@ -405,6 +460,7 @@ if (typeof document !== "undefined") (() => {
     const target = deleteTarget;
     if (!target || busy) return;
     const label = target.kind === "sentences" ? "Предложение" : "Слово";
+    const deletedDuringStudy = !studyMode.hidden && target.kind === kind;
     busy = true;
     deleteCancel.disabled = true;
     deleteConfirm.disabled = true;
@@ -428,20 +484,29 @@ if (typeof document !== "undefined") (() => {
       deleteCancel.disabled = false;
       deleteConfirm.disabled = false;
       if (removed) closeDeleteDialog({ restoreFocus: false });
+      if (removed && deletedDuringStudy) {
+        studyWords = [];
+        studyPosition = 0;
+        studyExplanationOpen = false;
+        studyMode.hidden = true;
+        entityTabs.hidden = false;
+        listControls.hidden = false;
+        wordPanel.hidden = false;
+      }
       render();
       if (removed) search.focus();
     }
   }
 
-  function requestExplanation(id) {
+  function requestPanelAction(id, action) {
     const requestKind = kind;
     const requestId = crypto.randomUUID().replace(/-/gu, "");
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => finish(new Error("Расширение не ответило. Перезагрузите его на странице chrome://extensions.")), 45000);
       function receive(event) {
         const data = event.data;
-        if (event.source !== window || event.origin !== location.origin || !data || data.type !== "subsanywhere.words.explain.result" || data.requestId !== requestId) return;
-        finish(data.ok ? (requestKind === "sentences" ? data.sentence : data.word) : new Error(data.error || "Не удалось получить объяснение"));
+        if (event.source !== window || event.origin !== location.origin || !data || data.type !== `${action}.result` || data.requestId !== requestId) return;
+        finish(data.ok ? (requestKind === "sentences" ? data.sentence : data.word) : new Error(data.error || "Не удалось получить ответ ИИ"));
       }
       function finish(result) {
         clearTimeout(timeout);
@@ -449,8 +514,12 @@ if (typeof document !== "undefined") (() => {
         result instanceof Error ? reject(result) : resolve(result);
       }
       window.addEventListener("message", receive);
-      window.postMessage({ type: "subsanywhere.words.explain", requestId, id, kind: requestKind }, location.origin);
+      window.postMessage({ type: action, requestId, id, kind: requestKind }, location.origin);
     });
+  }
+
+  function requestExplanation(id) {
+    return requestPanelAction(id, "subsanywhere.words.explain");
   }
 
   async function explainWord(word) {
@@ -472,6 +541,28 @@ if (typeof document !== "undefined") (() => {
       message(`${kind === "sentences" ? "Разбор" : "Объяснение"} для «${learningText(word, kind)}» сохранён.`);
     } catch (error) {
       message(error instanceof Error ? error.message : "Не удалось получить объяснение.", true);
+    } finally {
+      busy = false;
+      render();
+      renderStudy();
+    }
+  }
+
+  async function translateWord(word) {
+    if (busy || kind !== "words" || word.language !== "zh") return;
+    busy = true;
+    message("ИИ подбирает варианты перевода…");
+    render();
+    try {
+      const fresh = await requestPanelAction(word.id, "subsanywhere.words.translate");
+      if (!fresh || fresh.id !== word.id || !validAiTranslations(fresh.ai_translations) || !fresh.ai_translations.length) {
+        throw new Error("Расширение не подтвердило варианты перевода.");
+      }
+      words = words.map(item => item.id === fresh.id ? fresh : item);
+      studyWords = studyWords.map(item => item.id === fresh.id ? fresh : item);
+      message(`Переводы ИИ для «${word.text}» сохранены отдельно от перевода из видео.`);
+    } catch (error) {
+      message(error instanceof Error ? error.message : "Не удалось получить перевод.", true);
     } finally {
       busy = false;
       render();
@@ -545,6 +636,14 @@ if (typeof document !== "undefined") (() => {
   studyLearned.addEventListener("click", () => {
     const word = studyWords[studyPosition];
     if (word) setLearned(word, !word.learned, true);
+  });
+  studyTranslate.addEventListener("click", () => {
+    const word = studyWords[studyPosition];
+    if (word) translateWord(word);
+  });
+  studyDelete.addEventListener("click", () => {
+    const word = studyWords[studyPosition];
+    if (word) openDeleteDialog(word, studyDelete);
   });
   window.addEventListener("focus", load);
   load();

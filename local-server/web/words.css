@@ -47,12 +47,20 @@ h2 { margin: 0; font-size: 14px; font-weight: 500; }
 .word-translation { margin: 0; color: #d2d5dd; overflow-wrap: anywhere; white-space: pre-wrap; }
 .word-translation > p { margin: 0; }
 .word-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.explain, .learned, .delete { min-height: 34px; padding: 5px 10px; font-size: 12px; }
+.explain, .ai-translate, .learned, .delete { min-height: 34px; padding: 5px 10px; font-size: 12px; }
+.ai-translate { color: #dce2ff; border-color: #59669e; background: rgba(92, 106, 174, .16); }
+.ai-translate:hover:not(:disabled) { color: #fff; border-color: #8799e7; background: rgba(104, 122, 202, .27); }
 .delete { color: #ffc8c8; border-color: #75454a; background: rgba(145, 55, 64, .16); }
 .delete:hover:not(:disabled), .delete-confirm:hover:not(:disabled) { color: #fff; border-color: #d47880; background: rgba(180, 63, 75, .28); }
 .word-explanation { margin-top: 8px; color: var(--muted); font-size: 13px; white-space: normal; }
 .word-explanation summary { cursor: pointer; color: var(--accent); }
 .word-explanation p { margin: 6px 0 0; color: #d2d5dd; }
+.ai-translations { margin-top: 10px; padding: 9px 10px; border-left: 2px solid #6878ba; border-radius: 0 7px 7px 0; background: rgba(84, 98, 162, .09); white-space: normal; }
+.ai-translations h4 { margin: 0 0 5px; color: #b9c4fa; font-size: 12px; font-weight: 600; }
+.ai-translations ol { margin: 0; padding-left: 20px; }
+.ai-translations li + li { margin-top: 5px; }
+.ai-translations strong { color: #e6e9f5; font-weight: 500; }
+.ai-translations span { display: block; margin-top: 1px; color: var(--muted); font-size: 12px; }
 .empty { padding: 40px 24px 48px; color: var(--muted); text-align: center; }
 .study-mode { padding: 20px 16px 18px; min-height: 420px; }
 .study-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
@@ -62,6 +70,12 @@ h2 { margin: 0; font-size: 14px; font-weight: 500; }
 .study-word { max-width: 100%; margin: 0; font-size: clamp(36px, 7vw, 72px); font-weight: 500; line-height: 1.15; overflow-wrap: anywhere; }
 .study-pinyin { max-width: 100%; margin: 14px 0 0; color: var(--accent); font-size: clamp(20px, 3vw, 30px); overflow-wrap: anywhere; }
 .study-translation { max-width: 760px; margin: 22px 0 0; color: #dce0eb; font-size: clamp(21px, 3.4vw, 32px); line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; }
+.study-ai-translations { width: min(760px, 100%); margin-top: 20px; padding: 14px 16px; border-left: 2px solid #6878ba; border-radius: 0 8px 8px 0; background: rgba(84, 98, 162, .09); text-align: left; }
+.study-ai-translations h3 { margin: 0 0 7px; color: #b9c4fa; font-size: 13px; font-weight: 600; }
+.study-ai-translations ol { margin: 0; padding-left: 22px; }
+.study-ai-translations li + li { margin-top: 7px; }
+.study-ai-translations strong { color: #e6e9f5; font-weight: 500; }
+.study-ai-translations span { display: block; margin-top: 2px; color: var(--muted); font-size: 13px; }
 .study-explanation { max-width: 760px; margin-top: 24px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; color: #dce0eb; text-align: left; }
 .study-explanation h3 { margin: 0 0 6px; color: var(--accent); font-size: 13px; font-weight: 500; }
 .study-explanation p { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }

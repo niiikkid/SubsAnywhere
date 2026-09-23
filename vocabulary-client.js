@@ -51,6 +51,25 @@ function normalizeExplanation(value) {
   return explanation;
 }
 
+function storedAiTranslations(value, { required = false } = {}) {
+  if (!Array.isArray(value) || value.length > 3 || (required && !value.length)) {
+    throw new Error('Некорректные переводы ИИ');
+  }
+  const seen = new Set();
+  return value.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)
+      || Object.keys(item).length !== 2 || !Object.hasOwn(item, 'translation') || !Object.hasOwn(item, 'usage')) {
+      throw new Error('Некорректные переводы ИИ');
+    }
+    const translation = storedExplanation(item.translation);
+    const usage = storedExplanation(item.usage);
+    if (!translation || translation.length > 320 || !usage || usage.length > 240
+      || seen.has(translation.toLocaleLowerCase())) throw new Error('Некорректные переводы ИИ');
+    seen.add(translation.toLocaleLowerCase());
+    return { translation, usage };
+  });
+}
+
 function savedWord(value) {
   const word = normalizeWord(value);
   if (!Number.isSafeInteger(value.id) || value.id < 1 || typeof value.created_at !== 'string'
@@ -58,7 +77,11 @@ function savedWord(value) {
     throw new Error('Некорректный ответ словаря');
   }
   const explanation = value.explanation === undefined ? '' : storedExplanation(value.explanation);
-  return { ...word, id: value.id, created_at: value.created_at, learned: value.learned, explanation };
+  const aiTranslations = value.ai_translations === undefined ? undefined : storedAiTranslations(value.ai_translations);
+  return {
+    ...word, id: value.id, created_at: value.created_at, learned: value.learned, explanation,
+    ...(aiTranslations === undefined ? {} : { ai_translations: aiTranslations }),
+  };
 }
 
 function savedSentence(value) {
@@ -130,6 +153,23 @@ export class VocabularyClient {
     const { words } = await this.list();
     const confirmed = words.find((item) => item.id === id && item.explanation === explanation);
     if (!confirmed) throw new Error('Объяснение слова не сохранилось. Повторите попытку');
+    return { word: confirmed };
+  }
+
+  async saveAiTranslations(id, value) {
+    if (!Number.isSafeInteger(id) || id < 1) throw new Error('Некорректный идентификатор слова');
+    const translations = storedAiTranslations(value, { required: true });
+    const payload = await this.#request('/api/words/ai-translations', 'POST', { id, translations });
+    let saved;
+    try { saved = savedWord(payload?.word); }
+    catch { throw new Error('Некорректный ответ словаря'); }
+    if (saved.id !== id || JSON.stringify(saved.ai_translations) !== JSON.stringify(translations)) {
+      throw new Error('Сервер не подтвердил переводы ИИ');
+    }
+    const { words } = await this.list();
+    const confirmed = words.find((item) => item.id === id
+      && JSON.stringify(item.ai_translations) === JSON.stringify(translations));
+    if (!confirmed) throw new Error('Переводы ИИ не сохранились. Повторите попытку');
     return { word: confirmed };
   }
 

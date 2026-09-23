@@ -909,10 +909,11 @@ class SubtitleService:
 
 
 WORDS_ROUTES = frozenset({
-    "/api/words", "/api/words/learned", "/api/words/explanation", "/api/words/delete",
+    "/api/words", "/api/words/learned", "/api/words/explanation", "/api/words/ai-translations", "/api/words/delete",
     "/api/sentences", "/api/sentences/learned", "/api/sentences/explanation", "/api/sentences/delete",
 })
 WORDS_DELETE_ROUTES = frozenset({"/api/words/delete", "/api/sentences/delete"})
+WORDS_EXTENSION_WRITE_ROUTES = frozenset({"/api/words/ai-translations"})
 WORDS_ASSETS = {
     "/words": ("index.html", "text/html; charset=utf-8"),
     "/words/words.js": ("words.js", "text/javascript; charset=utf-8"),
@@ -1019,6 +1020,10 @@ def handler_for(service, words_store=None):
             if self.path in WORDS_DELETE_ROUTES and not self._panel_authorized():
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden client"})
                 return
+            if (self.path in WORDS_EXTENSION_WRITE_ROUTES
+                    and not EXTENSION_ORIGIN_PATTERN.fullmatch(self.headers.get("Origin", ""))):
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden client"})
+                return
             if not self._authorized():
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden client"})
                 return
@@ -1077,6 +1082,14 @@ def handler_for(service, words_store=None):
                         word = vocabulary.set_explanation(data["id"], data["explanation"])
                         if word is None:
                             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Word not found"})
+                            return
+                        payload = {"word": word}
+                    elif self.path == "/api/words/ai-translations":
+                        if not isinstance(data, dict) or set(data) != {"id", "translations"}:
+                            raise ValueError("Expected word ID and AI translations")
+                        word = vocabulary.set_ai_translations(data["id"], data["translations"])
+                        if word is None:
+                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Chinese word not found"})
                             return
                         payload = {"word": word}
                     elif self.path == "/api/words/delete":

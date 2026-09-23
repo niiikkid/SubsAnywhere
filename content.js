@@ -517,6 +517,18 @@
           characters: bilingual.characters,
         };
       }
+      if (/\p{Script=Han}/u.test(text)) {
+        return {
+          key: `zh\u0000${text}\u0000`,
+          sourceText: text,
+          // Keep the Han text visible while the one translation request is in flight.
+          // Its returned sentence item replaces this line with generated pinyin.
+          displayText: text,
+          language: 'zh',
+          characters: text,
+          generatedPinyin: true,
+        };
+      }
       return {
         key: `caption\u0000${text}`,
         sourceText: text,
@@ -570,7 +582,7 @@
         sendMessage({
           type: 'dualCaptions.caption.translate',
           text: next.sourceText,
-          displayText: next.displayText,
+          displayText: next.generatedPinyin ? '' : next.displayText,
           language: next.language,
         })
           .then((response) => {
@@ -801,10 +813,16 @@
     }
 
     function renderInteractiveCaption(text) {
-      const descriptor = translationDescriptor(text);
-      const items = translationCache.get(descriptor.key);
-      const failure = translationFailures.get(descriptor.key) || '';
-      const key = `${state.settings.secondTrackId}\u0000${descriptor.key}\u0000${state.settings.inlineTranslations}\u0000${failure}`;
+      const sourceDescriptor = translationDescriptor(text);
+      const items = translationCache.get(sourceDescriptor.key);
+      const generatedPinyin = sourceDescriptor.generatedPinyin
+        ? items?.find((item) => item?.isSentenceTranslation && typeof item.text === 'string' && item.text.trim())?.text.trim()
+        : '';
+      const descriptor = generatedPinyin
+        ? { ...sourceDescriptor, displayText: generatedPinyin }
+        : sourceDescriptor;
+      const failure = translationFailures.get(sourceDescriptor.key) || '';
+      const key = `${state.settings.secondTrackId}\u0000${sourceDescriptor.key}\u0000${descriptor.displayText}\u0000${state.settings.inlineTranslations}\u0000${failure}`;
       if (state.renderedCaptionKey === key && state.renderedCaptionItems === items) return;
       state.renderedCaptionKey = key;
       state.renderedCaptionItems = items;

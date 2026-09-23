@@ -169,6 +169,33 @@ test('sentence grammar is generated only from the trusted panel and saved after 
   })).ok, false);
 });
 
+test('AI translation variants for a Chinese word are generated from canonical storage only and saved separately', async () => {
+  const word = {
+    id: 5, language: 'zh', text: '行', pinyin: 'xíng', translation: 'старый перевод',
+    ai_translations: [], explanation: '', learned: false, created_at: '2026-01-01T00:00:00Z',
+  };
+  const translations = [{ translation: 'годится; можно', usage: 'когда что-то допустимо или подходит' }];
+  const calls = [];
+  const controller = new RuntimeBackgroundController(makeChrome(), new FakeStore(), {
+    vocabulary: {
+      async list() { calls.push('list'); return { words: [word] }; },
+      async saveAiTranslations(id, value) { calls.push(['save', id, value]); return { word: { ...word, ai_translations: value } }; },
+    },
+    aiClient: { async translateSavedChineseWord(value) { calls.push(['ai', value.id]); return translations; } },
+  });
+  const panel = {
+    id: EXTENSION_ID, frameId: 0, url: 'http://127.0.0.1:43817/words',
+    tab: { id: 91, url: 'http://127.0.0.1:43817/words' },
+  };
+
+  const response = await controller.handle({ type: MESSAGE.WORD_TRANSLATE, id: 5 }, panel);
+  assert.deepEqual(response, { ok: true, data: { word: { ...word, ai_translations: translations } } });
+  assert.deepEqual(calls, ['list', ['ai', 5], ['save', 5, translations]]);
+  assert.equal((await controller.handle({ type: MESSAGE.WORD_TRANSLATE, id: 5 }, {
+    ...panel, url: 'https://evil.example/', tab: { id: 91, url: 'https://evil.example/' },
+  })).ok, false);
+});
+
 test('the own popup page remains trusted when Chrome hosts it in an extension tab', async () => {
   const store = new FakeStore();
   const controller = new RuntimeBackgroundController(makeChrome(), store);
@@ -762,6 +789,41 @@ test('Chinese pinyin click translates its linked characters in one request', asy
     dictionary: 'Привет, мир',
     context: 'Привет, мир',
     glossary: [{ pinyin: 'nǐ hǎo', translation: 'здравствуйте' }],
+    isSentenceTranslation: true,
+  }]);
+});
+
+test('Chinese Han captions receive generated pinyin with their translation in one request', async () => {
+  const calls = [];
+  const deepSeek = {
+    async translateChineseCaption(text, pinyin) {
+      calls.push({ text, pinyin });
+      return {
+        pinyin: 'nǐ hǎo, shì jiè',
+        dictionary: 'Привет, мир',
+        context: 'Привет, мир',
+        glossary: [{ text: '你好', pinyin: 'nǐ hǎo', translation: 'здравствуйте', pinyinStart: 0, pinyinEnd: 6 }],
+      };
+    },
+  };
+  const controller = new BackgroundController(makeChrome(), new FakeStore(), { deepSeek });
+
+  const result = await controller.handle({
+    type: MESSAGE.CAPTION_TRANSLATE,
+    language: 'zh',
+    text: '你好，世界',
+    displayText: '',
+  }, await selectTranslationPlayer(controller));
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, [{ text: '你好，世界', pinyin: '' }]);
+  assert.deepEqual(result.data.items, [{
+    start: 0,
+    end: 15,
+    text: 'nǐ hǎo, shì jiè',
+    dictionary: 'Привет, мир',
+    context: 'Привет, мир',
+    glossary: [{ text: '你好', pinyin: 'nǐ hǎo', translation: 'здравствуйте', pinyinStart: 0, pinyinEnd: 6 }],
     isSentenceTranslation: true,
   }]);
 });

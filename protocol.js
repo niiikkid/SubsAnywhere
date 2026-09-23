@@ -18,6 +18,7 @@ export const MESSAGE = Object.freeze({
   WORDS_LIST: 'dualCaptions.words.list',
   WORDS_SAVE: 'dualCaptions.words.save',
   WORD_EXPLAIN: 'dualCaptions.words.explain',
+  WORD_TRANSLATE: 'dualCaptions.words.translate',
   SENTENCES_LIST: 'dualCaptions.sentences.list',
   SENTENCES_SAVE: 'dualCaptions.sentences.save',
   SENTENCE_EXPLAIN: 'dualCaptions.sentences.explain',

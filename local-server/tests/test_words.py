@@ -35,9 +35,10 @@ class WordsStoreTests(unittest.TestCase):
     def test_persists_deduplicates_and_marks_words_learned_without_removing_them(self):
         self.assertFalse(self.path.exists())
         first = self.store.add(ZH)
-        self.assertEqual(set(first), {"id", "language", "text", "pinyin", "translation", "explanation", "created_at", "learned"})
+        self.assertEqual(set(first), {"id", "language", "text", "pinyin", "translation", "explanation", "ai_translations", "created_at", "learned"})
         self.assertFalse(first["learned"])
         self.assertEqual(first["explanation"], "")
+        self.assertEqual(first["ai_translations"], [])
         self.assertRegex(first["created_at"], r"^\d{4}-\d{2}-\d{2}T.*Z$")
         reopened = WordsStore(self.path)
         duplicate = reopened.add({**ZH, "translation": "другое значение"})
@@ -72,6 +73,7 @@ class WordsStoreTests(unittest.TestCase):
         words = self.store.list()
         self.assertEqual(len(words), 1)
         self.assertFalse(words[0]["learned"])
+        self.assertEqual(words[0]["ai_translations"], [])
         self.assertEqual(self.store.set_learned(words[0]["id"], True)["learned"], True)
 
     def test_concurrent_first_access_migrates_legacy_vocabulary_once(self):
@@ -104,6 +106,23 @@ class WordsStoreTests(unittest.TestCase):
         self.store.add({**ZH, "text": "行", "pinyin": "xíng"})
         self.store.add({**ZH, "text": "行", "pinyin": "háng"})
         self.assertEqual(len(self.store.list()), 2)
+
+    def test_ai_translation_variants_are_persisted_separately_for_chinese_words(self):
+        word = self.store.add({**ZH, "text": "行", "pinyin": "xíng", "translation": "старый перевод"})
+        translations = [
+            {"translation": "идти; быть в движении", "usage": "о движении или ходе процесса"},
+            {"translation": "годится; можно", "usage": "когда что-то допустимо или подходит"},
+        ]
+        saved = self.store.set_ai_translations(word["id"], translations)
+        self.assertEqual(saved["translation"], "старый перевод")
+        self.assertEqual(saved["ai_translations"], translations)
+        self.assertEqual(WordsStore(self.path).list()[0]["ai_translations"], translations)
+        self.assertIsNone(self.store.set_ai_translations(self.store.add(EN)["id"], translations))
+        for invalid in ([], [{"translation": "", "usage": "контекст"}],
+                        [{"translation": "можно", "usage": "один"}, {"translation": "Можно", "usage": "два"}],
+                        [{"translation": "значение", "usage": "x" * 241}]):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.store.set_ai_translations(word["id"], invalid)
 
     def test_sentences_are_persisted_separately_with_learning_and_grammar_state(self):
         sentence = self.store.add_sentence(ZH_SENTENCE)
@@ -214,6 +233,17 @@ class WordsHTTPTests(unittest.TestCase):
         explained = {**word, "learned": True, "explanation": explanation}
         self.assertEqual((status, json.loads(body)), (200, {"word": explained}))
         self.assertEqual(json.loads(self.request()[2]), {"words": [explained]})
+
+    def test_extension_saves_ai_translation_variants_without_replacing_the_video_translation(self):
+        extension_origin = "chrome-extension://" + "a" * 32
+        word = json.loads(self.request("POST", payload={**ZH, "text": "行", "pinyin": "xíng", "translation": "старый перевод"}, headers={"Origin": extension_origin})[2])["word"]
+        translations = [{"translation": "годится; можно", "usage": "когда что-то допустимо или подходит"}]
+        status, _, body = self.request("POST", "/api/words/ai-translations", {"id": word["id"], "translations": translations}, {"Origin": extension_origin})
+        saved = json.loads(body)["word"]
+        self.assertEqual(status, 200)
+        self.assertEqual(saved["translation"], "старый перевод")
+        self.assertEqual(saved["ai_translations"], translations)
+        self.assertEqual(self.request("POST", "/api/words/ai-translations", {"id": word["id"], "translations": translations}, {"Origin": self.origin})[0], 403)
 
     def test_sentence_api_has_an_independent_lifecycle(self):
         status, _, body = self.request("POST", "/api/sentences", ZH_SENTENCE)

@@ -1,6 +1,7 @@
 """Persistent local vocabulary; no model imports, network, or startup writes."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -13,7 +14,11 @@ MAX_WORD_BODY_BYTES = 16384
 MAX_SAFE_ID = 9007199254740991
 WORD_FIELDS = {"language", "text", "pinyin", "translation"}
 MAX_EXPLANATION_CHARS = 1200
-PUBLIC_COLUMNS = "id, language, text, pinyin, translation, explanation, created_at, learned"
+MAX_AI_TRANSLATIONS = 3
+MAX_AI_TRANSLATION_CHARS = 320
+MAX_AI_USAGE_CHARS = 240
+PUBLIC_WORD_COLUMNS = "id, language, text, pinyin, translation, explanation, ai_translations, created_at, learned"
+PUBLIC_SENTENCE_COLUMNS = "id, language, text, pinyin, translation, explanation, created_at, learned"
 HAN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f\U00030000-\U000323af]")
 
 
@@ -88,6 +93,24 @@ def validate_word_id(value) -> int:
     return value
 
 
+def validate_ai_translations(payload) -> list[dict]:
+    if not isinstance(payload, list) or not 1 <= len(payload) <= MAX_AI_TRANSLATIONS:
+        raise ValueError("Expected one to three AI translations")
+    translations = []
+    seen = set()
+    for item in payload:
+        if not isinstance(item, dict) or set(item) != {"translation", "usage"}:
+            raise ValueError("Invalid AI translation")
+        translation = _field(item["translation"], MAX_AI_TRANSLATION_CHARS, collapse=True)
+        usage = _field(item["usage"], MAX_AI_USAGE_CHARS, collapse=True)
+        key = translation.casefold()
+        if key in seen:
+            raise ValueError("Duplicate AI translation")
+        seen.add(key)
+        translations.append({"translation": translation, "usage": usage})
+    return translations
+
+
 class WordsStore:
     def __init__(self, path: Path):
         self.path = Path(path).expanduser()
@@ -113,6 +136,7 @@ class WordsStore:
                     pinyin TEXT NOT NULL,
                     translation TEXT NOT NULL,
                     explanation TEXT NOT NULL DEFAULT '',
+                    ai_translations TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
                     learned INTEGER NOT NULL DEFAULT 0 CHECK (learned IN (0, 1)),
                     text_key TEXT NOT NULL,
@@ -125,6 +149,8 @@ class WordsStore:
                 connection.execute("ALTER TABLE words ADD COLUMN learned INTEGER NOT NULL DEFAULT 0 CHECK (learned IN (0, 1))")
             if "explanation" not in columns:
                 connection.execute("ALTER TABLE words ADD COLUMN explanation TEXT NOT NULL DEFAULT ''")
+            if "ai_translations" not in columns:
+                connection.execute("ALTER TABLE words ADD COLUMN ai_translations TEXT NOT NULL DEFAULT '[]'")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS sentences (
                     id INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id <= 9007199254740991),
@@ -149,13 +175,18 @@ class WordsStore:
         with self._connection() as connection:
             # Contract is the complete list, not a silently capped first page.
             return [self._public_word(row) for row in connection.execute(
-                f"SELECT {PUBLIC_COLUMNS} FROM words ORDER BY id DESC"
+                f"SELECT {PUBLIC_WORD_COLUMNS} FROM words ORDER BY id DESC"
             )]
 
     @staticmethod
     def _public_word(row) -> dict:
         word = dict(row)
         word["learned"] = bool(word["learned"])
+        if "ai_translations" in word:
+            try:
+                word["ai_translations"] = validate_ai_translations(json.loads(word["ai_translations"])) if word["ai_translations"] != "[]" else []
+            except (TypeError, ValueError, json.JSONDecodeError) as error:
+                raise ValueError("Invalid stored AI translations") from error
         return word
 
     def add(self, payload) -> dict:
@@ -170,7 +201,7 @@ class WordsStore:
                 ON CONFLICT (language, text_key, pinyin_key) DO NOTHING
             """, (word["language"], word["text"], word["pinyin"], word["translation"], created_at, text_key, pinyin_key))
             row = connection.execute(
-                f"SELECT {PUBLIC_COLUMNS} FROM words WHERE language = ? AND text_key = ? AND pinyin_key = ?",
+                f"SELECT {PUBLIC_WORD_COLUMNS} FROM words WHERE language = ? AND text_key = ? AND pinyin_key = ?",
                 (word["language"], text_key, pinyin_key),
             ).fetchone()
             return self._public_word(row)
@@ -178,7 +209,7 @@ class WordsStore:
     def list_sentences(self) -> list[dict]:
         with self._connection() as connection:
             return [self._public_word(row) for row in connection.execute(
-                f"SELECT {PUBLIC_COLUMNS} FROM sentences ORDER BY id DESC"
+                f"SELECT {PUBLIC_SENTENCE_COLUMNS} FROM sentences ORDER BY id DESC"
             )]
 
     def add_sentence(self, payload) -> dict:
@@ -194,7 +225,7 @@ class WordsStore:
             """, (sentence["language"], sentence["text"], sentence["pinyin"], sentence["translation"],
                   created_at, text_key, pinyin_key))
             row = connection.execute(
-                f"SELECT {PUBLIC_COLUMNS} FROM sentences WHERE language = ? AND text_key = ? AND pinyin_key = ?",
+                f"SELECT {PUBLIC_SENTENCE_COLUMNS} FROM sentences WHERE language = ? AND text_key = ? AND pinyin_key = ?",
                 (sentence["language"], text_key, pinyin_key),
             ).fetchone()
             return self._public_word(row)
@@ -206,7 +237,7 @@ class WordsStore:
         with self._connection() as connection:
             connection.execute("UPDATE words SET learned = ? WHERE id = ?", (int(learned), identifier))
             row = connection.execute(
-                f"SELECT {PUBLIC_COLUMNS} FROM words WHERE id = ?", (identifier,)
+                f"SELECT {PUBLIC_WORD_COLUMNS} FROM words WHERE id = ?", (identifier,)
             ).fetchone()
             return self._public_word(row) if row else None
 
@@ -216,7 +247,18 @@ class WordsStore:
         with self._connection() as connection:
             connection.execute("UPDATE words SET explanation = ? WHERE id = ?", (explanation, identifier))
             row = connection.execute(
-                f"SELECT {PUBLIC_COLUMNS} FROM words WHERE id = ?", (identifier,)
+                f"SELECT {PUBLIC_WORD_COLUMNS} FROM words WHERE id = ?", (identifier,)
+            ).fetchone()
+            return self._public_word(row) if row else None
+
+    def set_ai_translations(self, identifier, translations) -> dict | None:
+        identifier = validate_word_id(identifier)
+        translations = validate_ai_translations(translations)
+        encoded = json.dumps(translations, ensure_ascii=False, separators=(",", ":"))
+        with self._connection() as connection:
+            connection.execute("UPDATE words SET ai_translations = ? WHERE id = ? AND language = 'zh'", (encoded, identifier))
+            row = connection.execute(
+                f"SELECT {PUBLIC_WORD_COLUMNS} FROM words WHERE id = ? AND language = 'zh'", (identifier,)
             ).fetchone()
             return self._public_word(row) if row else None
 
@@ -227,7 +269,7 @@ class WordsStore:
         with self._connection() as connection:
             connection.execute("UPDATE sentences SET learned = ? WHERE id = ?", (int(learned), identifier))
             row = connection.execute(
-                f"SELECT {PUBLIC_COLUMNS} FROM sentences WHERE id = ?", (identifier,)
+                f"SELECT {PUBLIC_SENTENCE_COLUMNS} FROM sentences WHERE id = ?", (identifier,)
             ).fetchone()
             return self._public_word(row) if row else None
 
@@ -237,7 +279,7 @@ class WordsStore:
         with self._connection() as connection:
             connection.execute("UPDATE sentences SET explanation = ? WHERE id = ?", (explanation, identifier))
             row = connection.execute(
-                f"SELECT {PUBLIC_COLUMNS} FROM sentences WHERE id = ?", (identifier,)
+                f"SELECT {PUBLIC_SENTENCE_COLUMNS} FROM sentences WHERE id = ?", (identifier,)
             ).fetchone()
             return self._public_word(row) if row else None
 

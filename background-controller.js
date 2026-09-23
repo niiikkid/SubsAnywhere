@@ -4,7 +4,7 @@ import { MESSAGE, failure, ok } from './protocol.js';
 const CONTENT_SCRIPT_ID = 'dual-captions-player-discovery-v1';
 const CONTENT_MESSAGES = new Set([
   MESSAGE.PLAYER_REPORT, MESSAGE.CONTENT_POSITION_PATCH, MESSAGE.TRACK_CACHE_BUILTIN, MESSAGE.CAPTION_TRANSLATE,
-  MESSAGE.WORDS_LIST, MESSAGE.WORDS_SAVE, MESSAGE.WORD_EXPLAIN,
+  MESSAGE.WORDS_LIST, MESSAGE.WORDS_SAVE, MESSAGE.WORD_EXPLAIN, MESSAGE.WORD_TRANSLATE,
   MESSAGE.SENTENCES_LIST, MESSAGE.SENTENCES_SAVE, MESSAGE.SENTENCE_EXPLAIN,
 ]);
 const SERIALIZED_MESSAGES = new Set([
@@ -165,8 +165,8 @@ export class BackgroundController {
       if (!fromContent) sender = { id: sender.id, url: sender.url };
       // Reports must be able to enter the tab queue while recovery awaits their acknowledgement.
       const fromWordsPanel = fromContent && this.#isWordsPanelSender(sender);
-      if ([MESSAGE.WORD_EXPLAIN, MESSAGE.SENTENCE_EXPLAIN].includes(message.type) && !fromWordsPanel) {
-        throw new Error('Объяснение доступно только из панели обучения');
+      if ([MESSAGE.WORD_EXPLAIN, MESSAGE.WORD_TRANSLATE, MESSAGE.SENTENCE_EXPLAIN].includes(message.type) && !fromWordsPanel) {
+        throw new Error('ИИ-действие доступно только из панели обучения');
       }
       if (fromContent && !fromWordsPanel && message.type !== MESSAGE.PLAYER_REPORT) await this.#recoverSelectedSender(message, sender);
       const operation = () => this.#dispatch(message, sender);
@@ -256,6 +256,17 @@ export class BackgroundController {
           if (!word) throw new Error('Слово не найдено');
           if (word.explanation) return ok({ word });
           return ok(await this.#vocabulary.saveExplanation(word.id, await this.#aiClient.explainWord(word)));
+        }
+        case MESSAGE.WORD_TRANSLATE: {
+          if (!this.#isWordsPanelSender(sender)) throw new Error('Перевод доступен только из панели слов');
+          if (!this.#vocabulary || !this.#aiClient) throw new Error('Перевод пока недоступен');
+          if (!Number.isSafeInteger(message.id) || message.id < 1) throw new Error('Некорректный идентификатор слова');
+          const { words } = await this.#vocabulary.list();
+          const word = words.find((item) => item.id === message.id);
+          if (!word || word.language !== 'zh') throw new Error('Китайское слово не найдено');
+          return ok(await this.#vocabulary.saveAiTranslations(
+            word.id, await this.#aiClient.translateSavedChineseWord(word),
+          ));
         }
         case MESSAGE.SENTENCES_LIST:
         case MESSAGE.SENTENCES_SAVE:
@@ -603,13 +614,14 @@ export class BackgroundController {
     const displayText = boundedString(message.displayText, 500).trim();
     if (!text) return { items: [] };
     if (message?.language === 'zh') {
-      if (!displayText) return { items: [] };
       const translation = await this.#aiClient.translateChineseCaption(text, displayText);
+      const pinyin = displayText || boundedString(translation.pinyin, 500).trim();
+      if (!pinyin) throw new Error('ИИ не вернул пиньинь китайской строки');
       return {
         items: [{
           start: 0,
-          end: displayText.length,
-          text: displayText,
+          end: pinyin.length,
+          text: pinyin,
           dictionary: translation.dictionary,
           context: translation.context,
           glossary: translation.glossary,

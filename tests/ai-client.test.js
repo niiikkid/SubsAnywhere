@@ -127,7 +127,7 @@ test('OpenAI translation requests use its selected text model and response shape
   assert.equal(request.body.model, 'gpt-5-mini');
   assert.equal(request.body.max_output_tokens, 1600);
   assert.equal(request.body.instructions, 'Translate');
-  assert.equal(request.body.input, '{"caption":"Hi"}');
+  assert.equal(request.body.input, 'JSON input: {"caption":"Hi"}');
   assert.equal('thinking' in request.body, false);
   assert.equal(extractAIText('openai', { output: [{ content: [{ type: 'output_text', text: '{"translation":"Привет"}' }] }] }), '{"translation":"Привет"}');
 });
@@ -149,6 +149,7 @@ test('active OpenAI settings drive the real translation client path', async () =
   assert.equal(requestUrl, 'https://api.openai.com/v1/responses');
   assert.equal(requestBody.model, 'gpt-5-mini');
   assert.equal(requestBody.max_output_tokens, 1600);
+  assert.match(requestBody.input, /json/i);
 });
 
 
@@ -295,6 +296,50 @@ test('DeepSeek translates a linked Chinese sentence in one request', async () =>
   assert.deepEqual(JSON.parse(request.messages[1].content), { caption: '你好，世界', pinyin: 'nǐ hǎo, shì jiè' });
   assert.match(request.messages[1].content, /你好，世界/);
   assert.match(request.messages[1].content, /nǐ hǎo, shì jiè/);
+});
+
+test('DeepSeek generates tone-marked pinyin with a Chinese sentence translation when none is supplied', async () => {
+  const storage = new MemoryStorage();
+  const credentials = new AiCredentialStore(storage);
+  await credentials.patch({ provider: 'deepseek', apiKey: 'test-key', model: 'deepseek-chat', activate: true });
+  let request;
+  const client = new DeepSeekClient(async (_url, options) => {
+    request = JSON.parse(options.body);
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({
+        pinyin: 'nǐ hǎo, shì jiè',
+        translation: 'Привет, мир',
+        glossary: [
+          { text: '你好', pinyin: 'nǐ hǎo', translation: 'привет' },
+          { text: '世界', pinyin: 'shì jiè', translation: 'мир' },
+        ],
+      }) } }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }, credentials);
+
+  const result = await client.translateChineseCaption('你好，世界');
+
+  assert.deepEqual(result, {
+    pinyin: 'nǐ hǎo, shì jiè',
+    dictionary: 'Привет, мир',
+    context: 'Привет, мир',
+    glossary: [
+      { text: '你好', pinyin: 'nǐ hǎo', translation: 'привет', pinyinStart: 0, pinyinEnd: 6 },
+      { text: '世界', pinyin: 'shì jiè', translation: 'мир', pinyinStart: 8, pinyinEnd: 15 },
+    ],
+  });
+  assert.deepEqual(JSON.parse(request.messages[1].content), { caption: '你好，世界', pinyin: '' });
+  assert.match(request.messages[0].content, /full tone-marked Hanyu Pinyin/i);
+});
+
+test('DeepSeek rejects generated pinyin that omits Chinese caption syllables', async () => {
+  const client = new DeepSeekClient(async () => Response.json({ choices: [{ message: { content: JSON.stringify({
+    pinyin: 'nǐ hǎo',
+    translation: 'Привет, мир',
+    glossary: [],
+  }) } }] }), { async getActive() { return { provider: 'deepseek', apiKey: 'offline-fixture', model: 'deepseek-chat' }; } });
+
+  await assert.rejects(client.translateChineseCaption('你好，世界'), /пиньинь/i);
 });
 
 test('DeepSeek keeps every valid Chinese glossary term returned for a caption', async () => {
@@ -496,6 +541,47 @@ test('word explanation rejects Chinese characters instead of saving them', async
   }) } }] }), { async getActive() { return { provider: 'deepseek', apiKey: 'fixture-key', model: 'deepseek-chat' }; } });
 
   await assert.rejects(client.explainWord({ language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет' }), /иероглифы/);
+});
+
+test('saved Chinese word translations use only its canonical Han and return distinct usage meanings', async () => {
+  const requests = [];
+  const client = new AIClient(async (url, options) => {
+    requests.push({ url, options });
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ translations: [
+      { translation: 'идти; быть в движении', usage: 'о движении или ходе процесса' },
+      { translation: 'годится; можно', usage: 'когда что-то допустимо или подходит' },
+    ] }) } }] });
+  }, { async getActive() { return { provider: 'deepseek', apiKey: 'test-key', model: 'deepseek-chat' }; } });
+
+  const translations = await client.translateSavedChineseWord({
+    id: 5, language: 'zh', text: '行', pinyin: 'xíng', translation: 'старый перевод из видео', learned: false,
+  });
+
+  assert.deepEqual(translations, [
+    { translation: 'идти; быть в движении', usage: 'о движении или ходе процесса' },
+    { translation: 'годится; можно', usage: 'когда что-то допустимо или подходит' },
+  ]);
+  const body = JSON.parse(requests[0].options.body);
+  assert.deepEqual(JSON.parse(body.messages[1].content), { text: '行' });
+  assert.equal(body.messages[1].content.includes('старый перевод из видео'), false);
+  assert.match(body.messages[0].content, /one to three/i);
+});
+
+test('saved Chinese word translations reject empty, duplicate and oversized AI options', async () => {
+  for (const translations of [[], [{ translation: '', usage: 'контекст' }], [
+    { translation: 'можно', usage: 'о допустимости' }, { translation: 'Можно', usage: 'дубликат' },
+  ], Array.from({ length: 4 }, (_, index) => ({ translation: `значение ${index}`, usage: 'контекст' }))]) {
+    const client = new AIClient(async () => Response.json({ choices: [{ message: { content: JSON.stringify({ translations }) } }] }), {
+      async getActive() { return { provider: 'deepseek', apiKey: 'test-key', model: 'deepseek-chat' }; },
+    });
+    await assert.rejects(client.translateSavedChineseWord({
+      language: 'zh', text: '行', pinyin: 'xíng', translation: 'идти',
+    }), /перевод/iu);
+  }
+  const english = new AIClient(async () => { throw new Error('must not call'); }, {
+    async getActive() { return { provider: 'deepseek', apiKey: 'test-key', model: 'deepseek-chat' }; },
+  });
+  await assert.rejects(english.translateSavedChineseWord({ language: 'en', text: 'go', pinyin: '', translation: 'идти' }), /китайск/iu);
 });
 
 test('sentence explanation asks for a concise Russian grammar comparison and uses pinyin for Chinese', async () => {

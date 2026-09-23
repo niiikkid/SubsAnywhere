@@ -86,3 +86,21 @@ test('sentence grammar explanations are saved only after readback confirmation',
   assert.equal(calls[0].url, 'http://127.0.0.1:43817/api/sentences/explanation');
   assert.deepEqual(JSON.parse(calls[0].options.body), { id: savedSentence.id, explanation });
 });
+
+test('AI translation variants are saved separately and confirmed through the canonical word list', async () => {
+  const translations = [
+    { translation: 'идти; быть в движении', usage: 'о движении или ходе процесса' },
+    { translation: 'годится; можно', usage: 'когда что-то допустимо или подходит' },
+  ];
+  const translated = { ...saved, ai_translations: translations };
+  const calls = [];
+  const client = new VocabularyClient(async (url, options) => {
+    calls.push({ url, options });
+    return Response.json(options.method === 'POST' ? { word: translated } : { words: [translated] });
+  });
+
+  assert.deepEqual(await client.saveAiTranslations(saved.id, translations), { word: translated });
+  assert.equal(calls[0].url, 'http://127.0.0.1:43817/api/words/ai-translations');
+  assert.deepEqual(JSON.parse(calls[0].options.body), { id: saved.id, translations });
+  assert.equal(calls[1].options.method, 'GET');
+});

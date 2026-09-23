@@ -326,6 +326,50 @@ test('a full Chinese sentence saves beside the Han line and marks the saved Han 
   assert.equal(characters.style.color, 'rgba(151, 213, 169, .88)');
 });
 
+test('a Han-only Chinese caption receives pinyin before its translation is saved for review', async () => {
+  const harness = await makeHarness();
+  const sentence = {
+    language: 'zh', text: '你好，世界', pinyin: 'nǐ hǎo, shì jiè', translation: 'Привет, мир',
+  };
+  const translations = [];
+  let saved;
+  harness.context.chrome.runtime.sendMessage = async (message) => {
+    if (message.type === 'dualCaptions.words.list') return { ok: true, data: { words: [] } };
+    if (message.type === 'dualCaptions.sentences.list') return { ok: true, data: { sentences: saved ? [{ ...saved, id: 8, learned: false, explanation: '' }] : [] } };
+    if (message.type === 'dualCaptions.caption.translate') {
+      translations.push({ text: message.text, displayText: message.displayText, language: message.language });
+      return { ok: true, data: { items: [{
+        start: 0, end: sentence.pinyin.length, text: sentence.pinyin, dictionary: sentence.translation,
+        context: sentence.translation, isSentenceTranslation: true,
+        glossary: [{ text: '你好', pinyin: 'nǐ hǎo', translation: 'привет', pinyinStart: 0, pinyinEnd: 6 }],
+      }] } };
+    }
+    if (message.type === 'dualCaptions.sentences.save') {
+      saved = JSON.parse(JSON.stringify(message.sentence));
+      return { ok: true, data: { sentence: { ...saved, id: 8, learned: false, explanation: '' } } };
+    }
+    return { ok: true };
+  };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  [...harness.onMessage.listeners][0]({ type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'external:mine', inlineTranslations: false },
+    externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: sentence.text }] }],
+  }, {}, () => {});
+  for (let index = 0; index < 15; index += 1) await Promise.resolve();
+
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  const findClass = (node, className) => node.className === className ? node
+    : node.children.map((child) => findClass(child, className)).find(Boolean);
+  const button = findClass(overlay, 'dual-captions-save-sentence');
+  assert.deepEqual(translations, [{ text: sentence.text, displayText: '', language: 'zh' }]);
+  assert.equal(overlay.children[0].children[0].children.map((child) => child.textContent).join(''), sentence.pinyin);
+  assert.equal(findClass(overlay, 'dual-captions-sentence-characters').textContent, sentence.text);
+  button.dispatch('click', { stopPropagation() {} });
+  for (let index = 0; index < 12; index += 1) await Promise.resolve();
+  assert.deepEqual(saved, sentence);
+});
+
 test('Chinese glossary without mapped Han still shows cell translation but cannot save guessed characters', async () => {
   const harness = await makeHarness();
   harness.context.chrome.runtime.sendMessage = async (message) => {

@@ -50,14 +50,15 @@
           <h1 id="study-word" class="study-word" tabindex="-1"></h1>
           <p id="study-pinyin" class="study-pinyin"></p>
           <p id="study-translation" class="study-translation"></p>
+          <section id="study-ai-translations" class="study-ai-translations" hidden><h3>Перевод ИИ</h3><ol id="study-ai-translations-list"></ol></section>
           <section id="study-explanation" class="study-explanation" hidden><h3>Объяснение</h3><p id="study-explanation-text"></p></section>
         </div>
         <div id="study-finish" class="study-finish" hidden><h1 id="study-finish-title">Все слова повторены</h1><p>Можно начать новый круг или вернуться к списку.</p></div>
-        <div class="study-actions"><button id="study-back" type="button">Вернуть назад</button><button id="study-learned" type="button">Слово выучено</button><button id="study-explain" type="button">Объяснить</button><button id="study-next" type="button">Следующее слово</button><button id="study-restart" type="button" hidden>Начать заново</button></div>
+        <div class="study-actions"><button id="study-back" type="button">Вернуть назад</button><button id="study-learned" type="button">Слово выучено</button><button id="study-explain" type="button">Объяснить</button><button id="study-translate" class="ai-translate" type="button">Получить перевод</button><button id="study-delete" class="delete" type="button">Удалить</button><button id="study-next" type="button">Следующее слово</button><button id="study-restart" type="button" hidden>Начать заново</button></div>
       </section>
       <noscript><p class="empty">Для поиска и отметок включите JavaScript. Слова и предложения останутся на сервере.</p></noscript>
     </section>
-    <footer>Слова, предложения и их разборы хранятся на вашем локальном сервере. ИИ вызывается только по кнопке «Объяснить» или «Разобрать» через настройки расширения.</footer>
+    <footer>Слова, предложения, разборы и варианты перевода ИИ хранятся на вашем локальном сервере. ИИ вызывается только по кнопке в панели через настройки расширения.</footer>
   </main>
 </body>
 </html>
