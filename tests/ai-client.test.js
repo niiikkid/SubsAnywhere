@@ -298,6 +298,29 @@ test('DeepSeek translates a linked Chinese sentence in one request', async () =>
   assert.match(request.messages[1].content, /nǐ hǎo, shì jiè/);
 });
 
+test('Chinese characters correct a broken displayed pinyin in the same translation request', async () => {
+  const client = new DeepSeekClient(async () => Response.json({ choices: [{ message: { content: JSON.stringify({
+    pinyin: 'nǐ hǎo, shì jiè',
+    translation: 'Привет, мир',
+    glossary: [
+      { text: '你好', pinyin: 'nǐ hǎo', translation: 'привет' },
+      { text: '世界', pinyin: 'shì jiè', translation: 'мир' },
+    ],
+  }) } }] }), { async getActive() { return { provider: 'deepseek', apiKey: 'offline-fixture', model: 'deepseek-chat' }; } });
+
+  const result = await client.translateChineseCaption('你好，世界', 'ni hao shi jie');
+
+  assert.deepEqual(result, {
+    pinyin: 'nǐ hǎo, shì jiè',
+    dictionary: 'Привет, мир',
+    context: 'Привет, мир',
+    glossary: [
+      { text: '你好', pinyin: 'nǐ hǎo', translation: 'привет', pinyinStart: 0, pinyinEnd: 6 },
+      { text: '世界', pinyin: 'shì jiè', translation: 'мир', pinyinStart: 8, pinyinEnd: 15 },
+    ],
+  });
+});
+
 test('DeepSeek generates tone-marked pinyin with a Chinese sentence translation when none is supplied', async () => {
   const storage = new MemoryStorage();
   const credentials = new AiCredentialStore(storage);

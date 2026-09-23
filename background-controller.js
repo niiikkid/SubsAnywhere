@@ -615,7 +615,7 @@ export class BackgroundController {
     if (!text) return { items: [] };
     if (message?.language === 'zh') {
       const translation = await this.#aiClient.translateChineseCaption(text, displayText);
-      const pinyin = displayText || boundedString(translation.pinyin, 500).trim();
+      const pinyin = boundedString(translation.pinyin, 500).trim() || displayText;
       if (!pinyin) throw new Error('ИИ не вернул пиньинь китайской строки');
       return {
         items: [{

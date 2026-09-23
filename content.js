@@ -815,11 +815,11 @@
     function renderInteractiveCaption(text) {
       const sourceDescriptor = translationDescriptor(text);
       const items = translationCache.get(sourceDescriptor.key);
-      const generatedPinyin = sourceDescriptor.generatedPinyin
+      const translatedPinyin = sourceDescriptor.language === 'zh'
         ? items?.find((item) => item?.isSentenceTranslation && typeof item.text === 'string' && item.text.trim())?.text.trim()
         : '';
-      const descriptor = generatedPinyin
-        ? { ...sourceDescriptor, displayText: generatedPinyin }
+      const descriptor = translatedPinyin
+        ? { ...sourceDescriptor, displayText: translatedPinyin }
         : sourceDescriptor;
       const failure = translationFailures.get(sourceDescriptor.key) || '';
       const key = `${state.settings.secondTrackId}\u0000${sourceDescriptor.key}\u0000${descriptor.displayText}\u0000${state.settings.inlineTranslations}\u0000${failure}`;
