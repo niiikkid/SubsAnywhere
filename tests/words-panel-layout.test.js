@@ -5,16 +5,23 @@ import { readFileSync } from 'node:fs';
 const html = readFileSync(new URL('../local-server/web/index.html', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../local-server/web/words.css', import.meta.url), 'utf8');
 
-test('panel settings and their live errors remain in the sidebar outside the study/list switch', () => {
+test('sidebar stays minimal and panel model settings open in a separate dialog', () => {
   const sidebar = html.match(/<aside class="panel-sidebar"[\s\S]*?<\/aside>/)?.[0];
   assert.ok(sidebar);
-  for (const id of ['panel-ai-settings', 'panel-ai-provider', 'panel-ai-model', 'panel-ai-load', 'panel-ai-save', 'panel-ai-status', 'speech-voice', 'speech-rate', 'speech-preview', 'speech-status']) {
+  for (const id of ['panel-ai-open', 'speech-voice', 'speech-rate', 'speech-preview', 'speech-status']) {
     assert.ok(sidebar.includes(`id="${id}"`), id);
     assert.equal(html.split(`id="${id}"`).length, 2, `unique ${id}`);
   }
   assert.match(sidebar, /SubsAnywhere/);
-  assert.match(sidebar, /<h1>Словарь и практика<\/h1>/);
+  assert.doesNotMatch(sidebar, /Словарь и практика/);
   assert.ok(html.indexOf('</aside>') < html.indexOf('<main>'));
+  const dialog = html.match(/<dialog id="panel-ai-dialog"[\s\S]*?<\/dialog>/)?.[0];
+  assert.ok(dialog);
+  for (const id of ['panel-ai-provider', 'panel-ai-model', 'panel-ai-load', 'panel-ai-save', 'panel-ai-status']) {
+    assert.ok(dialog.includes(`id="${id}"`), id);
+    assert.equal(html.split(`id="${id}"`).length, 2, `unique ${id}`);
+  }
+  assert.match(dialog, /Только для этой панели/);
 });
 
 test('desktop learning content scrolls independently of navigation without truncation', () => {

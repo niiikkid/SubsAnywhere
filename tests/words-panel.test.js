@@ -160,6 +160,7 @@ for (const kind of ['words', 'sentences']) {
     assert.match(elements['study-analysis'].textContent, /nǐ hǎo ma\? — Как дела\?/);
     assert.doesNotMatch(elements['study-analysis'].textContent, /\p{Script=Han}/u);
     assert.equal(elements['study-explanation'].hidden, true);
+    assert.doesNotMatch(elements['word-list'].textContent, /По словам|Как это работает|Как дела\?/);
     assert.doesNotMatch(elements['word-list'].textContent, /старый вариант|Старое объяснение/);
     assert.equal(elements['study-progress'].textContent, '1 из 2');
     elements['study-next'].click();

@@ -9,23 +9,10 @@
   <script type="module" src="/words/words.js"></script>
 </head>
 <body>
-  <aside class="panel-sidebar" aria-label="Настройки панели">
+  <aside class="panel-sidebar" aria-label="Управление">
     <header class="site-header"><span class="brand"><span class="brand-mark" aria-hidden="true">s</span>SubsAnywhere</span></header>
-    <div class="page-heading">
-      <h1>Словарь и практика</h1>
-      <div class="panel-settings">
-      <details id="panel-ai-settings" class="speech-settings panel-ai-settings">
-        <summary>Модель ИИ</summary>
-        <div class="speech-toolbar panel-ai-toolbar">
-          <p class="panel-ai-note">Только для этой панели, не для субтитров. Используются ключи, сохранённые в расширении.</p>
-          <label for="panel-ai-provider">Провайдер</label>
-          <select id="panel-ai-provider" disabled><option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option></select>
-          <label for="panel-ai-model">Модель</label>
-          <select id="panel-ai-model" disabled><option value="">Сначала загрузите модели</option></select>
-          <div class="panel-ai-actions"><button id="panel-ai-load" type="button" disabled>Загрузить модели</button><button id="panel-ai-save" type="button" disabled>Сохранить</button></div>
-          <p id="panel-ai-saved" class="panel-ai-note"></p>
-        </div>
-      </details>
+    <div class="panel-settings">
+      <button id="panel-ai-open" type="button">Модель ИИ</button>
       <details class="speech-settings">
         <summary><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg>Произношение</summary>
         <div class="speech-toolbar">
@@ -41,11 +28,20 @@
           <button id="speech-preview" type="button">Проверить голос</button>
         </div>
       </details>
-      </div>
     </div>
-    <p id="panel-ai-status" class="speech-status" role="status" aria-live="polite"></p>
     <p id="speech-status" class="speech-status" role="status" aria-live="polite"></p>
   </aside>
+  <dialog id="panel-ai-dialog" class="panel-ai-dialog" aria-labelledby="panel-ai-title">
+    <form method="dialog" class="panel-ai-dialog-header"><h2 id="panel-ai-title">Модель ИИ для разбора</h2><button id="panel-ai-close" class="icon-button" type="submit" aria-label="Закрыть">×</button></form>
+    <p class="panel-ai-note">Только для этой панели. Настройки субтитров не меняются.</p>
+    <label for="panel-ai-provider">Провайдер</label>
+    <select id="panel-ai-provider" disabled><option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option></select>
+    <label for="panel-ai-model">Модель</label>
+    <select id="panel-ai-model" disabled><option value="">Сначала загрузите модели</option></select>
+    <div class="panel-ai-actions"><button id="panel-ai-load" type="button" disabled>Загрузить модели</button><button id="panel-ai-save" class="primary" type="button" disabled>Сохранить</button></div>
+    <p id="panel-ai-saved" class="panel-ai-note"></p>
+    <p id="panel-ai-status" class="speech-status" role="status" aria-live="polite"></p>
+  </dialog>
   <main>
     <section class="vocabulary" aria-label="Сохранённые слова и предложения">
       <div id="list-controls">

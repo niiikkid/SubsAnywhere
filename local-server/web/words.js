@@ -256,7 +256,7 @@ if (typeof document !== "undefined") (() => {
     pinyin.lang = "zh-Latn";
     example.append(pinyin, element("span", "", ` — ${analysis.example.translation}`));
     const wordsBlock = element("section", "analysis-block", "");
-    wordsBlock.append(element("h4", "analysis-heading", "По словам"), components);
+    wordsBlock.append(components);
     const logicBlock = element("section", "analysis-block analysis-logic", "");
     logicBlock.append(element("h4", "analysis-heading", "Как это работает"), element("p", "analysis-grammar", analysis.grammar));
     const exampleBlock = element("section", "analysis-block analysis-example-block", "");
@@ -348,12 +348,6 @@ if (typeof document !== "undefined") (() => {
       remove.addEventListener("click", () => openDeleteDialog(word, remove));
       const translation = element("div", "word-translation", "");
       translation.append(element("p", "", word.language === "zh" ? explanationText(word.translation) : word.translation));
-      if (word.language === "zh" && validAnalysis(word.analysis)) {
-        const analysis = element("section", "word-analysis", "");
-        analysis.setAttribute("aria-label", "Разбор");
-        appendAnalysis(analysis, word.analysis);
-        translation.append(analysis);
-      }
       if (word.language !== "zh" && kind === "words" && word.ai_translations.length) {
         const aiTranslations = element("section", "ai-translations", "");
         aiTranslations.append(element("h4", "", "Перевод ИИ"));
@@ -760,6 +754,9 @@ if (typeof document !== "undefined") (() => {
   }
 
   // Settings use the same origin-bound request/reply transport as speech.
+  const aiDialog = document.getElementById("panel-ai-dialog");
+  const aiOpen = document.getElementById("panel-ai-open");
+  const aiClose = document.getElementById("panel-ai-close");
   const aiProvider = document.getElementById("panel-ai-provider");
   const aiModel = document.getElementById("panel-ai-model");
   const aiLoad = document.getElementById("panel-ai-load");
@@ -886,6 +883,20 @@ if (typeof document !== "undefined") (() => {
     }
   }
 
+  aiOpen.addEventListener("click", () => {
+    if (typeof aiDialog.showModal === "function") aiDialog.showModal();
+    else aiDialog.setAttribute("open", "");
+  });
+  aiClose.addEventListener("click", () => {
+    if (typeof aiDialog.close === "function") aiDialog.close();
+    else aiDialog.removeAttribute("open");
+  });
+  aiDialog.addEventListener("click", (event) => {
+    if (event.target === aiDialog) {
+      if (typeof aiDialog.close === "function") aiDialog.close();
+      else aiDialog.removeAttribute("open");
+    }
+  });
   aiLoad.addEventListener("click", loadPanelAiModels);
   aiSave.addEventListener("click", savePanelAiSettings);
   aiProvider.addEventListener("change", () => {
