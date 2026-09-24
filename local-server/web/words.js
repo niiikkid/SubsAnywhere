@@ -212,6 +212,22 @@ if (typeof document !== "undefined") (() => {
     return node;
   }
 
+  function iconButton(className, label, pathData) {
+    const button = element("button", `${className} icon-button`, "");
+    button.type = "button";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "icon");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", pathData);
+    svg.append(path);
+    button.append(svg);
+    return button;
+  }
+
   function downloadWords() {
     const href = URL.createObjectURL(new Blob([wordsTsv(words)], { type: "text/tab-separated-values;charset=utf-8" }));
     const link = document.createElement("a");
@@ -268,14 +284,13 @@ if (typeof document !== "undefined") (() => {
         pinyin.lang = "zh-Latn";
         main.append(pinyin);
       }
-      const learned = element("button", "learned", word.learned ? "Вернуть на повторение" : "Выучено ✓");
-      learned.type = "button";
+      const learned = iconButton("learned", word.learned ? "Вернуть на повторение" : "Отметить как выученное",
+        word.learned ? "M4 4v6h6M4 10a8 8 0 1 1 1 8" : "m5 12 4 4L19 6");
       learned.disabled = busy;
       learned.title = word.learned ? `Вернуть ${noun("one")} в список на повторение` : `Отметить ${noun("one")} как выученное`;
       learned.setAttribute("aria-label", `${learned.title}: «${learningText(word, kind)}»`);
       learned.addEventListener("click", () => setLearned(word, !word.learned));
-      const remove = element("button", "delete", "Удалить");
-      remove.type = "button";
+      const remove = iconButton("delete", `Удалить ${noun("one")}`, "M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7");
       remove.disabled = busy;
       remove.setAttribute("aria-label", `Удалить ${noun("one")}: «${learningText(word, kind)}»`);
       remove.addEventListener("click", () => openDeleteDialog(word, remove));
@@ -306,14 +321,14 @@ if (typeof document !== "undefined") (() => {
       explain.disabled = busy;
       explain.addEventListener("click", () => word.explanation ? details.toggleAttribute("open") : explainWord(word));
       const actions = element("div", "word-actions", "");
-      const speak = element("button", "speak", "🔊 Произнести");
-      speak.type = "button";
+      const speak = iconButton("speak", "Произнести", "m11 4-6 5H2v6h3l6 5zM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14");
       speak.setAttribute("aria-label", `Произнести: «${learningText(word, kind)}»`);
       speak.addEventListener("click", () => speakItem(word, speak));
-      actions.append(speak);
+      main.append(speak);
       if (kind === "words" && word.language === "zh") {
-        const translate = element("button", "ai-translate", word.ai_translations.length ? "Получить заново" : "Получить перевод");
+        const translate = element("button", "ai-translate", word.ai_translations.length ? "Обновить перевод" : "Перевод ИИ");
         translate.type = "button";
+        translate.title = word.ai_translations.length ? "Получить варианты перевода заново через ИИ" : "Получить варианты перевода через ИИ";
         translate.disabled = busy;
         translate.addEventListener("click", () => translateWord(word));
         actions.append(translate);
@@ -372,6 +387,7 @@ if (typeof document !== "undefined") (() => {
     const word = studyWords[studyPosition];
     studyLanguage.textContent = word.language === "zh" ? "Китайский" : "Английский";
     studyWord.textContent = learningText(word, kind);
+    studyWord.classList.toggle("sentence-text", kind === "sentences");
     studyWord.lang = kind === "sentences" && word.language === "zh" ? "zh-Latn" : word.language;
     studyPinyin.textContent = kind === "words" ? word.pinyin : "";
     studyPinyin.lang = "zh-Latn";
@@ -443,6 +459,7 @@ if (typeof document !== "undefined") (() => {
     } finally {
       busy = false;
       render();
+      if (!studyMode.hidden) renderStudy();
     }
   }
 
@@ -605,10 +622,9 @@ if (typeof document !== "undefined") (() => {
   async function speakItem(item, button) {
     const text = pronunciationText(item);
     if (!text || button.speaking) return;
-    const label = button.textContent;
     button.speaking = true;
     button.disabled = true;
-    button.textContent = "🔊…";
+    button.setAttribute("aria-busy", "true");
     showSpeechStatus("");
     try {
       await requestSpeechAction("subsanywhere.speech.speak", { text, language: item.language });
@@ -617,7 +633,7 @@ if (typeof document !== "undefined") (() => {
     } finally {
       button.speaking = false;
       button.disabled = false;
-      button.textContent = label;
+      button.removeAttribute("aria-busy");
     }
   }
 

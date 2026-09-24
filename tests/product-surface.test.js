@@ -63,7 +63,7 @@ test('pronunciation controls are exposed in extension settings and both learning
   assert.match(words, /id="speech-voice"/);
   assert.match(words, /id="speech-rate"/);
   assert.match(words, /id="speech-preview"/);
-  assert.match(words, /id="study-speak"[^>]*>🔊 Произнести/);
+  assert.match(words, /id="study-speak"[^>]*>[\s\S]*?Произнести<\/button>/);
 });
 
 test('background protocol exposes local subtitle actions without page subtitle sampling', async () => {

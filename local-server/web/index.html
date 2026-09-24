@@ -9,42 +9,55 @@
   <script type="module" src="/words/words.js"></script>
 </head>
 <body>
-  <header class="site-header"><span class="brand">SubsAnywhere</span><span class="local-label">Обучение</span></header>
+  <header class="site-header"><span class="brand"><span class="brand-mark" aria-hidden="true">s</span>SubsAnywhere</span></header>
   <main>
+    <div class="page-heading">
+      <h1>Словарь и практика</h1>
+      <details class="speech-settings">
+        <summary><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg>Произношение</summary>
+        <div class="speech-toolbar">
+          <label for="speech-voice">Голос</label>
+          <select id="speech-voice"><option value="">Автоматически — Google</option></select>
+          <label for="speech-rate">Скорость</label>
+          <select id="speech-rate" aria-label="Скорость произношения">
+            <option value="0.55">Очень медленно</option>
+            <option value="0.7">Медленно</option>
+            <option value="0.8">Спокойно</option>
+            <option value="1">Обычно</option>
+          </select>
+          <button id="speech-preview" type="button">Проверить голос</button>
+        </div>
+      </details>
+    </div>
+    <p id="speech-status" class="speech-status" role="status" aria-live="polite"></p>
     <section class="vocabulary" aria-label="Сохранённые слова и предложения">
-      <div class="speech-toolbar">
-        <label for="speech-voice">Голос</label>
-        <select id="speech-voice"><option value="">Автоматически — Google</option></select>
-        <label for="speech-rate">Скорость произношения</label>
-        <select id="speech-rate">
-          <option value="0.55">Очень медленно</option>
-          <option value="0.7">Медленно</option>
-          <option value="0.8">Спокойно</option>
-          <option value="1">Обычно</option>
-        </select>
-        <button id="speech-preview" type="button">🔊 Проверить</button>
-        <span id="speech-status" role="status" aria-live="polite"></span>
-      </div>
       <div id="list-controls">
-        <nav id="entity-tabs" class="entity-tabs" role="tablist" aria-label="Тип материалов">
-          <button id="words-tab" type="button" role="tab" aria-selected="true">Слова</button>
-          <button id="sentences-tab" type="button" role="tab" aria-selected="false">Предложения</button>
-        </nav>
+        <div class="library-nav">
+          <nav id="entity-tabs" class="entity-tabs" role="tablist" aria-label="Тип материалов">
+            <button id="words-tab" type="button" role="tab" aria-selected="true">Слова</button>
+            <button id="sentences-tab" type="button" role="tab" aria-selected="false">Предложения</button>
+          </nav>
+          <button id="study-start" class="primary" type="button">Повторять</button>
+        </div>
         <div class="toolbar">
-          <input id="search" type="search" aria-label="Поиск по слову, пиньиню или переводу" placeholder="Поиск по слову, пиньиню или переводу" autocomplete="off" maxlength="1000">
+          <div class="search-field"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="search" type="search" aria-label="Поиск по слову, пиньиню или переводу" placeholder="Поиск по слову, пиньиню или переводу" autocomplete="off" maxlength="1000"></div>
           <select id="language" aria-label="Язык">
             <option value="">Все языки</option><option value="zh">Китайский</option><option value="en">Английский</option>
           </select>
-          <button id="refresh" type="button">Обновить</button><button id="download" type="button" title="Скачать все слова: слово, пиньинь, русский перевод">Скачать TSV</button>
-        </div>
-        <div class="view-tabs" role="tablist" aria-label="Состояние материалов">
-          <button id="review-tab" type="button" role="tab" aria-selected="true">На повторение</button>
-          <button id="learned-tab" type="button" role="tab" aria-selected="false">Выученные</button>
+          <button id="refresh" class="icon-button" type="button" aria-label="Обновить список" title="Обновить список"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17"/></svg></button>
+          <button id="download" class="quiet" type="button" title="Скачать все слова: слово, пиньинь, русский перевод"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4"/></svg>Скачать TSV</button>
         </div>
       </div>
+      <p id="status" class="status" role="status" aria-live="polite">Загрузка словаря…</p>
       <div id="word-panel">
-        <div class="list-heading"><h2 id="list-title">На повторение</h2><div class="list-actions"><span id="count" aria-live="polite">—</span><button id="study-start" type="button">Повторять</button></div></div>
-        <p id="status" class="status" role="status" aria-live="polite">Загрузка словаря…</p>
+        <div class="list-heading">
+          <h2 id="list-title" class="sr-only">На повторение</h2>
+          <div class="view-tabs" role="tablist" aria-label="Состояние материалов">
+            <button id="review-tab" type="button" role="tab" aria-selected="true">На повторение</button>
+            <button id="learned-tab" type="button" role="tab" aria-selected="false">Выученные</button>
+          </div>
+          <span id="count" aria-live="polite">—</span>
+        </div>
         <ul id="word-list" aria-label="Слова" aria-busy="true"></ul>
         <div id="empty" class="empty" hidden></div>
       </div>
@@ -57,21 +70,33 @@
         </section>
       </div>
       <section id="study-mode" class="study-mode" aria-labelledby="study-title" hidden>
-        <div class="study-header"><div><h2 id="study-title">Повторение слов</h2><p id="study-progress" class="study-progress" aria-live="polite"></p></div><button id="study-exit" type="button">Выйти</button></div>
+        <div class="study-header"><div class="study-heading"><h2 id="study-title">Повторение слов</h2><p id="study-progress" class="study-progress" aria-live="polite"></p></div><button id="study-exit" class="quiet" type="button">К списку <span aria-hidden="true">↗</span></button></div>
         <div id="study-card" class="study-card">
-          <p id="study-language" class="study-language"></p>
-          <h1 id="study-word" class="study-word" tabindex="-1"></h1>
-          <p id="study-pinyin" class="study-pinyin"></p>
-          <p id="study-translation" class="study-translation"></p>
-          <section id="study-ai-translations" class="study-ai-translations" hidden><h3>Перевод ИИ</h3><ol id="study-ai-translations-list"></ol></section>
-          <section id="study-explanation" class="study-explanation" hidden><h3>Объяснение</h3><p id="study-explanation-text"></p></section>
+          <div class="study-content">
+            <p id="study-language" class="study-language"></p>
+            <h2 id="study-word" class="study-word" tabindex="-1"></h2>
+            <p id="study-pinyin" class="study-pinyin"></p>
+            <p id="study-translation" class="study-translation"></p>
+            <section id="study-ai-translations" class="study-ai-translations" hidden><h3>Перевод ИИ</h3><ol id="study-ai-translations-list"></ol></section>
+            <section id="study-explanation" class="study-explanation" hidden><h3>Объяснение</h3><p id="study-explanation-text"></p></section>
+          </div>
+          <div class="study-tools" role="group" aria-label="Действия с карточкой">
+            <button id="study-speak" class="speak quiet" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m11 4-6 5H2v6h3l6 5zM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/></svg>Произнести</button>
+            <button id="study-explain" class="quiet" type="button">Объяснить</button>
+            <button id="study-translate" class="ai-translate quiet" type="button">Получить перевод</button>
+            <button id="study-delete" class="delete quiet" type="button">Удалить</button>
+          </div>
         </div>
-        <div id="study-finish" class="study-finish" hidden><h1 id="study-finish-title">Все слова повторены</h1><p>Можно начать новый круг или вернуться к списку.</p></div>
-        <div class="study-actions"><button id="study-back" type="button">Вернуть назад</button><button id="study-speak" class="speak" type="button">🔊 Произнести</button><button id="study-learned" type="button">Слово выучено</button><button id="study-explain" type="button">Объяснить</button><button id="study-translate" class="ai-translate" type="button">Получить перевод</button><button id="study-delete" class="delete" type="button">Удалить</button><button id="study-next" type="button">Следующее слово</button><button id="study-restart" type="button" hidden>Начать заново</button></div>
+        <div id="study-finish" class="study-finish" hidden><span class="finish-mark" aria-hidden="true">✓</span><h2 id="study-finish-title">Все слова повторены</h2><p>Можно начать новый круг или вернуться к списку.</p></div>
+        <div class="study-actions">
+          <button id="study-back" class="quiet" type="button"><span aria-hidden="true">←</span> Назад</button>
+          <button id="study-learned" type="button">Слово выучено</button>
+          <div class="study-forward"><button id="study-next" class="primary" type="button">Далее <span aria-hidden="true">→</span></button><button id="study-restart" class="primary" type="button" hidden>Начать заново</button></div>
+        </div>
       </section>
       <noscript><p class="empty">Для поиска и отметок включите JavaScript. Слова и предложения останутся на сервере.</p></noscript>
     </section>
-    <footer>Слова, предложения, разборы и варианты перевода ИИ хранятся на вашем локальном сервере. ИИ вызывается только по кнопке в панели через настройки расширения.</footer>
+
   </main>
 </body>
 </html>
