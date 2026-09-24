@@ -208,10 +208,10 @@ h2 { margin: 0; font-size: 14px; font-weight: 500; }
 }
 @media (min-width: 1100px) {
   .study-analysis { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto 1fr; align-items: start; }
-  .study-analysis > .analysis-block:first-child { grid-column: 1; grid-row: 1 / 3; }
+  .study-analysis > .analysis-block:first-child { grid-column: 1; grid-row: 1; }
+  .study-analysis > .analysis-characters-block { grid-column: 1; grid-row: 2; }
   .study-analysis > .analysis-logic { grid-column: 2; grid-row: 1; }
   .study-analysis > .analysis-example-block { grid-column: 2; grid-row: 2; }
-  .study-analysis > .analysis-characters-block { grid-column: 1; grid-row: 3; }
 }
 @media (max-width: 899px) {
   .panel-sidebar .site-header { margin-bottom: 12px; }
