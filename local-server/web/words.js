@@ -55,7 +55,9 @@ if (typeof document !== "undefined") (() => {
   const empty = document.getElementById("empty");
   const refresh = document.getElementById("refresh");
   const download = document.getElementById("download");
+  const speechVoiceControl = document.getElementById("speech-voice");
   const speechRateControl = document.getElementById("speech-rate");
+  const speechPreview = document.getElementById("speech-preview");
   const speechStatus = document.getElementById("speech-status");
   const deleteModal = document.getElementById("delete-modal");
   const deleteTitle = document.getElementById("delete-title");
@@ -104,6 +106,8 @@ if (typeof document !== "undefined") (() => {
   let studyPosition = 0;
   let studyExplanationOpen = false;
   let speechRate = 0.8;
+  let speechVoiceName = "";
+  let speechVoices = [];
   let deleteTarget = null;
   let deleteTrigger = null;
 
@@ -539,10 +543,28 @@ if (typeof document !== "undefined") (() => {
     speechStatus.classList.toggle("error", error);
   }
 
+  function renderSpeechVoices() {
+    speechVoiceControl.replaceChildren();
+    const automatic = document.createElement("option");
+    automatic.value = "";
+    automatic.textContent = "Автоматически — Tingting";
+    speechVoiceControl.append(automatic);
+    for (const voice of speechVoices) {
+      const item = document.createElement("option");
+      item.value = voice.voiceName;
+      item.textContent = voice.voiceName;
+      speechVoiceControl.append(item);
+    }
+    speechVoiceControl.value = speechVoices.some(voice => voice.voiceName === speechVoiceName) ? speechVoiceName : "";
+  }
+
   async function loadSpeechSettings() {
     try {
       const result = await requestSpeechAction("subsanywhere.speech.get");
       if (Number.isFinite(Number(result.settings?.rate))) speechRate = Number(result.settings.rate);
+      speechVoiceName = typeof result.settings?.voiceName === "string" ? result.settings.voiceName : "";
+      speechVoices = Array.isArray(result.voices) ? result.voices : [];
+      renderSpeechVoices();
       speechRateControl.value = String(speechRate);
       showSpeechStatus("");
     } catch (error) {
@@ -550,15 +572,33 @@ if (typeof document !== "undefined") (() => {
     }
   }
 
-  async function saveSpeechRate() {
+  async function saveSpeechSettings() {
     try {
-      const result = await requestSpeechAction("subsanywhere.speech.patch", { rate: Number(speechRateControl.value) });
+      const result = await requestSpeechAction("subsanywhere.speech.patch", {
+        rate: Number(speechRateControl.value), voiceName: speechVoiceControl.value,
+      });
       speechRate = Number(result.settings?.rate) || speechRate;
+      speechVoiceName = typeof result.settings?.voiceName === "string" ? result.settings.voiceName : speechVoiceName;
+      speechVoices = Array.isArray(result.voices) ? result.voices : speechVoices;
+      renderSpeechVoices();
       speechRateControl.value = String(speechRate);
-      showSpeechStatus("Скорость сохранена");
+      showSpeechStatus("Настройки сохранены");
     } catch (error) {
+      renderSpeechVoices();
       speechRateControl.value = String(speechRate);
       showSpeechStatus(error.message, true);
+    }
+  }
+
+  async function previewSpeech() {
+    speechPreview.disabled = true;
+    showSpeechStatus("");
+    try {
+      await requestSpeechAction("subsanywhere.speech.speak", { text: "你好，很高兴认识你。", language: "zh" });
+    } catch (error) {
+      showSpeechStatus(error.message, true);
+    } finally {
+      speechPreview.disabled = false;
     }
   }
 
@@ -661,7 +701,9 @@ if (typeof document !== "undefined") (() => {
   learnedTab.addEventListener("click", () => { view = "learned"; render(); });
   refresh.addEventListener("click", load);
   download.addEventListener("click", downloadWords);
-  speechRateControl.addEventListener("change", saveSpeechRate);
+  speechVoiceControl.addEventListener("change", saveSpeechSettings);
+  speechRateControl.addEventListener("change", saveSpeechSettings);
+  speechPreview.addEventListener("click", previewSpeech);
   deleteCancel.addEventListener("click", () => closeDeleteDialog());
   deleteConfirm.addEventListener("click", removeItem);
   deleteModal.addEventListener("click", (event) => { if (event.target === deleteModal) closeDeleteDialog(); });

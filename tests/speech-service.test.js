@@ -6,6 +6,7 @@ import {
   SpeechService,
   normalizeSpeechRate,
   normalizeSpeechSettings,
+  normalizeSpeechVoiceName,
   selectSpeechVoice,
 } from '../speech-service.js';
 
@@ -23,7 +24,8 @@ test('speech rate stays in the useful learning range', () => {
   assert.equal(normalizeSpeechRate(0.1), 0.5);
   assert.equal(normalizeSpeechRate(4), 1);
   assert.equal(normalizeSpeechRate('bad'), DEFAULT_SPEECH_SETTINGS.rate);
-  assert.deepEqual(normalizeSpeechSettings({ rate: 0.55 }), { rate: 0.55 });
+  assert.equal(normalizeSpeechVoiceName('  Tingting  '), 'Tingting');
+  assert.deepEqual(normalizeSpeechSettings({ rate: 0.55, voiceName: ' Tingting ' }), { rate: 0.55, voiceName: 'Tingting' });
 });
 
 test('Chinese speech prefers the natural Tingting voice over novelty voices', () => {
@@ -33,6 +35,7 @@ test('Chinese speech prefers the natural Tingting voice over novelty voices', ()
     { voiceName: 'Meijia', lang: 'zh-TW' },
   ];
   assert.equal(selectSpeechVoice(voices, 'zh-CN'), 'Tingting');
+  assert.equal(selectSpeechVoice(voices, 'zh-CN', 'Grandma (Китайский)'), 'Grandma (Китайский)');
 });
 
 test('speech settings persist globally and are used for Chinese system speech', async () => {
@@ -56,9 +59,13 @@ test('speech settings persist globally and are used for Chinese system speech', 
   const service = new SpeechService(chrome, storage);
 
   assert.deepEqual(await service.getSettings(), DEFAULT_SPEECH_SETTINGS);
-  assert.deepEqual(await service.patchSettings({ rate: 0.55 }), { rate: 0.55 });
-  assert.deepEqual(storage.values[SPEECH_STORAGE_KEY], { rate: 0.55 });
-  assert.deepEqual(await service.speak({ text: '你好', language: 'zh' }), { language: 'zh', rate: 0.55 });
+  assert.deepEqual(await service.getVoiceOptions(), [
+    { voiceName: 'Tingting', lang: 'zh-CN' },
+    { voiceName: 'Eddy (Chinese)', lang: 'zh-CN' },
+  ]);
+  assert.deepEqual(await service.patchSettings({ rate: 0.55, voiceName: 'Tingting' }), { rate: 0.55, voiceName: 'Tingting' });
+  assert.deepEqual(storage.values[SPEECH_STORAGE_KEY], { rate: 0.55, voiceName: 'Tingting' });
+  assert.deepEqual(await service.speak({ text: '你好', language: 'zh' }), { language: 'zh', rate: 0.55, voiceName: 'Tingting' });
   assert.deepEqual(calls, [{
     text: '你好',
     options: { lang: 'zh-CN', rate: 0.55, enqueue: false, voiceName: 'Tingting' },

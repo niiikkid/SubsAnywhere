@@ -20,7 +20,8 @@ if (location.origin === PANEL_ORIGIN && location.pathname === '/words' && !locat
     if ((translate || explain) && (!['words', 'sentences'].includes(data.kind)
       || !Number.isSafeInteger(data.id) || data.id < 1 || (translate && data.kind !== 'words'))) return;
     if (data.type === SPEECH_PATCH_REQUEST
-      && (!Number.isFinite(Number(data.rate)) || Number(data.rate) < 0.5 || Number(data.rate) > 1)) return;
+      && ((!Number.isFinite(Number(data.rate)) || Number(data.rate) < 0.5 || Number(data.rate) > 1)
+        || typeof data.voiceName !== 'string' || data.voiceName.length > 160)) return;
     if (data.type === SPEECH_SPEAK_REQUEST
       && (typeof data.text !== 'string' || !data.text.trim() || data.text.length > 2_000
         || !['zh', 'en'].includes(data.language))) return;
@@ -37,7 +38,7 @@ if (location.origin === PANEL_ORIGIN && location.pathname === '/words' && !locat
       } else if (data.type === SPEECH_GET_REQUEST) {
         message = { type: 'dualCaptions.speech.settings.get' };
       } else if (data.type === SPEECH_PATCH_REQUEST) {
-        message = { type: 'dualCaptions.speech.settings.patch', rate: Number(data.rate) };
+        message = { type: 'dualCaptions.speech.settings.patch', rate: Number(data.rate), voiceName: data.voiceName };
       } else {
         message = { type: 'dualCaptions.speech.speak', text: data.text, language: data.language };
       }

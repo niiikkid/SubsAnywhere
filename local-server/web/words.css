@@ -23,6 +23,8 @@ button:disabled { opacity: .55; cursor: wait; }
 .vocabulary { border: 1px solid var(--border); border-radius: 12px; background: #16181b; overflow: hidden; }
 .speech-toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 13px; }
 .speech-toolbar select { width: 150px; min-height: 32px; padding: 5px 9px; }
+.speech-toolbar #speech-voice { width: 240px; }
+.speech-toolbar button { min-height: 32px; padding: 5px 10px; }
 #speech-status { min-width: 0; overflow-wrap: anywhere; }
 #speech-status.error { color: #f2b9b9; }
 .entity-tabs { display: flex; gap: 8px; padding: 14px 16px 10px; border-bottom: 1px solid var(--border); }

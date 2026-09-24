@@ -29,6 +29,8 @@ let hydrationRevision = 0;
 let aiLoadRevision = 0;
 let aiLoaded = false;
 let speechRate = 0.8;
+let speechVoiceName = '';
+let speechVoices = [];
 let speechRevision = 0;
 let youtubeLoaded = false;
 let selectedFrameId;
@@ -330,6 +332,10 @@ function drawSync() {
 
 function drawSettings() {
   const settings = state.settings;
+  $('speechVoice').replaceChildren();
+  option($('speechVoice'), '', 'Автоматически — Tingting');
+  for (const voice of speechVoices) option($('speechVoice'), voice.voiceName, voice.voiceName);
+  $('speechVoice').value = speechVoices.some((voice) => voice.voiceName === speechVoiceName) ? speechVoiceName : '';
   $('speechRate').value = String(speechRate);
   $('youtubeLanguage').value = settings.youtubeLanguage;
   $('youtubeLanguage').disabled = !pageKey;
@@ -733,6 +739,8 @@ async function loadSpeechSettings() {
     const data = await request(MESSAGE.SPEECH_SETTINGS_GET);
     if (revision === speechRevision && Number.isFinite(Number(data.settings?.rate))) {
       speechRate = Number(data.settings.rate);
+      speechVoiceName = typeof data.settings?.voiceName === 'string' ? data.settings.voiceName : '';
+      speechVoices = Array.isArray(data.voices) ? data.voices : [];
       drawSettings();
     }
     hydrationErrors.delete('speech');
@@ -745,15 +753,31 @@ async function loadSpeechSettings() {
   }
 }
 
-function saveSpeechRate() {
+function saveSpeechSettings() {
   const requested = Number($('speechRate').value);
+  const voiceName = $('speechVoice').value;
   speechRevision += 1;
   speechRate = requested;
-  return saveRequest('speech:rate', MESSAGE.SPEECH_SETTINGS_PATCH, { rate: requested }, (data) => {
+  speechVoiceName = voiceName;
+  return saveRequest('speech:settings', MESSAGE.SPEECH_SETTINGS_PATCH, { rate: requested, voiceName }, (data) => {
     if (Number.isFinite(Number(data.settings?.rate))) speechRate = Number(data.settings.rate);
+    if (typeof data.settings?.voiceName === 'string') speechVoiceName = data.settings.voiceName;
+    if (Array.isArray(data.voices)) speechVoices = data.voices;
     hydrationErrors.delete('speech');
     drawSettings();
-  }).catch((error) => setStatus(`Не удалось сохранить скорость: ${error.message}`, true));
+  }).catch((error) => setStatus(`Не удалось сохранить произношение: ${error.message}`, true));
+}
+
+async function previewSpeech() {
+  const button = $('speechPreview');
+  button.disabled = true;
+  try {
+    await request(MESSAGE.SPEECH_SPEAK, { text: '你好，很高兴认识你。', language: 'zh' });
+  } catch (error) {
+    setStatus(`Не удалось проверить голос: ${error.message}`, true);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function hydratePage(aiPromise) {
@@ -852,7 +876,9 @@ $('aiModel').addEventListener('change', () => drawSettings());
 $('loadAiModels').addEventListener('click', () => loadAiModels().catch((error) => setStatus(error.message, true)));
 $('clearAiKey').addEventListener('click', () => clearAiKey().catch((error) => setStatus(error.message, true)));
 $('saveAiSettings').addEventListener('click', () => saveAiSettings().catch((error) => setStatus(error.message, true)));
-$('speechRate').addEventListener('change', () => { void saveSpeechRate(); });
+$('speechVoice').addEventListener('change', () => { void saveSpeechSettings(); });
+$('speechRate').addEventListener('change', () => { void saveSpeechSettings(); });
+$('speechPreview').addEventListener('click', () => { void previewSpeech(); });
 $('subtitleFile').addEventListener('change', (event) => importFile(event.target.files?.[0]).catch((error) => setStatus(error.message, true)));
 $('createYoutubeSubtitles').addEventListener('click', () => createYoutubeSubtitles());
 $('retryYoutubeSubtitles').addEventListener('click', () => loadYoutubeSubtitles());

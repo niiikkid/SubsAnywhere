@@ -57,8 +57,12 @@ test('pronunciation controls are exposed in extension settings and both learning
     fs.readFile(new URL('../popup.html', import.meta.url), 'utf8'),
     fs.readFile(new URL('../local-server/web/index.html', import.meta.url), 'utf8'),
   ]);
+  assert.match(popup, /id="speechVoice"/);
   assert.match(popup, /id="speechRate"/);
+  assert.match(popup, /id="speechPreview"/);
+  assert.match(words, /id="speech-voice"/);
   assert.match(words, /id="speech-rate"/);
+  assert.match(words, /id="speech-preview"/);
   assert.match(words, /id="study-speak"[^>]*>🔊 Произнести/);
 });
 

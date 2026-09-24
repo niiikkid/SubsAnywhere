@@ -297,10 +297,17 @@ export class BackgroundController {
         }
         case MESSAGE.SPEECH_SETTINGS_GET:
           if (!this.#speech) throw new Error('Системное озвучивание недоступно');
-          return ok({ settings: await this.#speech.getSettings() });
-        case MESSAGE.SPEECH_SETTINGS_PATCH:
+          return ok({ settings: await this.#speech.getSettings(), voices: await this.#speech.getVoiceOptions() });
+        case MESSAGE.SPEECH_SETTINGS_PATCH: {
           if (!this.#speech) throw new Error('Системное озвучивание недоступно');
-          return ok({ settings: await this.#speech.patchSettings({ rate: message.rate }) });
+          const patch = {};
+          if (Object.hasOwn(message, 'rate')) patch.rate = message.rate;
+          if (Object.hasOwn(message, 'voiceName')) patch.voiceName = message.voiceName;
+          return ok({
+            settings: await this.#speech.patchSettings(patch),
+            voices: await this.#speech.getVoiceOptions(),
+          });
+        }
         case MESSAGE.SPEECH_SPEAK:
           if (!this.#speech) throw new Error('Системное озвучивание недоступно');
           return ok(await this.#speech.speak({ text: message.text, language: message.language }));

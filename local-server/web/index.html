@@ -13,6 +13,8 @@
   <main>
     <section class="vocabulary" aria-label="Сохранённые слова и предложения">
       <div class="speech-toolbar">
+        <label for="speech-voice">Голос</label>
+        <select id="speech-voice"><option value="">Автоматически — Tingting</option></select>
         <label for="speech-rate">Скорость произношения</label>
         <select id="speech-rate">
           <option value="0.55">Очень медленно</option>
@@ -20,6 +22,7 @@
           <option value="0.8">Спокойно</option>
           <option value="1">Обычно</option>
         </select>
+        <button id="speech-preview" type="button">🔊 Проверить</button>
         <span id="speech-status" role="status" aria-live="polite"></span>
       </div>
       <div id="list-controls">
