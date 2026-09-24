@@ -46,6 +46,43 @@ test('analysis uses exactly two sequential requests: canonical Han then Han plus
   assert.match(requests[1].messages[0].content, /without linguistic jargon/);
 });
 
+test('analysis receives pronunciation per Han character instead of relying on word spacing', async () => {
+  const pinyin = 'nǐ ne，nǐ ne？';
+  const expected = { ...analysis, pinyin };
+  const characters = [...text].filter(char => /\p{Script=Han}/u.test(char));
+  const { client, requests } = aiFixture([
+    { characters: characters.map((text, index) => ({ text, pinyin: index % 2 ? 'ne' : 'nǐ' })) },
+    expected,
+  ]);
+  assert.deepEqual(await client.analyzeChinese(record), expected);
+  assert.equal(requests.length, 2);
+  assert.match(requests[0].messages[0].content, /characters/);
+});
+
+test('analysis accepts joined word spelling only when it matches verified per-character readings', async () => {
+  const expected = {
+    ...analysis, pinyin: 'zhōng wén',
+    components: [{ text: '中文', pinyin: 'zhōng wén', translation: 'китайский язык', usage: 'Название языка.' }],
+  };
+  const characters = [{ text: '中', pinyin: 'zhōng' }, { text: '文', pinyin: 'wén' }];
+  const joined = { ...expected, pinyin: 'Zhōngwén', components: [{ ...expected.components[0], pinyin: 'zhōngwén' }] };
+  const { client } = aiFixture([{ characters }, joined]);
+  assert.deepEqual(await client.analyzeChinese({ ...record, text: '中文' }), expected);
+  const missing = aiFixture([{ characters }, { ...joined, pinyin: 'zhōng' }]);
+  await assert.rejects(missing.client.analyzeChinese({ ...record, text: '中文' }));
+});
+
+test('analysis rejects missing or reordered character pronunciations before requesting translation', async () => {
+  for (const characters of [
+    [{ text: '你', pinyin: 'nǐ' }],
+    [{ text: '呢', pinyin: 'ne' }, { text: '你', pinyin: 'nǐ' }, { text: '你', pinyin: 'nǐ' }, { text: '呢', pinyin: 'ne' }],
+  ]) {
+    const { client, requests } = aiFixture([{ characters }]);
+    await assert.rejects(client.analyzeChinese(record));
+    assert.equal(requests.length, 1);
+  }
+});
+
 test('analysis stops on invalid pronunciation or non-Chinese source without repair calls', async () => {
   for (const pinyin of ['nǐ', '你呢你呢', 'nǐ ne nǐ ne'.repeat(100), null]) {
     const { client, requests } = aiFixture([{ pinyin }, analysis]);

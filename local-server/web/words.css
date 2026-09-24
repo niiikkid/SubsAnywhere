@@ -159,6 +159,54 @@ h2 { margin: 0; font-size: 14px; font-weight: 500; }
 .delete-confirm:hover:not(:disabled) { border-color: #bd6272; background: #9a4355; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 [hidden] { display: none !important; }
+/* The sidebar owns settings; learning content owns the remaining viewport. */
+.panel-sidebar { padding: 18px; border-bottom: 1px solid var(--border); }
+.panel-sidebar .site-header { height: auto; padding: 0; border: 0; margin-bottom: 24px; }
+.panel-sidebar .page-heading { display: block; margin: 0; }
+.panel-sidebar .page-heading h1 { font-size: 22px; line-height: 1.3; }
+.panel-sidebar .panel-settings { display: grid; gap: 12px; margin: 24px 0 0; }
+.panel-sidebar .speech-settings { margin: 0; min-width: 0; }
+.panel-sidebar .speech-settings > summary { min-height: 38px; }
+.panel-sidebar .speech-toolbar { position: static; width: 100%; max-width: none; margin-top: 8px; padding: 12px; box-shadow: none; }
+.panel-sidebar .speech-status { margin: 12px 0 0; }
+.study-explanation p { font-size: 18px; }
+@media (min-width: 900px) {
+  body { display: grid; grid-template-columns: 218px minmax(0, 1fr); height: 100dvh; overflow: hidden; }
+  .panel-sidebar { min-height: 0; overflow-y: auto; border-bottom: 0; border-right: 1px solid var(--border); }
+  main { width: 100%; max-width: none; min-width: 0; min-height: 0; margin: 0; padding: 12px; overflow-y: auto; }
+  main:has(.study-mode:not([hidden])) { display: flex; overflow: hidden; }
+  .vocabulary { width: 100%; min-width: 0; }
+  .vocabulary:has(.study-mode:not([hidden])) { display: flex; flex-direction: column; min-height: 0; }
+  .vocabulary > .status { flex: 0 0 auto; max-height: 20%; overflow-y: auto; }
+  .study-mode { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 16px 12px; }
+  .study-header { flex: 0 0 auto; min-height: 48px; }
+  .study-card { flex: 1; min-height: 0; width: 100%; max-width: none; margin-top: 12px; display: flex; flex-direction: column; overflow: hidden; }
+  .study-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; display: block; padding: 18px 22px; }
+  .study-language { margin-bottom: 6px; }
+  .study-word { font-size: 36px; }
+  .study-word.sentence-text { font-size: 28px; line-height: 1.4; }
+  .study-translation { margin-top: 10px; font-size: 19px; }
+  .study-analysis { margin-top: 18px; padding-top: 16px; gap: 14px; font-size: 18px; line-height: 1.5; }
+  .study-analysis .analysis-heading { margin-bottom: 8px; font-size: 17px; }
+  .study-analysis .analysis-components li { padding: 9px 14px; }
+  .study-analysis .analysis-usage { margin-top: 3px; line-height: 1.45; }
+  .study-analysis .analysis-logic, .study-analysis .analysis-example-block { padding: 14px 16px; }
+  .study-tools { flex: 0 0 auto; padding: 8px 12px; }
+  .study-actions { flex: 0 0 auto; width: 100%; max-width: none; margin-top: 12px; }
+  .study-finish { flex: 1; width: 100%; max-width: none; min-height: 0; overflow-y: auto; margin-top: 12px; }
+  .word-row { grid-template-columns: minmax(150px, .8fr) minmax(0, 1.2fr) 210px; gap: 14px; }
+}
+@media (min-width: 1100px) {
+  .study-analysis { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto 1fr; align-items: start; }
+  .study-analysis > .analysis-block:first-child { grid-column: 1; grid-row: 1 / 3; }
+  .study-analysis > .analysis-logic { grid-column: 2; grid-row: 1; }
+  .study-analysis > .analysis-example-block { grid-column: 2; grid-row: 2; }
+}
+@media (max-width: 899px) {
+  .panel-sidebar .site-header { margin-bottom: 12px; }
+  .panel-sidebar .panel-settings { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; align-items: start; }
+  .study-actions { position: sticky; bottom: 0; padding: 10px 0; background: var(--surface); z-index: 1; }
+}
 @media (max-width: 1000px) {
   .word-row { grid-template-columns: minmax(160px, .8fr) minmax(0, 1.2fr); gap: 8px 24px; }
   .word-main { grid-row: 1 / 3; }
