@@ -23,13 +23,14 @@ function fixture() {
 
 const sender = { id: 'extension', tab: { id: 1 }, frameId: 0, url: 'http://127.0.0.1:43817/words' };
 const chrome = { runtime: { id: 'extension', getURL: path => `chrome-extension://extension/${path}` } };
-const analysis = { pinyin: 'nǐ', translation: 'ты', components: [{ text: '你', pinyin: 'nǐ', translation: 'ты', usage: 'Обращение.' }], grammar: 'Обращение к человеку.', example: { pinyin: 'nǐ hǎo', translation: 'Привет.' } };
+const analysis = { pinyin: 'nǐ', translation: 'ты', components: [{ text: '你', pinyin: 'nǐ', translation: 'ты', usage: 'Обращение.' }], characters: [{ text: '你', pinyin: 'nǐ', translation: 'ты' }], grammar: 'Обращение к человеку.', example: { pinyin: 'nǐ hǎo', translation: 'Привет.' } };
+const pronunciation = { characters: [{ text: '你', pinyin: 'nǐ' }] };
 
 test('two-step analysis snapshots credentials while panel settings change', async () => {
   let reads = 0; const calls = [];
   const client = new ai.AIClient(async (url, options) => {
     calls.push({ url, body: JSON.parse(options.body) });
-    return Response.json({ choices: [{ message: { content: JSON.stringify(calls.length === 1 ? { pinyin: 'nǐ' } : analysis) } }] });
+    return Response.json({ choices: [{ message: { content: JSON.stringify(calls.length === 1 ? pronunciation : analysis) } }] });
   }, { getActive: async () => ++reads === 1
     ? { provider: 'deepseek', model: 'deepseek-chat', apiKey: 'test' }
     : { provider: 'openai', model: 'gpt-5', apiKey: 'changed' } });

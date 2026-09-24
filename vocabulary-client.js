@@ -76,7 +76,9 @@ function savedAnalysis(value, pinyinLimit) {
   if (value.analysis === undefined) return {};
   if (value.analysis === null) return { analysis: null };
   if (value.language !== 'zh') throw new Error('Разбор доступен только для китайского текста');
-  const analysis = validateChineseAnalysis(value.analysis, { text: value.text, pinyinLimit });
+  const analysis = validateChineseAnalysis(value.analysis, {
+    text: value.text, pinyinLimit, legacy: !value.analysis || !Object.hasOwn(value.analysis, 'characters'),
+  });
   if (value.pinyin !== analysis.pinyin || value.translation !== analysis.translation) {
     throw new Error('Разбор не совпадает с сохранённым текстом');
   }

@@ -46,7 +46,7 @@ export const MESSAGE = Object.freeze({
 });
 
 // Shared strict analysis boundary: reject incomplete output; never truncate or repair it.
-export function validateChineseAnalysis(value, { text, pinyinLimit = 500 } = {}) {
+export function validateChineseAnalysis(value, { text, pinyinLimit = 500, legacy = false } = {}) {
   const invalid = () => { throw new Error('Некорректный или неполный разбор китайского текста'); };
   // Match the SQLite boundary before comparison and persistence.
   value = JSON.parse(JSON.stringify(value, (_key, item) => {
@@ -75,7 +75,10 @@ export function validateChineseAnalysis(value, { text, pinyinLimit = 500 } = {})
     if (!parts.length) invalid();
     return parts;
   };
-  object(value, ['pinyin', 'translation', 'components', 'grammar', 'example']);
+  const analysisKeys = legacy
+    ? ['pinyin', 'translation', 'components', 'grammar', 'example']
+    : ['pinyin', 'translation', 'components', 'characters', 'grammar', 'example'];
+  object(value, analysisKeys);
   const fullPinyin = syllables(value.pinyin, pinyinLimit);
   field(value.translation, 1000);
   field(value.grammar, 700);
@@ -98,10 +101,26 @@ export function validateChineseAnalysis(value, { text, pinyinLimit = 500 } = {})
   }
   if (text !== undefined && coverage !== source(text)) invalid();
   if (JSON.stringify(componentPinyin) !== JSON.stringify(fullPinyin)) invalid();
+  let characters;
+  if (!legacy) {
+    const canonicalCharacters = [...(text === undefined ? coverage : source(text))];
+    if (!Array.isArray(value.characters) || value.characters.length !== canonicalCharacters.length) invalid();
+    characters = value.characters.map((part, index) => {
+      object(part, ['text', 'pinyin', 'translation']);
+      field(part.text, 2, true);
+      if ([...part.text].length !== 1 || part.text !== canonicalCharacters[index] || !/\p{Script=Han}/u.test(part.text)) invalid();
+      const pronunciation = syllables(part.pinyin, 120);
+      if (pronunciation.length !== 1) invalid();
+      field(part.translation, 160);
+      return { text: part.text, pinyin: part.pinyin, translation: part.translation };
+    });
+    if (JSON.stringify(characters.map(part => part.pinyin)) !== JSON.stringify(fullPinyin)) invalid();
+  }
   // Copy only the validated contract, preserving every occurrence and value exactly.
   return {
     pinyin: value.pinyin, translation: value.translation,
     components: value.components.map(({ text: han, pinyin, translation, usage }) => ({ text: han, pinyin, translation, usage })),
+    ...(legacy ? {} : { characters }),
     grammar: value.grammar, example: { pinyin: value.example.pinyin, translation: value.example.translation },
   };
 }

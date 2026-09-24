@@ -151,8 +151,11 @@ def _analysis_syllables(value):
     return parts
 
 
-def validate_analysis(payload, source, *, word=False):
-    if not isinstance(payload, dict) or set(payload) != {"pinyin", "translation", "components", "grammar", "example"}:
+def validate_analysis(payload, source, *, word=False, legacy=False):
+    required = {"pinyin", "translation", "components", "grammar", "example"}
+    if not legacy:
+        required.add("characters")
+    if not isinstance(payload, dict) or set(payload) != required:
         raise ValueError("Invalid analysis fields")
     if not HAN.search(source) or any(char.isalpha() and not HAN.fullmatch(char) for char in source):
         raise ValueError("Analysis requires Chinese source text")
@@ -187,11 +190,35 @@ def validate_analysis(payload, source, *, word=False):
         component_syllables.extend(syllables)
     if component_syllables != _analysis_syllables(pronunciation):
         raise ValueError("Analysis component pronunciation must match full pinyin")
+    characters = None
+    if not legacy:
+        source_characters = [char for char in source if HAN.fullmatch(char)]
+        raw_characters = payload["characters"]
+        if not isinstance(raw_characters, list) or len(raw_characters) != len(source_characters):
+            raise ValueError("Analysis characters must cover source in order")
+        characters = []
+        for index, character in enumerate(raw_characters):
+            if not isinstance(character, dict) or set(character) != {"text", "pinyin", "translation"}:
+                raise ValueError("Invalid analysis character")
+            text = _field(character["text"], 2)
+            if text != source_characters[index] or len(text) != 1 or not HAN.fullmatch(text):
+                raise ValueError("Analysis character must match canonical source")
+            pinyin = _analysis_display(character["pinyin"], 120, pinyin=True)
+            if len(_analysis_syllables(pinyin)) != 1:
+                raise ValueError("Analysis character requires one pronunciation syllable")
+            characters.append({
+                "text": text,
+                "pinyin": pinyin,
+                "translation": _analysis_display(character["translation"], 160),
+            })
+        if [character["pinyin"] for character in characters] != _analysis_syllables(pronunciation):
+            raise ValueError("Analysis character pronunciation must match full pinyin")
     _analysis_syllables(_analysis_display(example["pinyin"], 300, pinyin=True))
     return {
         "pinyin": pronunciation,
         "translation": _analysis_display(payload["translation"], 1000),
         "components": normalized,
+        **({} if legacy else {"characters": characters}),
         "grammar": _analysis_display(payload["grammar"], 700),
         "example": {
             "pinyin": _analysis_display(example["pinyin"], 300, pinyin=True),
@@ -276,7 +303,11 @@ class WordsStore:
         word = dict(row)
         word["learned"] = bool(word["learned"])
         if word.get("analysis") is not None:
-            word["analysis"] = validate_analysis(json.loads(word["analysis"]), word["text"], word="ai_translations" in word)
+            raw_analysis = json.loads(word["analysis"])
+            word["analysis"] = validate_analysis(
+                raw_analysis, word["text"], word="ai_translations" in word,
+                legacy=not isinstance(raw_analysis, dict) or "characters" not in raw_analysis,
+            )
         if "ai_translations" in word:
             try:
                 word["ai_translations"] = validate_ai_translations(json.loads(word["ai_translations"])) if word["ai_translations"] != "[]" else []

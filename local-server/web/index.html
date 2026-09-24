@@ -13,24 +13,23 @@
     <header class="site-header"><span class="brand"><span class="brand-mark" aria-hidden="true">s</span>SubsAnywhere</span></header>
     <div class="panel-settings">
       <button id="panel-ai-open" type="button">Модель ИИ</button>
-      <details class="speech-settings">
-        <summary><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg>Произношение</summary>
-        <div class="speech-toolbar">
-          <label for="speech-voice">Голос</label>
-          <select id="speech-voice"><option value="">Автоматически — Google</option></select>
-          <label for="speech-rate">Скорость</label>
-          <select id="speech-rate" aria-label="Скорость произношения">
-            <option value="0.55">Очень медленно</option>
-            <option value="0.7">Медленно</option>
-            <option value="0.8">Спокойно</option>
-            <option value="1">Обычно</option>
-          </select>
-          <button id="speech-preview" type="button">Проверить голос</button>
-        </div>
-      </details>
+      <button id="speech-open" type="button">Произношение</button>
     </div>
-    <p id="speech-status" class="speech-status" role="status" aria-live="polite"></p>
   </aside>
+  <dialog id="speech-dialog" class="panel-ai-dialog speech-dialog" aria-labelledby="speech-dialog-title">
+    <form method="dialog" class="panel-ai-dialog-header"><h2 id="speech-dialog-title">Произношение</h2><button id="speech-close" class="icon-button" type="submit" aria-label="Закрыть">×</button></form>
+    <label for="speech-voice">Голос</label>
+    <select id="speech-voice"><option value="">Автоматически — Google</option></select>
+    <label for="speech-rate">Скорость</label>
+    <select id="speech-rate" aria-label="Скорость произношения">
+      <option value="0.55">Очень медленно</option>
+      <option value="0.7">Медленно</option>
+      <option value="0.8">Спокойно</option>
+      <option value="1">Обычно</option>
+    </select>
+    <button id="speech-preview" type="button">Проверить голос</button>
+    <p id="speech-status" class="speech-status" role="status" aria-live="polite"></p>
+  </dialog>
   <dialog id="panel-ai-dialog" class="panel-ai-dialog" aria-labelledby="panel-ai-title">
     <form method="dialog" class="panel-ai-dialog-header"><h2 id="panel-ai-title">Модель ИИ для разбора</h2><button id="panel-ai-close" class="icon-button" type="submit" aria-label="Закрыть">×</button></form>
     <p class="panel-ai-note">Только для этой панели. Настройки субтитров не меняются.</p>

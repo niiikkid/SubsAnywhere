@@ -73,6 +73,7 @@ class PanelElement {
     this.listeners = new Map();
     this.classList = { toggle() {} };
     this._text = '';
+    this.open = false;
   }
   set textContent(value) { this._text = String(value ?? ''); this.children = []; }
   get textContent() { return this._text + this.children.map(child => child.textContent).join(''); }
@@ -83,12 +84,15 @@ class PanelElement {
   toggleAttribute(name) { if (name in this.attributes) delete this.attributes[name]; else this.attributes[name] = ''; }
   addEventListener(name, fn) { this.listeners.set(name, fn); }
   click() { if (!this.disabled) return this.listeners.get('click')?.({ target: this }); }
+  showModal() { this.open = true; this.setAttribute('open', ''); }
+  close() { this.open = false; this.removeAttribute('open'); }
   focus() {}
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const analysis = {
   pinyin: 'nǐ hǎo', translation: 'Здравствуйте!',
   components: [{ text: '你', pinyin: 'nǐ', translation: 'ты', usage: 'Обращение к собеседнику.' }],
+  characters: [{ text: '你', pinyin: 'nǐ', translation: 'ты' }, { text: '好', pinyin: 'hǎo', translation: 'хорошо' }],
   grammar: 'Обычное приветствие.', example: { pinyin: 'nǐ hǎo ma?', translation: 'Как дела?' },
 };
 const savedChinese = (id = 1) => ({
@@ -96,7 +100,7 @@ const savedChinese = (id = 1) => ({
   explanation: 'Старое объяснение 你', ai_translations: [{ translation: 'старый вариант', usage: 'старый контекст' }],
   created_at: '', learned: false,
 });
-async function bootPanel({ kind = 'words', analyzed = false, resume = false, english = false } = {}) {
+async function bootPanel({ kind = 'words', analyzed = false, legacyAnalysis = false, resume = false, english = false } = {}) {
   const html = readFileSync(new URL('../local-server/web/index.html', import.meta.url), 'utf8');
   const elements = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(([, id]) => [id, new PanelElement()]));
   elements['study-mode'].hidden = true;
@@ -104,7 +108,8 @@ async function bootPanel({ kind = 'words', analyzed = false, resume = false, eng
     getElementById: id => elements[id], createElement: tag => new PanelElement(tag),
     createElementNS: (_, tag) => new PanelElement(tag), createDocumentFragment: () => new PanelElement('fragment'),
   };
-  const item = { ...savedChinese(), ...(analyzed ? { analysis, pinyin: analysis.pinyin, translation: analysis.translation } : {}),
+  const itemAnalysis = legacyAnalysis ? (() => { const value = { ...analysis }; delete value.characters; return value; })() : analysis;
+  const item = { ...savedChinese(), ...(analyzed ? { analysis: itemAnalysis, pinyin: itemAnalysis.pinyin, translation: itemAnalysis.translation } : {}),
     ...(english ? { language: 'en', text: 'hello', pinyin: '', translation: 'привет', explanation: 'Приветствие.', ai_translations: [] } : {}) };
   const items = [item, savedChinese(2)];
   const messages = [], timers = new Map(), listeners = new Set(), storage = new Map();
@@ -157,6 +162,9 @@ for (const kind of ['words', 'sentences']) {
     assert.equal(elements['study-explain'].textContent, 'Обновить разбор');
     assert.equal(elements['study-translation'].textContent, analysis.translation);
     assert.match(elements['study-analysis'].textContent, /nǐ — ты/);
+    assert.match(elements['study-analysis'].textContent, /По иероглифам/);
+    assert.match(elements['study-analysis'].textContent, /nǐ — ты/);
+    assert.match(elements['study-analysis'].textContent, /hǎo — хорошо/);
     assert.match(elements['study-analysis'].textContent, /nǐ hǎo ma\? — Как дела\?/);
     assert.doesNotMatch(elements['study-analysis'].textContent, /\p{Script=Han}/u);
     assert.equal(elements['study-explanation'].hidden, true);
@@ -193,6 +201,7 @@ for (const kind of ['words', 'sentences']) {
     const request = analyzeMessages(panel)[0];
     const replacement = { ...analysis, pinyin: 'ní hǎo', translation: 'Привет!',
       components: [{ text: '好', pinyin: 'hǎo', translation: 'хорошо', usage: 'Часть приветствия.' }],
+      characters: [{ text: '好', pinyin: 'hǎo', translation: 'хорошо' }],
       grammar: 'Здесь используется приветствие.', example: { pinyin: 'nǐmen hǎo!', translation: 'Всем привет!' } };
     const fresh = { ...panel.item, pinyin: replacement.pinyin, translation: replacement.translation, analysis: replacement };
     panel.respond({ type: `${request.type}.result`, requestId: request.requestId, ok: true, [kind === 'words' ? 'word' : 'sentence']: fresh });
@@ -209,11 +218,38 @@ for (const kind of ['words', 'sentences']) {
 
 test('analysis rejects Han in visible fields but keeps source component text', () => {
   assert.equal(validAnalysis(analysis), true);
+  const legacy = { ...analysis };
+  delete legacy.characters;
+  assert.equal(validAnalysis(legacy), true);
   assert.equal(validAnalysis({ ...analysis, grammar: '你 — ты' }), false);
   assert.equal(validAnalysis({ ...analysis, components: [{ ...analysis.components[0], usage: '你' }] }), false);
   assert.equal(validAnalysis({ ...analysis, example: { pinyin: '你好', translation: 'Привет' } }), false);
+  assert.equal(validAnalysis({ ...analysis, characters: [] }), false);
+  assert.equal(validAnalysis({ ...analysis, characters: [{ text: '你', pinyin: '你', translation: 'ты' }] }), false);
+  assert.equal(validAnalysis({ ...analysis, characters: [{ text: '你', pinyin: 'nǐ', translation: '' }] }), false);
   assert.equal(validAnalysis(null), false);
   assert.equal(learningText({ language: 'zh', text: '你好', pinyin: '你好 nǐ hǎo' }), 'nǐ hǎo');
+});
+
+test('speech settings open in a modal and close with the X or backdrop without new requests', async () => {
+  const panel = await bootPanel();
+  const { elements } = panel;
+  const requestsBefore = panel.messages.length;
+  elements['speech-open'].click();
+  assert.equal(elements['speech-dialog'].open, true);
+  assert.equal(panel.messages.length, requestsBefore);
+  elements['speech-close'].click();
+  assert.equal(elements['speech-dialog'].open, false);
+  elements['speech-open'].click();
+  elements['speech-dialog'].listeners.get('click')({ target: elements['speech-dialog'] });
+  assert.equal(elements['speech-dialog'].open, false);
+});
+
+test('legacy analysis keeps its word breakdown without a character block', async () => {
+  const panel = await bootPanel({ analyzed: true, legacyAnalysis: true, resume: true });
+  assert.match(panel.elements['study-analysis'].textContent, /nǐ — ты/);
+  assert.doesNotMatch(panel.elements['study-analysis'].textContent, /По иероглифам/);
+  assert.doesNotMatch(panel.elements['study-analysis'].textContent, /\p{Script=Han}/u);
 });
 
 test('malformed analysis and timeout preserve prior data, and late replies cannot overwrite a retry', async () => {

@@ -46,12 +46,18 @@ function explanationText(value) {
 export function validAnalysis(value) {
   const text = (value, required = true) => typeof value === "string"
     && (!required || value.trim().length > 0) && !/\p{Script=Han}/u.test(value);
+  const characters = value?.characters;
+  const validCharacters = characters === undefined || (Array.isArray(characters) && characters.length > 0
+    && characters.length <= 500 && characters.every(item => item && typeof item === "object"
+      && Object.keys(item).length === 3 && /^[\p{Script=Han}]$/u.test(item.text)
+      && text(item.pinyin) && text(item.translation)));
   return Boolean(value && typeof value === "object"
     && text(value.pinyin) && text(value.translation) && text(value.grammar)
     && Array.isArray(value.components) && value.components.length > 0
     && value.components.every(item => item && typeof item.text === "string"
       && text(item.pinyin) && text(item.translation) && text(item.usage, false))
-    && value.example && text(value.example.pinyin) && text(value.example.translation));
+    && value.example && text(value.example.pinyin) && text(value.example.translation)
+    && validCharacters);
 }
 
 export function pronunciationText(item) {
@@ -82,6 +88,9 @@ if (typeof document !== "undefined") (() => {
   const empty = document.getElementById("empty");
   const refresh = document.getElementById("refresh");
   const download = document.getElementById("download");
+  const speechOpen = document.getElementById("speech-open");
+  const speechDialog = document.getElementById("speech-dialog");
+  const speechClose = document.getElementById("speech-close");
   const speechVoiceControl = document.getElementById("speech-voice");
   const speechRateControl = document.getElementById("speech-rate");
   const speechPreview = document.getElementById("speech-preview");
@@ -261,7 +270,20 @@ if (typeof document !== "undefined") (() => {
     logicBlock.append(element("h4", "analysis-heading", "Как это работает"), element("p", "analysis-grammar", analysis.grammar));
     const exampleBlock = element("section", "analysis-block analysis-example-block", "");
     exampleBlock.append(element("h4", "analysis-heading", "Пример"), example);
+    const characterBlock = analysis.characters ? element("section", "analysis-block analysis-characters-block", "") : null;
+    if (characterBlock) {
+      const characters = element("ul", "analysis-components analysis-characters", "");
+      for (const character of analysis.characters) {
+        const row = element("li", "", "");
+        const pinyin = element("strong", "analysis-pinyin", character.pinyin);
+        pinyin.lang = "zh-Latn";
+        row.append(pinyin, element("span", "", ` — ${character.translation}`));
+        characters.append(row);
+      }
+      characterBlock.append(element("h4", "analysis-heading", "По иероглифам"), characters);
+    }
     container.append(wordsBlock, logicBlock, exampleBlock);
+    if (characterBlock) container.append(characterBlock);
   }
 
   function iconButton(className, label, pathData) {
@@ -905,6 +927,21 @@ if (typeof document !== "undefined") (() => {
     resetAiCatalog();
   });
   aiModel.addEventListener("change", renderAiControls);
+
+  speechOpen.addEventListener("click", () => {
+    if (typeof speechDialog.showModal === "function") speechDialog.showModal();
+    else speechDialog.setAttribute("open", "");
+  });
+  speechClose.addEventListener("click", () => {
+    if (typeof speechDialog.close === "function") speechDialog.close();
+    else speechDialog.removeAttribute("open");
+  });
+  speechDialog.addEventListener("click", (event) => {
+    if (event.target === speechDialog) {
+      if (typeof speechDialog.close === "function") speechDialog.close();
+      else speechDialog.removeAttribute("open");
+    }
+  });
 
   search.addEventListener("input", render);
   language.addEventListener("change", render);

@@ -8,7 +8,7 @@ const css = readFileSync(new URL('../local-server/web/words.css', import.meta.ur
 test('sidebar stays minimal and panel model settings open in a separate dialog', () => {
   const sidebar = html.match(/<aside class="panel-sidebar"[\s\S]*?<\/aside>/)?.[0];
   assert.ok(sidebar);
-  for (const id of ['panel-ai-open', 'speech-voice', 'speech-rate', 'speech-preview', 'speech-status']) {
+  for (const id of ['panel-ai-open', 'speech-open']) {
     assert.ok(sidebar.includes(`id="${id}"`), id);
     assert.equal(html.split(`id="${id}"`).length, 2, `unique ${id}`);
   }

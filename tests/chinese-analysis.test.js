@@ -9,16 +9,23 @@ import { MESSAGE, validateChineseAnalysis } from '../protocol.js';
 
 const text = '你呢，你呢？';
 const analysis = {
-  pinyin: 'nǐ ne, nǐ ne?', translation: 'А ты? А ты?',
+  pinyin: 'nǐ ne，nǐ ne？', translation: 'А ты? А ты?',
   components: [
     { text: '你', pinyin: 'nǐ', translation: 'ты', usage: 'Обращение к собеседнику.' },
     { text: '呢', pinyin: 'ne', translation: 'а?', usage: 'Возвращает вопрос собеседнику.' },
     { text: '你', pinyin: 'nǐ', translation: 'ты', usage: 'Повторное обращение.' },
     { text: '呢', pinyin: 'ne', translation: 'а?', usage: 'Снова задаёт встречный вопрос.' },
   ],
+  characters: [
+    { text: '你', pinyin: 'nǐ', translation: 'ты' },
+    { text: '呢', pinyin: 'ne', translation: 'а; в конце возвращает вопрос' },
+    { text: '你', pinyin: 'nǐ', translation: 'ты' },
+    { text: '呢', pinyin: 'ne', translation: 'а; в конце возвращает вопрос' },
+  ],
   grammar: 'Ne в конце возвращает вопрос: «А ты?». В русском для этого обычно нужно слово «а».',
   example: { pinyin: 'wǒ hěn hǎo, nǐ ne?', translation: 'У меня всё хорошо, а у тебя?' },
 };
+const pronunciation = { characters: analysis.characters.map(({ text, pinyin }) => ({ text, pinyin })) };
 const record = { id: 3, language: 'zh', text, pinyin: 'broken', translation: 'old', created_at: '2026-01-01', learned: false, explanation: '' };
 const updated = { ...record, pinyin: analysis.pinyin, translation: analysis.translation, analysis };
 const sender = { id: 'extension', tab: { id: 9 }, frameId: 0, url: 'http://127.0.0.1:43817/words' };
@@ -36,7 +43,7 @@ function aiFixture(outputs) {
 }
 
 test('analysis uses exactly two sequential requests: canonical Han then Han plus corrected pinyin', async () => {
-  const { client, requests } = aiFixture([{ pinyin: analysis.pinyin }, analysis]);
+  const { client, requests } = aiFixture([pronunciation, analysis]);
   assert.deepEqual(await client.analyzeChinese({ ...record, analysis: { malicious: true } }), analysis);
   assert.equal(requests.length, 2);
   assert.deepEqual(JSON.parse(requests[0].messages[1].content), { text });
@@ -63,6 +70,7 @@ test('analysis accepts joined word spelling only when it matches verified per-ch
   const expected = {
     ...analysis, pinyin: 'zhōng wén',
     components: [{ text: '中文', pinyin: 'zhōng wén', translation: 'китайский язык', usage: 'Название языка.' }],
+    characters: [{ text: '中', pinyin: 'zhōng', translation: 'середина' }, { text: '文', pinyin: 'wén', translation: 'письменный знак; культура' }],
   };
   const characters = [{ text: '中', pinyin: 'zhōng' }, { text: '文', pinyin: 'wén' }];
   const joined = { ...expected, pinyin: 'Zhōngwén', components: [{ ...expected.components[0], pinyin: 'zhōngwén' }] };
@@ -102,10 +110,13 @@ test('analysis rejects missing particles, repeated-occurrence collapse, reordere
     (a) => { a.components[1].text = '吗'; },
     (a) => { a.pinyin = 'ní ne, nǐ ne?'; },
     (a) => { a.components[0].pinyin = 'ní'; },
+    (a) => { a.characters[0].pinyin = 'ní'; },
+    (a) => { a.characters.reverse(); },
+    (a) => { a.characters.splice(2); },
   ];
   for (const mutate of mutations) {
     const bad = structuredClone(analysis); mutate(bad);
-    const { client, requests } = aiFixture([{ pinyin: analysis.pinyin }, bad]);
+    const { client, requests } = aiFixture([pronunciation, bad]);
     await assert.rejects(client.analyzeChinese(record));
     assert.equal(requests.length, 2);
   }
@@ -116,6 +127,7 @@ test('strict analysis contract rejects every overlong field, Han display text an
   const fields = [
     ['pinyin', 500], ['translation', 1000], ['grammar', 700],
     ['components.0.text', 120], ['components.0.pinyin', 120], ['components.0.translation', 160], ['components.0.usage', 240],
+    ['characters.0.text', 2], ['characters.0.pinyin', 120], ['characters.0.translation', 160],
     ['example.pinyin', 300], ['example.translation', 300],
   ];
   for (const [path, limit] of fields) {
@@ -128,7 +140,7 @@ test('strict analysis contract rejects every overlong field, Han display text an
       assert.deepEqual(bad, before);
     }
   }
-  for (const patch of [{ components: [] }, { components: Array(121).fill(analysis.components[0]) }, { extra: true }, { example: { ...analysis.example, text: '你好' } }]) {
+  for (const patch of [{ components: [] }, { characters: [] }, { characters: [...analysis.characters].reverse() }, { components: Array(121).fill(analysis.components[0]) }, { extra: true }, { example: { ...analysis.example, text: '你好' } }]) {
     assert.throws(() => validateChineseAnalysis({ ...analysis, ...patch }, { text }));
   }
 });
@@ -155,6 +167,14 @@ test('both analysis endpoints send explicit contract and verify updated canonica
   }
 });
 
+test('legacy saved analysis without characters remains readable while new saves require characters', async () => {
+  const legacy = structuredClone(analysis); delete legacy.characters;
+  const legacyRecord = { ...updated, analysis: legacy };
+  const client = new VocabularyClient(async () => Response.json({ words: [legacyRecord] }));
+  assert.deepEqual(await client.list(), { words: [legacyRecord] });
+  await assert.rejects(client.saveAnalysis('words', 3, legacy), /разбор/);
+});
+
 test('recapture confirms the same Han record after its pinyin was corrected', async () => {
   const client = new VocabularyClient(async (_url, options) => Response.json(
     options.method === 'POST' ? { word: updated } : { words: [updated] },
@@ -169,7 +189,7 @@ test('analysis canonicalizes whitespace and Unicode before persistence compariso
 });
 
 test('word analysis pinyin save cap is 120, sentence cap is 500', async () => {
-  const long = { ...analysis, pinyin: Array(30).fill('hǎo').join(' ') + ' hǎo', components: Array.from({ length: 31 }, () => ({ text: '好', pinyin: 'hǎo', translation: 'хорошо', usage: 'Оценка.' })) };
+  const long = { ...analysis, pinyin: Array(30).fill('hǎo').join(' ') + ' hǎo', components: Array.from({ length: 31 }, () => ({ text: '好', pinyin: 'hǎo', translation: 'хорошо', usage: 'Оценка.' })), characters: Array.from({ length: 31 }, () => ({ text: '好', pinyin: 'hǎo', translation: 'хорошо' })) };
   let calls = 0;
   const client = new VocabularyClient(async () => { calls++; throw new Error('offline'); });
   await assert.rejects(client.saveAnalysis('words', 3, long), /разбор/);

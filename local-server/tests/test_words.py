@@ -109,6 +109,7 @@ class WordsStoreTests(unittest.TestCase):
         analysis = {
             "pinyin": "ní hǎo", "translation": "hello", "grammar": "A greeting.",
             "components": [{"text": "你好", "pinyin": "ní hǎo", "translation": "hello", "usage": "Greeting"}],
+            "characters": [{"text": "你", "pinyin": "ní", "translation": "ты"}, {"text": "好", "pinyin": "hǎo", "translation": "хорошо"}],
             "example": {"pinyin": "Nǐ hǎo!", "translation": "Hello!"},
         }
         for add, save, listing, learn in (
@@ -140,6 +141,7 @@ class WordsStoreTests(unittest.TestCase):
         analysis = {
             "pinyin": "nǐ hǎo", "translation": "Привет", "grammar": "Приветствие.",
             "components": [{"text": "你好", "pinyin": "nǐ hǎo", "translation": "привет", "usage": "При встрече."}],
+            "characters": [{"text": "你", "pinyin": "nǐ", "translation": "ты"}, {"text": "好", "pinyin": "hǎo", "translation": "хорошо"}],
             "example": {"pinyin": "nǐ hǎo", "translation": "Привет"},
         }
         for pronunciation in ["wrong", "nǐ", "nǐ hǎo$", "hǎo nǐ"]:
@@ -153,6 +155,7 @@ class WordsStoreTests(unittest.TestCase):
         analysis = {
             "pinyin": "nǐ nǐ hǎo", "translation": "hello", "grammar": "Greeting.",
             "components": [component, component, {**component, "text": "好", "pinyin": "hǎo"}],
+            "characters": [{"text": "你", "pinyin": "nǐ", "translation": "ты"}, {"text": "你", "pinyin": "nǐ", "translation": "ты"}, {"text": "好", "pinyin": "hǎo", "translation": "хорошо"}],
             "example": {"pinyin": "Nǐ hǎo!", "translation": "Hello!"},
         }
         for add, save, listing in ((self.store.add, self.store.set_analysis, self.store.list),
@@ -181,6 +184,7 @@ class WordsStoreTests(unittest.TestCase):
     def test_analysis_recapture_matches_current_and_captured_pinyin_after_restart(self):
         analysis = {"pinyin": "ní hǎo", "translation": "hello", "grammar": "Greeting.",
                     "components": [{"text": "你好", "pinyin": "ní hǎo", "translation": "hello", "usage": "Greeting"}],
+                    "characters": [{"text": "你", "pinyin": "ní", "translation": "ты"}, {"text": "好", "pinyin": "hǎo", "translation": "хорошо"}],
                     "example": {"pinyin": "Nǐ hǎo", "translation": "Hello"}}
         for add_name, save_name, list_name in (("add", "set_analysis", "list"),
                                               ("add_sentence", "set_sentence_analysis", "list_sentences")):
@@ -215,6 +219,25 @@ class WordsStoreTests(unittest.TestCase):
         expected = {**ZH, "translation": "hello", "id": 17, "explanation": "old grammar",
                     "created_at": "original date", "learned": True, "analysis": None}
         self.assertEqual(results, [[expected]] * 16)
+
+    def test_legacy_analysis_without_characters_remains_readable_until_rebuilt(self):
+        row = self.store.add(ZH)
+        legacy = {
+            "pinyin": "nǐ hǎo", "translation": "привет", "grammar": "Обычное приветствие.",
+            "components": [{"text": "你好", "pinyin": "nǐ hǎo", "translation": "привет", "usage": "При встрече."}],
+            "example": {"pinyin": "nǐ hǎo", "translation": "Привет"},
+        }
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute("UPDATE words SET analysis = ?, explanation = ? WHERE id = ?", (
+                json.dumps(legacy, ensure_ascii=False), legacy["grammar"], row["id"],
+            ))
+        readable = WordsStore(self.path).list()[0]
+        self.assertEqual(readable["analysis"], legacy)
+        rebuilt = {**legacy, "characters": [
+            {"text": "你", "pinyin": "nǐ", "translation": "ты"},
+            {"text": "好", "pinyin": "hǎo", "translation": "хорошо"},
+        ]}
+        self.assertEqual(WordsStore(self.path).set_analysis(row["id"], rebuilt)["analysis"], rebuilt)
 
     def test_pinyin_is_part_of_identity(self):
         self.store.add({**ZH, "text": "行", "pinyin": "xíng"})
@@ -363,6 +386,7 @@ class WordsHTTPTests(unittest.TestCase):
         analysis = {
             "pinyin": "nǐ hǎo", "translation": "hello", "grammar": "Greeting.",
             "components": [{"text": "你好", "pinyin": "nǐ hǎo", "translation": "hello", "usage": "Greeting"}],
+            "characters": [{"text": "你", "pinyin": "nǐ", "translation": "ты"}, {"text": "好", "pinyin": "hǎo", "translation": "хорошо"}],
             "example": {"pinyin": "Nǐ hǎo!", "translation": "Hello!"},
         }
         extension = {"Origin": "chrome-extension://" + "a" * 32}
@@ -393,6 +417,7 @@ class WordsHTTPTests(unittest.TestCase):
         component = {"text": "你", "pinyin": "nǐ", "translation": "я" * 160, "usage": "я" * 240}
         analysis = {"pinyin": " ".join(["nǐ"] * 120), "translation": "t" * 1000, "grammar": "g" * 700,
                     "components": [component] * 120,
+                    "characters": [{"text": "你", "pinyin": "nǐ", "translation": "я" * 160}] * 120,
                     "example": {"pinyin": "n" * 300, "translation": "t" * 300}}
         row = self.store.add_sentence({**ZH, "text": "你" * 120})
         route = "/api/sentences/analysis"
