@@ -547,7 +547,7 @@ if (typeof document !== "undefined") (() => {
     speechVoiceControl.replaceChildren();
     const automatic = document.createElement("option");
     automatic.value = "";
-    automatic.textContent = "Автоматически — Tingting";
+    automatic.textContent = "Автоматически — Google";
     speechVoiceControl.append(automatic);
     for (const voice of speechVoices) {
       const item = document.createElement("option");

@@ -16,15 +16,24 @@ export function normalizeSpeechSettings(value = {}) {
 }
 
 const NOVELTY_CHINESE_VOICES = /^(eddy|flo|grandma|grandpa|reed|rocko|sandy|shelley)(\s|$)/i;
+const GOOGLE_VOICE = /google/i;
+
+function availableSpeechVoices(voices, language) {
+  const locale = language.toLowerCase();
+  const matching = Array.isArray(voices)
+    ? voices.filter((voice) => String(voice?.lang || '').toLowerCase().replace('_', '-').startsWith(locale))
+    : [];
+  const google = matching.filter((voice) => GOOGLE_VOICE.test(String(voice.voiceName || '')));
+  if (google.length) return google;
+  const natural = matching.filter((voice) => !NOVELTY_CHINESE_VOICES.test(String(voice.voiceName || '')));
+  return natural.length ? natural : matching;
+}
 
 export function selectSpeechVoice(voices, language, preferredVoiceName = '') {
-  if (!Array.isArray(voices)) return '';
-  const locale = language.toLowerCase();
-  const matching = voices.filter((voice) => String(voice?.lang || '').toLowerCase().replace('_', '-').startsWith(locale));
-  const configured = matching.find((voice) => voice.voiceName === preferredVoiceName);
-  const preferred = matching.find((voice) => /ting[ -]?ting/i.test(String(voice.voiceName || '')));
-  const natural = matching.find((voice) => !NOVELTY_CHINESE_VOICES.test(String(voice.voiceName || '')));
-  return String(configured?.voiceName || preferred?.voiceName || natural?.voiceName || matching[0]?.voiceName || '');
+  const available = availableSpeechVoices(voices, language);
+  const configured = available.find((voice) => voice.voiceName === preferredVoiceName);
+  const tingting = available.find((voice) => /ting[ -]?ting/i.test(String(voice.voiceName || '')));
+  return String(configured?.voiceName || available[0]?.voiceName || tingting?.voiceName || '');
 }
 
 export class SpeechService {
@@ -52,22 +61,24 @@ export class SpeechService {
   }
 
   async getVoiceOptions(language = 'zh-CN') {
-    const locale = language.toLowerCase();
     const seen = new Set();
-    return (await this.getVoices())
-      .filter((voice) => String(voice?.lang || '').toLowerCase().replace('_', '-').startsWith(locale))
+    return availableSpeechVoices(await this.getVoices(), language)
       .map((voice) => ({ voiceName: normalizeSpeechVoiceName(voice.voiceName), lang: String(voice.lang || '') }))
       .filter((voice) => voice.voiceName && !seen.has(voice.voiceName) && seen.add(voice.voiceName))
       .sort((left, right) => {
-        const leftPreferred = /ting[ -]?ting/i.test(left.voiceName) ? 0 : 1;
-        const rightPreferred = /ting[ -]?ting/i.test(right.voiceName) ? 0 : 1;
+        const leftPreferred = GOOGLE_VOICE.test(left.voiceName) ? 0 : /ting[ -]?ting/i.test(left.voiceName) ? 1 : 2;
+        const rightPreferred = GOOGLE_VOICE.test(right.voiceName) ? 0 : /ting[ -]?ting/i.test(right.voiceName) ? 1 : 2;
         return leftPreferred - rightPreferred || left.voiceName.localeCompare(right.voiceName);
       });
   }
 
   async getSettings() {
     const stored = await this.#storage.get(SPEECH_STORAGE_KEY);
-    return normalizeSpeechSettings(stored[SPEECH_STORAGE_KEY]);
+    const settings = normalizeSpeechSettings(stored[SPEECH_STORAGE_KEY]);
+    if (settings.voiceName && !(await this.getVoiceOptions()).some((voice) => voice.voiceName === settings.voiceName)) {
+      return { ...settings, voiceName: '' };
+    }
+    return settings;
   }
 
   async patchSettings(patch = {}) {

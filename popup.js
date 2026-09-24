@@ -333,7 +333,7 @@ function drawSync() {
 function drawSettings() {
   const settings = state.settings;
   $('speechVoice').replaceChildren();
-  option($('speechVoice'), '', 'Автоматически — Tingting');
+  option($('speechVoice'), '', 'Автоматически — Google');
   for (const voice of speechVoices) option($('speechVoice'), voice.voiceName, voice.voiceName);
   $('speechVoice').value = speechVoices.some((voice) => voice.voiceName === speechVoiceName) ? speechVoiceName : '';
   $('speechRate').value = String(speechRate);

@@ -28,14 +28,15 @@ test('speech rate stays in the useful learning range', () => {
   assert.deepEqual(normalizeSpeechSettings({ rate: 0.55, voiceName: ' Tingting ' }), { rate: 0.55, voiceName: 'Tingting' });
 });
 
-test('Chinese speech prefers the natural Tingting voice over novelty voices', () => {
+test('Chinese speech prefers Google voices and ignores unreliable alternatives', () => {
   const voices = [
     { voiceName: 'Grandma (Китайский)', lang: 'zh-CN' },
     { voiceName: 'Tingting', lang: 'zh_CN' },
+    { voiceName: 'Google 普通话（中国大陆）', lang: 'zh-CN' },
     { voiceName: 'Meijia', lang: 'zh-TW' },
   ];
-  assert.equal(selectSpeechVoice(voices, 'zh-CN'), 'Tingting');
-  assert.equal(selectSpeechVoice(voices, 'zh-CN', 'Grandma (Китайский)'), 'Grandma (Китайский)');
+  assert.equal(selectSpeechVoice(voices, 'zh-CN'), 'Google 普通话（中国大陆）');
+  assert.equal(selectSpeechVoice(voices, 'zh-CN', 'Grandma (Китайский)'), 'Google 普通话（中国大陆）');
 });
 
 test('speech settings persist globally and are used for Chinese system speech', async () => {
@@ -48,6 +49,7 @@ test('speech settings persist globally and are used for Chinese system speech', 
         callback([
           { voiceName: 'Eddy (Chinese)', lang: 'zh-CN' },
           { voiceName: 'Tingting', lang: 'zh-CN' },
+          { voiceName: 'Google 普通话（中国大陆）', lang: 'zh-CN' },
         ]);
       },
       speak(text, options, callback) {
@@ -60,15 +62,14 @@ test('speech settings persist globally and are used for Chinese system speech', 
 
   assert.deepEqual(await service.getSettings(), DEFAULT_SPEECH_SETTINGS);
   assert.deepEqual(await service.getVoiceOptions(), [
-    { voiceName: 'Tingting', lang: 'zh-CN' },
-    { voiceName: 'Eddy (Chinese)', lang: 'zh-CN' },
+    { voiceName: 'Google 普通话（中国大陆）', lang: 'zh-CN' },
   ]);
-  assert.deepEqual(await service.patchSettings({ rate: 0.55, voiceName: 'Tingting' }), { rate: 0.55, voiceName: 'Tingting' });
-  assert.deepEqual(storage.values[SPEECH_STORAGE_KEY], { rate: 0.55, voiceName: 'Tingting' });
-  assert.deepEqual(await service.speak({ text: '你好', language: 'zh' }), { language: 'zh', rate: 0.55, voiceName: 'Tingting' });
+  assert.deepEqual(await service.patchSettings({ rate: 0.55, voiceName: 'Google 普通话（中国大陆）' }), { rate: 0.55, voiceName: 'Google 普通话（中国大陆）' });
+  assert.deepEqual(storage.values[SPEECH_STORAGE_KEY], { rate: 0.55, voiceName: 'Google 普通话（中国大陆）' });
+  assert.deepEqual(await service.speak({ text: '你好', language: 'zh' }), { language: 'zh', rate: 0.55, voiceName: 'Google 普通话（中国大陆）' });
   assert.deepEqual(calls, [{
     text: '你好',
-    options: { lang: 'zh-CN', rate: 0.55, enqueue: false, voiceName: 'Tingting' },
+    options: { lang: 'zh-CN', rate: 0.55, enqueue: false, voiceName: 'Google 普通话（中国大陆）' },
   }]);
 });
 
