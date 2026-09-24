@@ -1,11 +1,16 @@
 const PANEL_ORIGIN = 'http://127.0.0.1:43817';
 const EXPLAIN_REQUEST = 'subsanywhere.words.explain';
+const ANALYZE_REQUEST = 'subsanywhere.words.analyze';
 const TRANSLATE_REQUEST = 'subsanywhere.words.translate';
 const SPEECH_GET_REQUEST = 'subsanywhere.speech.get';
 const SPEECH_PATCH_REQUEST = 'subsanywhere.speech.patch';
 const SPEECH_SPEAK_REQUEST = 'subsanywhere.speech.speak';
+const AI_GET_REQUEST = 'subsanywhere.panel.ai.get';
+const AI_MODELS_REQUEST = 'subsanywhere.panel.ai.models';
+const AI_SAVE_REQUEST = 'subsanywhere.panel.ai.save';
 const REQUESTS = new Set([
-  EXPLAIN_REQUEST, TRANSLATE_REQUEST, SPEECH_GET_REQUEST, SPEECH_PATCH_REQUEST, SPEECH_SPEAK_REQUEST,
+  AI_GET_REQUEST, AI_MODELS_REQUEST, AI_SAVE_REQUEST,
+  EXPLAIN_REQUEST, TRANSLATE_REQUEST, ANALYZE_REQUEST, SPEECH_GET_REQUEST, SPEECH_PATCH_REQUEST, SPEECH_SPEAK_REQUEST,
 ]);
 
 if (location.origin === PANEL_ORIGIN && location.pathname === '/words' && !location.search && !location.hash) {
@@ -17,7 +22,16 @@ if (location.origin === PANEL_ORIGIN && location.pathname === '/words' && !locat
 
     const translate = data.type === TRANSLATE_REQUEST;
     const explain = data.type === EXPLAIN_REQUEST;
-    if ((translate || explain) && (!['words', 'sentences'].includes(data.kind)
+    const analyze = data.type === ANALYZE_REQUEST;
+    const panelAi = [AI_GET_REQUEST, AI_MODELS_REQUEST, AI_SAVE_REQUEST].includes(data.type);
+    if (panelAi) {
+      const fields = ['type', 'requestId', ...(data.type !== AI_GET_REQUEST ? ['provider'] : []),
+        ...(data.type === AI_SAVE_REQUEST ? ['model'] : [])];
+      if (Object.keys(data).length !== fields.length || fields.some(field => !Object.hasOwn(data, field))
+        || (data.type !== AI_GET_REQUEST && !['deepseek', 'openai'].includes(data.provider))
+        || (data.type === AI_SAVE_REQUEST && (typeof data.model !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(data.model)))) return;
+    }
+    if ((translate || explain || analyze) && (!['words', 'sentences'].includes(data.kind)
       || !Number.isSafeInteger(data.id) || data.id < 1 || (translate && data.kind !== 'words'))) return;
     if (data.type === SPEECH_PATCH_REQUEST
       && ((!Number.isFinite(Number(data.rate)) || Number(data.rate) < 0.5 || Number(data.rate) > 1)
@@ -29,10 +43,15 @@ if (location.origin === PANEL_ORIGIN && location.pathname === '/words' && !locat
     let response;
     try {
       let message;
-      if (translate || explain) {
+      if (panelAi) {
+        message = { type: data.type.replace('subsanywhere.', 'dualCaptions.'),
+          ...(data.type !== AI_GET_REQUEST ? { provider: data.provider } : {}),
+          ...(data.type === AI_SAVE_REQUEST ? { model: data.model } : {}) };
+      } else if (translate || explain || analyze) {
         const sentence = data.kind === 'sentences';
         message = {
-          type: translate ? 'dualCaptions.words.translate' : (sentence ? 'dualCaptions.sentences.explain' : 'dualCaptions.words.explain'),
+          type: analyze ? (sentence ? 'dualCaptions.sentences.analyze' : 'dualCaptions.words.analyze')
+            : translate ? 'dualCaptions.words.translate' : (sentence ? 'dualCaptions.sentences.explain' : 'dualCaptions.words.explain'),
           id: data.id,
         };
       } else if (data.type === SPEECH_GET_REQUEST) {
@@ -44,7 +63,7 @@ if (location.origin === PANEL_ORIGIN && location.pathname === '/words' && !locat
       }
       const result = await chrome.runtime.sendMessage(message);
       if (!result?.ok) throw new Error(result?.error || 'Расширение не выполнило действие');
-      if (translate || explain) {
+      if (translate || explain || analyze) {
         const key = data.kind === 'sentences' ? 'sentence' : 'word';
         response = { ok: true, [key]: result.data?.[key] };
       } else {

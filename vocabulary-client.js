@@ -1,3 +1,5 @@
+import { validateChineseAnalysis } from './protocol.js';
+
 const BASE_URL = 'http://127.0.0.1:43817';
 
 function normalizeWord(value) {
@@ -70,6 +72,17 @@ function storedAiTranslations(value, { required = false } = {}) {
   });
 }
 
+function savedAnalysis(value, pinyinLimit) {
+  if (value.analysis === undefined) return {};
+  if (value.analysis === null) return { analysis: null };
+  if (value.language !== 'zh') throw new Error('Разбор доступен только для китайского текста');
+  const analysis = validateChineseAnalysis(value.analysis, { text: value.text, pinyinLimit });
+  if (value.pinyin !== analysis.pinyin || value.translation !== analysis.translation) {
+    throw new Error('Разбор не совпадает с сохранённым текстом');
+  }
+  return { analysis };
+}
+
 function savedWord(value) {
   const word = normalizeWord(value);
   if (!Number.isSafeInteger(value.id) || value.id < 1 || typeof value.created_at !== 'string'
@@ -79,7 +92,7 @@ function savedWord(value) {
   const explanation = value.explanation === undefined ? '' : storedExplanation(value.explanation);
   const aiTranslations = value.ai_translations === undefined ? undefined : storedAiTranslations(value.ai_translations);
   return {
-    ...word, id: value.id, created_at: value.created_at, learned: value.learned, explanation,
+    ...word, ...savedAnalysis(value, 120), id: value.id, created_at: value.created_at, learned: value.learned, explanation,
     ...(aiTranslations === undefined ? {} : { ai_translations: aiTranslations }),
   };
 }
@@ -89,7 +102,7 @@ function savedSentence(value) {
   if (!Number.isSafeInteger(value.id) || value.id < 1 || typeof value.created_at !== 'string'
     || typeof value.learned !== 'boolean') throw new Error('Некорректный ответ списка предложений');
   const explanation = value.explanation === undefined ? '' : storedExplanation(value.explanation);
-  return { ...sentence, id: value.id, created_at: value.created_at, learned: value.learned, explanation };
+  return { ...sentence, ...savedAnalysis(value, 500), id: value.id, created_at: value.created_at, learned: value.learned, explanation };
 }
 
 export class VocabularyClient {
@@ -138,8 +151,30 @@ export class VocabularyClient {
     const key = (item) => JSON.stringify([
       item.language, item.language === 'en' ? item.text.toLowerCase() : item.text, item.pinyin.toLowerCase(),
     ]);
-    if (!confirmed || key(confirmed) !== key(word)) throw new Error('Не удалось подтвердить сохранение. Повторите попытку');
+    const correctedCapture = confirmed?.analysis && word.language === 'zh'
+      && confirmed.language === word.language && confirmed.text === word.text;
+    if (!confirmed || (key(confirmed) !== key(word) && !correctedCapture)) {
+      throw new Error('Не удалось подтвердить сохранение. Повторите попытку');
+    }
     return { word: confirmed };
+  }
+
+  async saveAnalysis(kind, id, value) {
+    if (!['words', 'sentences'].includes(kind) || !Number.isSafeInteger(id) || id < 1) {
+      throw new Error('Некорректный идентификатор разбора');
+    }
+    const analysis = validateChineseAnalysis(value, { pinyinLimit: kind === 'words' ? 120 : 500 });
+    const key = kind === 'words' ? 'word' : 'sentence';
+    const payload = await this.#request(`/api/${kind}/analysis`, 'POST', { id, analysis });
+    const saved = (kind === 'words' ? savedWord : savedSentence)(payload?.[key]);
+    const matches = (item) => item?.id === id && item.language === 'zh'
+      && item.pinyin === analysis.pinyin && item.translation === analysis.translation
+      && JSON.stringify(item.analysis) === JSON.stringify(analysis);
+    if (!matches(saved)) throw new Error('Сервер не подтвердил разбор');
+    const list = kind === 'words' ? await this.list() : await this.listSentences();
+    const confirmed = list[kind].find((item) => matches(item) && item.text === saved.text);
+    if (!confirmed) throw new Error('Разбор не сохранился. Повторите попытку');
+    return { [key]: confirmed };
   }
 
   async saveExplanation(id, value) {

@@ -1,5 +1,6 @@
 """Vocabulary persistence and real-HTTP security regressions (offline)."""
 import concurrent.futures
+from contextlib import closing
 import http.client
 import json
 import os
@@ -35,7 +36,8 @@ class WordsStoreTests(unittest.TestCase):
     def test_persists_deduplicates_and_marks_words_learned_without_removing_them(self):
         self.assertFalse(self.path.exists())
         first = self.store.add(ZH)
-        self.assertEqual(set(first), {"id", "language", "text", "pinyin", "translation", "explanation", "ai_translations", "created_at", "learned"})
+        self.assertEqual(set(first), {"id", "language", "text", "pinyin", "translation", "explanation", "ai_translations", "analysis", "created_at", "learned"})
+        self.assertIsNone(first["analysis"])
         self.assertFalse(first["learned"])
         self.assertEqual(first["explanation"], "")
         self.assertEqual(first["ai_translations"], [])
@@ -60,7 +62,7 @@ class WordsStoreTests(unittest.TestCase):
 
     def test_migrates_existing_vocabulary_without_losing_words(self):
         self.path.parent.mkdir(parents=True)
-        with sqlite3.connect(self.path) as connection:
+        with closing(sqlite3.connect(self.path)) as connection, connection:
             connection.execute("""CREATE TABLE words (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, language TEXT NOT NULL, text TEXT NOT NULL,
                 pinyin TEXT NOT NULL, translation TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -74,11 +76,12 @@ class WordsStoreTests(unittest.TestCase):
         self.assertEqual(len(words), 1)
         self.assertFalse(words[0]["learned"])
         self.assertEqual(words[0]["ai_translations"], [])
+        self.assertIsNone(words[0]["analysis"])
         self.assertEqual(self.store.set_learned(words[0]["id"], True)["learned"], True)
 
     def test_concurrent_first_access_migrates_legacy_vocabulary_once(self):
         self.path.parent.mkdir(parents=True)
-        with sqlite3.connect(self.path) as connection:
+        with closing(sqlite3.connect(self.path)) as connection, connection:
             connection.execute("""CREATE TABLE words (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, language TEXT NOT NULL, text TEXT NOT NULL,
                 pinyin TEXT NOT NULL, translation TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -101,6 +104,117 @@ class WordsStoreTests(unittest.TestCase):
             results = list(pool.map(save, range(24)))
         self.assertEqual(len({word["id"] for word in results}), 1)
         self.assertEqual(self.store.list(), [results[0]])
+
+    def test_analysis_updates_canonical_fields_without_changing_captured_identity(self):
+        analysis = {
+            "pinyin": "ní hǎo", "translation": "hello", "grammar": "A greeting.",
+            "components": [{"text": "你好", "pinyin": "ní hǎo", "translation": "hello", "usage": "Greeting"}],
+            "example": {"pinyin": "Nǐ hǎo!", "translation": "Hello!"},
+        }
+        for add, save, listing, learn in (
+            (self.store.add, self.store.set_analysis, self.store.list, self.store.set_learned),
+            (self.store.add_sentence, self.store.set_sentence_analysis, self.store.list_sentences, self.store.set_sentence_learned),
+        ):
+            first = add(ZH)
+            conflict = add({**ZH, "pinyin": analysis["pinyin"]})
+            learn(first["id"], True)
+            saved = save(first["id"], analysis)
+            self.assertEqual(saved["analysis"], analysis)
+            self.assertEqual((saved["pinyin"], saved["translation"], saved["explanation"]),
+                             (analysis["pinyin"], analysis["translation"], analysis["grammar"]))
+            self.assertTrue(saved["learned"])
+            for key in ("id", "created_at", "text", "language"):
+                self.assertEqual(saved[key], first[key])
+            self.assertEqual(add(ZH)["id"], first["id"])
+            self.assertEqual(add({**ZH, "pinyin": analysis["pinyin"]})["id"], conflict["id"])
+            self.assertEqual(len(listing()), 2)
+            with self.assertRaises(ValueError):
+                save(first["id"], {**analysis, "grammar": "汉字"})
+            self.assertEqual(next(row for row in listing() if row["id"] == first["id"]), saved)
+        reopened = WordsStore(self.path)
+        self.assertEqual(reopened.list(), self.store.list())
+        self.assertEqual(reopened.list_sentences(), self.store.list_sentences())
+
+    def test_analysis_rejects_inconsistent_pronunciation(self):
+        row = self.store.add({"language": "zh", "text": "你好", "pinyin": "nǐ hǎo", "translation": "Привет"})
+        analysis = {
+            "pinyin": "nǐ hǎo", "translation": "Привет", "grammar": "Приветствие.",
+            "components": [{"text": "你好", "pinyin": "nǐ hǎo", "translation": "привет", "usage": "При встрече."}],
+            "example": {"pinyin": "nǐ hǎo", "translation": "Привет"},
+        }
+        for pronunciation in ["wrong", "nǐ", "nǐ hǎo$", "hǎo nǐ"]:
+            invalid = {**analysis, "pinyin": pronunciation}
+            with self.assertRaises(ValueError):
+                self.store.set_analysis(row["id"], invalid)
+        self.assertIsNone(self.store.list()[0]["analysis"])
+
+    def test_analysis_coverage_limits_and_invalid_saves_are_atomic(self):
+        component = {"text": "你", "pinyin": "nǐ", "translation": "you", "usage": "Subject"}
+        analysis = {
+            "pinyin": "nǐ nǐ hǎo", "translation": "hello", "grammar": "Greeting.",
+            "components": [component, component, {**component, "text": "好", "pinyin": "hǎo"}],
+            "example": {"pinyin": "Nǐ hǎo!", "translation": "Hello!"},
+        }
+        for add, save, listing in ((self.store.add, self.store.set_analysis, self.store.list),
+                                   (self.store.add_sentence, self.store.set_sentence_analysis, self.store.list_sentences)):
+            row = add({**ZH, "text": "你，你 好！"})
+            saved = save(row["id"], analysis)
+            invalids = [None, {}, {**analysis, "extra": 1}, {**analysis, "components": []},
+                        {**analysis, "components": [component] * 121},
+                        {**analysis, "components": analysis["components"][1:]},
+                        {**analysis, "components": list(reversed(analysis["components"]))}]
+            for field, limit in (("translation", 1000), ("grammar", 700), ("pinyin", 120 if add == self.store.add else 500)):
+                invalids.extend({**analysis, field: value} for value in ("a" * (limit + 1), "汉", "", "bad\x00"))
+            for field, limit in (("pinyin", 120), ("text", 120), ("translation", 160), ("usage", 240)):
+                invalids.append({**analysis, "components": [{**component, field: "a" * (limit + 1)}, *analysis["components"][1:]]})
+            for field in ("pinyin", "translation"):
+                invalids.extend({**analysis, "example": {**analysis["example"], field: value}}
+                                for value in ("a" * 301, "汉", ""))
+            invalids.extend(({**analysis, "pinyin": "привет"},
+                             {**analysis, "components": [{**component, "usage": "汉"}, *analysis["components"][1:]]}))
+            for invalid in invalids:
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    save(row["id"], invalid)
+                self.assertEqual(listing(), [saved])
+            self.assertIsNone(save(add(EN)["id"], analysis))
+
+    def test_analysis_recapture_matches_current_and_captured_pinyin_after_restart(self):
+        analysis = {"pinyin": "ní hǎo", "translation": "hello", "grammar": "Greeting.",
+                    "components": [{"text": "你好", "pinyin": "ní hǎo", "translation": "hello", "usage": "Greeting"}],
+                    "example": {"pinyin": "Nǐ hǎo", "translation": "Hello"}}
+        for add_name, save_name, list_name in (("add", "set_analysis", "list"),
+                                              ("add_sentence", "set_sentence_analysis", "list_sentences")):
+            original = getattr(self.store, add_name)(ZH)
+            saved = getattr(self.store, save_name)(original["id"], analysis)
+            reopened = WordsStore(self.path)
+            for pinyin in (ZH["pinyin"], analysis["pinyin"].upper()):
+                self.assertEqual(getattr(reopened, add_name)({**ZH, "pinyin": pinyin}), saved)
+            self.assertEqual(getattr(reopened, list_name)(), [saved])
+            table = "words" if add_name == "add" else "sentences"
+            with closing(sqlite3.connect(self.path)) as connection, connection:
+                self.assertEqual(connection.execute(f"SELECT text_key, pinyin_key FROM {table}").fetchone(),
+                                 (ZH["text"], ZH["pinyin"]))
+                connection.execute(f"CREATE TRIGGER fail_{table} BEFORE UPDATE ON {table} BEGIN SELECT RAISE(ABORT, 'disk failure'); END")
+            with self.assertRaises(sqlite3.IntegrityError):
+                getattr(reopened, save_name)(original["id"], {**analysis, "translation": "changed"})
+            self.assertEqual(getattr(reopened, list_name)(), [saved])
+
+    def test_migrates_legacy_sentences_preserving_all_fields(self):
+        self.path.parent.mkdir(parents=True)
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute("""CREATE TABLE sentences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, language TEXT NOT NULL, text TEXT NOT NULL,
+                pinyin TEXT NOT NULL, translation TEXT NOT NULL, explanation TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL, learned INTEGER NOT NULL DEFAULT 0,
+                text_key TEXT NOT NULL, pinyin_key TEXT NOT NULL,
+                UNIQUE (language, text_key, pinyin_key))""")
+            connection.execute("""INSERT INTO sentences VALUES
+                (17, 'zh', '你好', 'nǐ hǎo', 'hello', 'old grammar', 'original date', 1, '你好', 'nǐ hǎo')""")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda _: WordsStore(self.path).list_sentences(), range(16)))
+        expected = {**ZH, "translation": "hello", "id": 17, "explanation": "old grammar",
+                    "created_at": "original date", "learned": True, "analysis": None}
+        self.assertEqual(results, [[expected]] * 16)
 
     def test_pinyin_is_part_of_identity(self):
         self.store.add({**ZH, "text": "行", "pinyin": "xíng"})
@@ -127,7 +241,7 @@ class WordsStoreTests(unittest.TestCase):
     def test_sentences_are_persisted_separately_with_learning_and_grammar_state(self):
         sentence = self.store.add_sentence(ZH_SENTENCE)
         self.assertEqual(set(sentence), {
-            "id", "language", "text", "pinyin", "translation", "explanation", "created_at", "learned",
+            "id", "language", "text", "pinyin", "translation", "explanation", "analysis", "created_at", "learned",
         })
         self.assertFalse(sentence["learned"])
         self.assertEqual(self.store.list(), [])
@@ -244,6 +358,54 @@ class WordsHTTPTests(unittest.TestCase):
         self.assertEqual(saved["translation"], "старый перевод")
         self.assertEqual(saved["ai_translations"], translations)
         self.assertEqual(self.request("POST", "/api/words/ai-translations", {"id": word["id"], "translations": translations}, {"Origin": self.origin})[0], 403)
+
+    def test_analysis_routes_require_extension_and_preserve_failed_save(self):
+        analysis = {
+            "pinyin": "nǐ hǎo", "translation": "hello", "grammar": "Greeting.",
+            "components": [{"text": "你好", "pinyin": "nǐ hǎo", "translation": "hello", "usage": "Greeting"}],
+            "example": {"pinyin": "Nǐ hǎo!", "translation": "Hello!"},
+        }
+        extension = {"Origin": "chrome-extension://" + "a" * 32}
+        for kind, key, add in (("words", "word", self.store.add), ("sentences", "sentence", self.store.add_sentence)):
+            row = add(ZH)
+            route = f"/api/{kind}/analysis"
+            payload = {"id": row["id"], "analysis": analysis}
+            for headers in ({}, {"Origin": self.origin}, {"Origin": "https://evil.example"},
+                            {**extension, "X-SubsAnywhere-Client": ""}):
+                self.assertEqual(self.request("POST", route, payload, headers)[0], 403)
+            preflight = {**extension, "Access-Control-Request-Method": "POST",
+                         "Access-Control-Request-Headers": "X-SubsAnywhere-Client, Content-Type"}
+            self.assertEqual(self.request("OPTIONS", route, headers=preflight)[0], 204)
+            self.assertEqual(self.request("OPTIONS", route, headers={**preflight, "Origin": self.origin})[0], 403)
+            status, _, body = self.request("POST", route, payload, extension)
+            self.assertEqual(status, 200)
+            saved = json.loads(body)[key]
+            self.assertEqual(saved["analysis"], analysis)
+            for invalid in ({**payload, "extra": 1}, {"id": True, "analysis": analysis},
+                            {**payload, "analysis": {**analysis, "components": []}}):
+                self.assertEqual(self.request("POST", route, invalid, extension)[0], 400)
+            self.assertEqual(json.loads(self.request(path=f"/api/{kind}")[2])[kind], [saved])
+            self.assertEqual(self.request("POST", route, {**payload, "id": 9999}, extension)[0], 404)
+            english = add(EN)
+            self.assertEqual(self.request("POST", route, {**payload, "id": english["id"]}, extension)[0], 404)
+
+    def test_analysis_accepts_full_bounded_payload_but_not_oversized_body(self):
+        component = {"text": "你", "pinyin": "nǐ", "translation": "я" * 160, "usage": "я" * 240}
+        analysis = {"pinyin": " ".join(["nǐ"] * 120), "translation": "t" * 1000, "grammar": "g" * 700,
+                    "components": [component] * 120,
+                    "example": {"pinyin": "n" * 300, "translation": "t" * 300}}
+        row = self.store.add_sentence({**ZH, "text": "你" * 120})
+        route = "/api/sentences/analysis"
+        headers = {"Origin": "chrome-extension://" + "a" * 32, "Content-Type": "application/json"}
+        raw = json.dumps({"id": row["id"], "analysis": analysis}).encode()
+        self.assertGreater(len(raw), 16384)
+        status, _, body = self.request("POST", route, headers=headers, raw=raw)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["sentence"]["analysis"], analysis)
+        self.assertEqual(self.request("POST", route,
+                                     headers={**headers, "Content-Length": str(server.MAX_ANALYSIS_BODY_BYTES + 1)},
+                                     raw=b"")[0], 413)
+        self.assertEqual(self.store.list_sentences()[0]["analysis"], analysis)
 
     def test_sentence_api_has_an_independent_lifecycle(self):
         status, _, body = self.request("POST", "/api/sentences", ZH_SENTENCE)

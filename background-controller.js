@@ -1,10 +1,11 @@
 import { canonicalPageKey } from './page-context.js';
-import { MESSAGE, failure, ok } from './protocol.js';
+import { MESSAGE, failure, ok, validateChineseAnalysis } from './protocol.js';
 
 const CONTENT_SCRIPT_ID = 'dual-captions-player-discovery-v1';
 const CONTENT_MESSAGES = new Set([
+  MESSAGE.PANEL_AI_GET, MESSAGE.PANEL_AI_MODELS, MESSAGE.PANEL_AI_SAVE,
   MESSAGE.PLAYER_REPORT, MESSAGE.CONTENT_POSITION_PATCH, MESSAGE.TRACK_CACHE_BUILTIN, MESSAGE.CAPTION_TRANSLATE,
-  MESSAGE.WORDS_LIST, MESSAGE.WORDS_SAVE, MESSAGE.WORD_EXPLAIN, MESSAGE.WORD_TRANSLATE,
+  MESSAGE.WORDS_LIST, MESSAGE.WORDS_SAVE, MESSAGE.WORD_EXPLAIN, MESSAGE.WORD_TRANSLATE, MESSAGE.WORD_ANALYZE, MESSAGE.SENTENCE_ANALYZE,
   MESSAGE.SENTENCES_LIST, MESSAGE.SENTENCES_SAVE, MESSAGE.SENTENCE_EXPLAIN,
   MESSAGE.SPEECH_SETTINGS_GET, MESSAGE.SPEECH_SETTINGS_PATCH, MESSAGE.SPEECH_SPEAK,
 ]);
@@ -123,6 +124,8 @@ export class BackgroundController {
   #registry;
   #credentialStore;
   #aiClient;
+  #panelAiClient;
+  #panelConfigStore;
   #localSubtitles;
   #vocabulary;
   #speech;
@@ -132,6 +135,7 @@ export class BackgroundController {
   #tabPageKeys = new Map();
   #tabOperations = new Map();
   #playerRecoveries = new Map();
+  #analyses = new Map();
 
   constructor(chromeApi, store, options = {}) {
     this.#chrome = chromeApi;
@@ -139,6 +143,8 @@ export class BackgroundController {
     this.#registry = options.registry ?? new PlayerRegistry();
     this.#credentialStore = options.credentialStore;
     this.#aiClient = options.aiClient ?? options.deepSeek;
+    this.#panelAiClient = options.panelAiClient ?? this.#aiClient;
+    this.#panelConfigStore = options.panelConfigStore;
     this.#localSubtitles = options.localSubtitles;
     this.#vocabulary = options.vocabulary;
     this.#speech = options.speech;
@@ -171,7 +177,7 @@ export class BackgroundController {
       if (!fromContent) sender = { id: sender.id, url: sender.url };
       // Reports must be able to enter the tab queue while recovery awaits their acknowledgement.
       const fromWordsPanel = fromContent && this.#isWordsPanelSender(sender);
-      if ([MESSAGE.WORD_EXPLAIN, MESSAGE.WORD_TRANSLATE, MESSAGE.SENTENCE_EXPLAIN].includes(message.type) && !fromWordsPanel) {
+      if ([MESSAGE.PANEL_AI_GET, MESSAGE.PANEL_AI_MODELS, MESSAGE.PANEL_AI_SAVE, MESSAGE.WORD_EXPLAIN, MESSAGE.WORD_TRANSLATE, MESSAGE.SENTENCE_EXPLAIN, MESSAGE.WORD_ANALYZE, MESSAGE.SENTENCE_ANALYZE].includes(message.type) && !fromWordsPanel) {
         throw new Error('ИИ-действие доступно только из панели обучения');
       }
       if ([MESSAGE.SPEECH_SETTINGS_GET, MESSAGE.SPEECH_SETTINGS_PATCH].includes(message.type) && fromContent && !fromWordsPanel) {
@@ -241,6 +247,20 @@ export class BackgroundController {
         case MESSAGE.AI_CONFIG_GET:
           if (!this.#credentialStore) throw new Error('Настройки ИИ пока недоступны');
           return ok(await this.#credentialStore.publicInfo());
+        case MESSAGE.PANEL_AI_GET:
+        case MESSAGE.PANEL_AI_MODELS:
+        case MESSAGE.PANEL_AI_SAVE: {
+          if (!this.#panelConfigStore || !this.#panelAiClient) throw new Error('Настройки ИИ панели пока недоступны');
+          const fields = message.type === MESSAGE.PANEL_AI_GET ? ['type']
+            : message.type === MESSAGE.PANEL_AI_MODELS ? ['type', 'provider'] : ['type', 'provider', 'model'];
+          if (Object.keys(message).length !== fields.length || fields.some(field => !Object.hasOwn(message, field))) {
+            throw new Error('Некорректные настройки ИИ панели');
+          }
+          if (message.type === MESSAGE.PANEL_AI_MODELS) return ok({ provider: message.provider,
+            models: await this.#panelConfigStore.listModels(message.provider, this.#panelAiClient) });
+          return ok({ settings: message.type === MESSAGE.PANEL_AI_SAVE
+            ? await this.#panelConfigStore.save(message) : await this.#panelConfigStore.publicInfo() });
+        }
         case MESSAGE.AI_CONFIG_PATCH:
           if (!this.#credentialStore) throw new Error('Настройки ИИ пока недоступны');
           return ok(await this.#credentialStore.patch(message));
@@ -256,25 +276,48 @@ export class BackgroundController {
           if (!this.#vocabulary) throw new Error('Словарь недоступен. Запустите сервер в Docker');
           return ok(message.type === MESSAGE.WORDS_SAVE
             ? await this.#vocabulary.save(message.word) : await this.#vocabulary.list());
+        case MESSAGE.WORD_ANALYZE:
+        case MESSAGE.SENTENCE_ANALYZE: {
+          if (!this.#isWordsPanelSender(sender)) throw new Error('Разбор доступен только из панели обучения');
+          if (!this.#vocabulary || !this.#panelAiClient) throw new Error('Разбор пока недоступен');
+          if (!Number.isSafeInteger(message.id) || message.id < 1) throw new Error('Некорректный идентификатор разбора');
+          const kind = message.type === MESSAGE.WORD_ANALYZE ? 'words' : 'sentences';
+          const key = `${kind}:${message.id}`;
+          if (!this.#analyses.has(key)) {
+            const operation = (async () => {
+              // Never trust text, pinyin, translations or analysis supplied by a page.
+              const list = kind === 'words' ? await this.#vocabulary.list() : await this.#vocabulary.listSentences();
+              const item = list[kind].find((record) => record.id === message.id);
+              if (!item) throw new Error('Запись не найдена');
+              if (item.language !== 'zh') throw new Error('Разбор доступен только для китайского текста');
+              const analysis = validateChineseAnalysis(await this.#panelAiClient.analyzeChinese(item), {
+                text: item.text, pinyinLimit: kind === 'words' ? 120 : 500,
+              });
+              return this.#vocabulary.saveAnalysis(kind, item.id, analysis);
+            })().finally(() => { this.#analyses.delete(key); });
+            this.#analyses.set(key, operation);
+          }
+          return ok(await this.#analyses.get(key));
+        }
         case MESSAGE.WORD_EXPLAIN: {
           if (!this.#isWordsPanelSender(sender)) throw new Error('Объяснение доступно только из панели слов');
-          if (!this.#vocabulary || !this.#aiClient) throw new Error('Объяснение пока недоступно');
+          if (!this.#vocabulary || !this.#panelAiClient) throw new Error('Объяснение пока недоступно');
           if (!Number.isSafeInteger(message.id) || message.id < 1) throw new Error('Некорректный идентификатор слова');
           const { words } = await this.#vocabulary.list();
           const word = words.find((item) => item.id === message.id);
           if (!word) throw new Error('Слово не найдено');
           if (word.explanation) return ok({ word });
-          return ok(await this.#vocabulary.saveExplanation(word.id, await this.#aiClient.explainWord(word)));
+          return ok(await this.#vocabulary.saveExplanation(word.id, await this.#panelAiClient.explainWord(word)));
         }
         case MESSAGE.WORD_TRANSLATE: {
           if (!this.#isWordsPanelSender(sender)) throw new Error('Перевод доступен только из панели слов');
-          if (!this.#vocabulary || !this.#aiClient) throw new Error('Перевод пока недоступен');
+          if (!this.#vocabulary || !this.#panelAiClient) throw new Error('Перевод пока недоступен');
           if (!Number.isSafeInteger(message.id) || message.id < 1) throw new Error('Некорректный идентификатор слова');
           const { words } = await this.#vocabulary.list();
           const word = words.find((item) => item.id === message.id);
           if (!word || word.language !== 'zh') throw new Error('Китайское слово не найдено');
           return ok(await this.#vocabulary.saveAiTranslations(
-            word.id, await this.#aiClient.translateSavedChineseWord(word),
+            word.id, await this.#panelAiClient.translateSavedChineseWord(word),
           ));
         }
         case MESSAGE.SENTENCES_LIST:
@@ -285,14 +328,14 @@ export class BackgroundController {
             ? await this.#vocabulary.saveSentence(message.sentence) : await this.#vocabulary.listSentences());
         case MESSAGE.SENTENCE_EXPLAIN: {
           if (!this.#isWordsPanelSender(sender)) throw new Error('Разбор доступен только из панели обучения');
-          if (!this.#vocabulary || !this.#aiClient) throw new Error('Разбор пока недоступен');
+          if (!this.#vocabulary || !this.#panelAiClient) throw new Error('Разбор пока недоступен');
           if (!Number.isSafeInteger(message.id) || message.id < 1) throw new Error('Некорректный идентификатор предложения');
           const { sentences } = await this.#vocabulary.listSentences();
           const sentence = sentences.find((item) => item.id === message.id);
           if (!sentence) throw new Error('Предложение не найдено');
           if (sentence.explanation) return ok({ sentence });
           return ok(await this.#vocabulary.saveSentenceExplanation(
-            sentence.id, await this.#aiClient.explainSentence(sentence),
+            sentence.id, await this.#panelAiClient.explainSentence(sentence),
           ));
         }
         case MESSAGE.SPEECH_SETTINGS_GET:

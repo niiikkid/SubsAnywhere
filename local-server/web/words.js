@@ -35,8 +35,23 @@ export function removeStudyItem(words = [], position, id) {
 
 export function learningText(item, kind = "words") {
   if (!item || typeof item.text !== "string") return "";
-  return kind === "sentences" && item.language === "zh" && typeof item.pinyin === "string"
-    ? item.pinyin : item.text;
+  return item.language === "zh" ? explanationText(item.pinyin) : item.text;
+}
+
+// Han remains canonical source data for speech/export, never learning copy.
+function explanationText(value) {
+  return typeof value === "string" ? value.replace(/\p{Script=Han}/gu, "").trim() : "";
+}
+
+export function validAnalysis(value) {
+  const text = (value, required = true) => typeof value === "string"
+    && (!required || value.trim().length > 0) && !/\p{Script=Han}/u.test(value);
+  return Boolean(value && typeof value === "object"
+    && text(value.pinyin) && text(value.translation) && text(value.grammar)
+    && Array.isArray(value.components) && value.components.length > 0
+    && value.components.every(item => item && typeof item.text === "string"
+      && text(item.pinyin) && text(item.translation) && text(item.usage, false))
+    && value.example && text(value.example.pinyin) && text(value.example.translation));
 }
 
 export function pronunciationText(item) {
@@ -94,8 +109,7 @@ if (typeof document !== "undefined") (() => {
   const studyWord = document.getElementById("study-word");
   const studyPinyin = document.getElementById("study-pinyin");
   const studyTranslation = document.getElementById("study-translation");
-  const studyAiTranslations = document.getElementById("study-ai-translations");
-  const studyAiTranslationsList = document.getElementById("study-ai-translations-list");
+  const studyAnalysis = document.getElementById("study-analysis");
   const studyExplanation = document.getElementById("study-explanation");
   const studyExplanationText = document.getElementById("study-explanation-text");
   const studyFinish = document.getElementById("study-finish");
@@ -104,7 +118,7 @@ if (typeof document !== "undefined") (() => {
   const studySpeak = document.getElementById("study-speak");
   const studyLearned = document.getElementById("study-learned");
   const studyExplain = document.getElementById("study-explain");
-  const studyTranslate = document.getElementById("study-translate");
+
   const studyDelete = document.getElementById("study-delete");
   const studyNext = document.getElementById("study-next");
   const studyRestart = document.getElementById("study-restart");
@@ -227,6 +241,29 @@ if (typeof document !== "undefined") (() => {
     return node;
   }
 
+  function appendAnalysis(container, analysis) {
+    const components = element("ul", "analysis-components", "");
+    for (const component of analysis.components) {
+      const row = element("li", "", "");
+      const pinyin = element("strong", "analysis-pinyin", component.pinyin);
+      pinyin.lang = "zh-Latn";
+      row.append(pinyin, element("span", "", ` — ${component.translation}`));
+      if (component.usage) row.append(element("small", "analysis-usage", component.usage));
+      components.append(row);
+    }
+    const example = element("p", "analysis-example", "");
+    const pinyin = element("span", "analysis-pinyin", analysis.example.pinyin);
+    pinyin.lang = "zh-Latn";
+    example.append(pinyin, element("span", "", ` — ${analysis.example.translation}`));
+    const wordsBlock = element("section", "analysis-block", "");
+    wordsBlock.append(element("h4", "analysis-heading", "По словам"), components);
+    const logicBlock = element("section", "analysis-block analysis-logic", "");
+    logicBlock.append(element("h4", "analysis-heading", "Как это работает"), element("p", "analysis-grammar", analysis.grammar));
+    const exampleBlock = element("section", "analysis-block analysis-example-block", "");
+    exampleBlock.append(element("h4", "analysis-heading", "Пример"), example);
+    container.append(wordsBlock, logicBlock, exampleBlock);
+  }
+
   function iconButton(className, label, pathData) {
     const button = element("button", `${className} icon-button`, "");
     button.type = "button";
@@ -292,9 +329,9 @@ if (typeof document !== "undefined") (() => {
       const row = element("li", "word-row", "");
       const main = element("div", "word-main", "");
       const text = element("h3", `word-text${kind === "sentences" ? " sentence-text" : ""}`, learningText(word, kind));
-      text.lang = kind === "sentences" && word.language === "zh" ? "zh-Latn" : word.language;
+      text.lang = word.language === "zh" ? "zh-Latn" : word.language;
       main.append(text);
-      if (kind === "words" && word.pinyin) {
+      if (word.language !== "zh" && kind === "words" && word.pinyin) {
         const pinyin = element("p", "word-pinyin", word.pinyin);
         pinyin.lang = "zh-Latn";
         main.append(pinyin);
@@ -310,8 +347,14 @@ if (typeof document !== "undefined") (() => {
       remove.setAttribute("aria-label", `Удалить ${noun("one")}: «${learningText(word, kind)}»`);
       remove.addEventListener("click", () => openDeleteDialog(word, remove));
       const translation = element("div", "word-translation", "");
-      translation.append(element("p", "", word.translation));
-      if (kind === "words" && word.ai_translations.length) {
+      translation.append(element("p", "", word.language === "zh" ? explanationText(word.translation) : word.translation));
+      if (word.language === "zh" && validAnalysis(word.analysis)) {
+        const analysis = element("section", "word-analysis", "");
+        analysis.setAttribute("aria-label", "Разбор");
+        appendAnalysis(analysis, word.analysis);
+        translation.append(analysis);
+      }
+      if (word.language !== "zh" && kind === "words" && word.ai_translations.length) {
         const aiTranslations = element("section", "ai-translations", "");
         aiTranslations.append(element("h4", "", "Перевод ИИ"));
         const alternatives = element("ol", "", "");
@@ -324,30 +367,25 @@ if (typeof document !== "undefined") (() => {
         translation.append(aiTranslations);
       }
       let details;
-      if (word.explanation) {
+      if (word.language !== "zh" && word.explanation) {
         details = element("details", "word-explanation", "");
         details.append(element("summary", "", kind === "sentences" ? "Разбор грамматики" : "Короткое объяснение"), element("p", "", word.explanation));
         translation.append(details);
       }
-      const explain = element("button", "explain", word.explanation
+      const explain = element("button", "explain", word.language === "zh"
+        ? (validAnalysis(word.analysis) ? "Обновить разбор" : "Разобрать") : word.explanation
         ? (kind === "sentences" ? "Разбор" : "Объяснение")
         : (kind === "sentences" ? "Разобрать" : "Объяснить"));
       explain.type = "button";
       explain.disabled = busy;
-      explain.addEventListener("click", () => word.explanation ? details.toggleAttribute("open") : explainWord(word));
+      explain.addEventListener("click", () => word.language === "zh" ? analyzeWord(word)
+        : word.explanation ? details.toggleAttribute("open") : explainWord(word));
       const actions = element("div", "word-actions", "");
       const speak = iconButton("speak", "Произнести", "m11 4-6 5H2v6h3l6 5zM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14");
       speak.setAttribute("aria-label", `Произнести: «${learningText(word, kind)}»`);
       speak.addEventListener("click", () => speakItem(word, speak));
       main.append(speak);
-      if (kind === "words" && word.language === "zh") {
-        const translate = element("button", "ai-translate", word.ai_translations.length ? "Обновить перевод" : "Перевод ИИ");
-        translate.type = "button";
-        translate.title = word.ai_translations.length ? "Получить варианты перевода заново через ИИ" : "Получить варианты перевода через ИИ";
-        translate.disabled = busy;
-        translate.addEventListener("click", () => translateWord(word));
-        actions.append(translate);
-      }
+
       actions.append(explain, learned, remove);
       row.append(main, translation, actions);
       fragment.append(row);
@@ -393,44 +431,33 @@ if (typeof document !== "undefined") (() => {
     studyNext.hidden = complete;
     studyLearned.hidden = complete;
     studyExplain.hidden = complete;
-    studyTranslate.hidden = true;
     studyDelete.hidden = complete;
-    studyAiTranslations.hidden = true;
-    studyAiTranslationsList.replaceChildren();
+    studyAnalysis.hidden = true;
+    studyAnalysis.replaceChildren();
     studyRestart.hidden = !complete;
     if (complete) return;
     const word = studyWords[studyPosition];
     studyLanguage.textContent = word.language === "zh" ? "Китайский" : "Английский";
     studyWord.textContent = learningText(word, kind);
     studyWord.classList.toggle("sentence-text", kind === "sentences");
-    studyWord.lang = kind === "sentences" && word.language === "zh" ? "zh-Latn" : word.language;
-    studyPinyin.textContent = kind === "words" ? word.pinyin : "";
+    studyWord.lang = word.language === "zh" ? "zh-Latn" : word.language;
+    studyPinyin.textContent = word.language !== "zh" && kind === "words" ? word.pinyin : "";
     studyPinyin.lang = "zh-Latn";
-    studyPinyin.hidden = kind !== "words" || !word.pinyin;
-    studyTranslation.textContent = word.translation;
-    const chineseWord = kind === "words" && word.language === "zh";
-    const aiTranslations = chineseWord ? word.ai_translations : [];
-    studyTranslate.hidden = !chineseWord;
-    studyTranslate.disabled = busy;
-    studyTranslate.textContent = aiTranslations.length ? "Получить заново" : "Получить перевод";
-    if (aiTranslations.length) {
-      const alternatives = document.createDocumentFragment();
-      for (const item of aiTranslations) {
-        const alternative = element("li", "", "");
-        alternative.append(element("strong", "", item.translation), element("span", "", item.usage));
-        alternatives.append(alternative);
-      }
-      studyAiTranslationsList.replaceChildren(alternatives);
-      studyAiTranslations.hidden = false;
+    studyPinyin.hidden = !studyPinyin.textContent;
+    studyTranslation.textContent = word.language === "zh" ? explanationText(word.translation) : word.translation;
+    if (word.language === "zh" && validAnalysis(word.analysis)) {
+      appendAnalysis(studyAnalysis, word.analysis);
+      studyAnalysis.hidden = false;
     }
     studyLearned.disabled = busy;
     studyLearned.textContent = word.learned ? "Вернуть на повторение" : `${kind === "sentences" ? "Предложение" : "Слово"} выучено`;
     studyExplain.disabled = busy;
-    studyExplain.textContent = word.explanation
+    studyExplain.textContent = word.language === "zh"
+      ? (validAnalysis(word.analysis) ? "Обновить разбор" : "Разобрать") : word.explanation
       ? (kind === "sentences" ? "Показать разбор" : "Показать объяснение")
       : (kind === "sentences" ? "Разобрать" : "Объяснить");
-    studyExplanation.hidden = !word.explanation || !studyExplanationOpen;
-    studyExplanationText.textContent = word.explanation || "";
+    studyExplanation.hidden = word.language === "zh" || !word.explanation || !studyExplanationOpen;
+    studyExplanationText.textContent = word.language === "zh" ? "" : word.explanation || "";
     studyDelete.disabled = busy;
     studyDelete.textContent = `Удалить ${noun("one")}`;
   }
@@ -552,15 +579,15 @@ if (typeof document !== "undefined") (() => {
     }
   }
 
-  function requestSpeechAction(action, payload = {}) {
+  function extensionRequest(action, payload = {}, timeoutMs = 10000) {
     const requestId = crypto.randomUUID().replace(/-/gu, "");
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => finish(new Error("Расширение не ответило. Перезагрузите его на странице chrome://extensions.")), 10000);
+      const timeout = setTimeout(() => finish(new Error("Расширение не ответило. Перезагрузите его на странице chrome://extensions и обновите панель.")), timeoutMs);
       function receive(event) {
         const data = event.data;
         if (event.source !== window || event.origin !== location.origin || !data
           || data.type !== `${action}.result` || data.requestId !== requestId) return;
-        finish(data.ok ? data : new Error(data.error || "Не удалось запустить произношение"));
+        finish(data.ok ? data : new Error(data.error || (action.startsWith("subsanywhere.panel.ai.") ? "Не удалось получить настройки ИИ. Обновите расширение и повторите попытку." : "Не удалось запустить произношение")));
       }
       function finish(result) {
         clearTimeout(timeout);
@@ -594,7 +621,7 @@ if (typeof document !== "undefined") (() => {
 
   async function loadSpeechSettings() {
     try {
-      const result = await requestSpeechAction("subsanywhere.speech.get");
+      const result = await extensionRequest("subsanywhere.speech.get");
       if (Number.isFinite(Number(result.settings?.rate))) speechRate = Number(result.settings.rate);
       speechVoiceName = typeof result.settings?.voiceName === "string" ? result.settings.voiceName : "";
       speechVoices = Array.isArray(result.voices) ? result.voices : [];
@@ -608,7 +635,7 @@ if (typeof document !== "undefined") (() => {
 
   async function saveSpeechSettings() {
     try {
-      const result = await requestSpeechAction("subsanywhere.speech.patch", {
+      const result = await extensionRequest("subsanywhere.speech.patch", {
         rate: Number(speechRateControl.value), voiceName: speechVoiceControl.value,
       });
       speechRate = Number(result.settings?.rate) || speechRate;
@@ -628,7 +655,7 @@ if (typeof document !== "undefined") (() => {
     speechPreview.disabled = true;
     showSpeechStatus("");
     try {
-      await requestSpeechAction("subsanywhere.speech.speak", { text: "你好，很高兴认识你。", language: "zh" });
+      await extensionRequest("subsanywhere.speech.speak", { text: "你好，很高兴认识你。", language: "zh" });
     } catch (error) {
       showSpeechStatus(error.message, true);
     } finally {
@@ -644,7 +671,7 @@ if (typeof document !== "undefined") (() => {
     button.setAttribute("aria-busy", "true");
     showSpeechStatus("");
     try {
-      await requestSpeechAction("subsanywhere.speech.speak", { text, language: item.language });
+      await extensionRequest("subsanywhere.speech.speak", { text, language: item.language });
     } catch (error) {
       showSpeechStatus(error.message, true);
     } finally {
@@ -658,7 +685,8 @@ if (typeof document !== "undefined") (() => {
     const requestKind = kind;
     const requestId = crypto.randomUUID().replace(/-/gu, "");
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => finish(new Error("Расширение не ответило. Перезагрузите его на странице chrome://extensions.")), 45000);
+      // Analysis may make two sequential model requests plus confirmed storage.
+      const timeout = setTimeout(() => finish(new Error("Расширение не ответило. Перезагрузите его на странице chrome://extensions.")), action === "subsanywhere.words.analyze" ? 70000 : 45000);
       function receive(event) {
         const data = event.data;
         if (event.source !== window || event.origin !== location.origin || !data || data.type !== `${action}.result` || data.requestId !== requestId) return;
@@ -704,27 +732,168 @@ if (typeof document !== "undefined") (() => {
     }
   }
 
-  async function translateWord(word) {
-    if (busy || kind !== "words" || word.language !== "zh") return;
+  async function analyzeWord(word) {
+    if (busy || word.language !== "zh") return;
+    const requestKind = kind;
     busy = true;
-    message("ИИ подбирает варианты перевода…");
+    message("Готовим разбор…");
     render();
+    renderStudy();
     try {
-      const fresh = await requestPanelAction(word.id, "subsanywhere.words.translate");
-      if (!fresh || fresh.id !== word.id || !validAiTranslations(fresh.ai_translations) || !fresh.ai_translations.length) {
-        throw new Error("Расширение не подтвердило варианты перевода.");
+      const fresh = await requestPanelAction(word.id, "subsanywhere.words.analyze");
+      if (!fresh || fresh.id !== word.id || fresh.language !== "zh" || fresh.text !== word.text
+        || typeof fresh.learned !== "boolean" || !validAnalysis(fresh.analysis)
+        || fresh.pinyin !== fresh.analysis.pinyin || fresh.translation !== fresh.analysis.translation) {
+        throw new Error("Расширение не подтвердило разбор. Попробуйте ещё раз.");
       }
-      words = words.map(item => item.id === fresh.id ? fresh : item);
-      studyWords = studyWords.map(item => item.id === fresh.id ? fresh : item);
-      message(`Переводы ИИ для «${word.text}» сохранены отдельно от перевода из видео.`);
+      if (requestKind === "sentences") sentences = sentences.map(item => item.id === fresh.id ? { ...item, ...fresh } : item);
+      else words = words.map(item => item.id === fresh.id ? { ...item, ...fresh } : item);
+      if (kind === requestKind) studyWords = studyWords.map(item => item.id === fresh.id ? { ...item, ...fresh } : item);
+      message("Разбор сохранён.");
     } catch (error) {
-      message(error instanceof Error ? error.message : "Не удалось получить перевод.", true);
+      message(error instanceof Error ? error.message : "Не удалось получить разбор.", true);
     } finally {
       busy = false;
       render();
       renderStudy();
     }
   }
+
+  // Settings use the same origin-bound request/reply transport as speech.
+  const aiProvider = document.getElementById("panel-ai-provider");
+  const aiModel = document.getElementById("panel-ai-model");
+  const aiLoad = document.getElementById("panel-ai-load");
+  const aiSave = document.getElementById("panel-ai-save");
+  const aiStatus = document.getElementById("panel-ai-status");
+  const aiSaved = document.getElementById("panel-ai-saved");
+  let aiSettings = null;
+  let aiCatalog = [];
+  let aiRevision = 0;
+  let aiLoading = false;
+  let aiSaving = false;
+
+  function aiMessage(text, error = false) {
+    aiStatus.textContent = text;
+    aiStatus.classList.toggle("error", error);
+  }
+
+  function validAiSettings(settings) {
+    return settings && ["openai", "deepseek"].includes(settings.provider)
+      && typeof settings.model === "string"
+      && ["openai", "deepseek"].every(provider => typeof settings.providers?.[provider]?.hasApiKey === "boolean");
+  }
+
+  function aiHasKey() { return aiSettings?.providers[aiProvider.value]?.hasApiKey === true; }
+  function renderAiControls() {
+    aiProvider.disabled = !aiSettings || aiSaving;
+    aiLoad.disabled = !aiSettings || !aiHasKey() || aiLoading || aiSaving;
+    aiModel.disabled = !aiCatalog.length || aiLoading || aiSaving;
+    aiSave.disabled = !aiHasKey() || aiLoading || aiSaving || !aiCatalog.includes(aiModel.value);
+    aiLoad.setAttribute("aria-busy", String(aiLoading));
+    aiSave.setAttribute("aria-busy", String(aiSaving));
+  }
+
+  function resetAiCatalog() {
+    aiCatalog = [];
+    const model = aiSettings?.provider === aiProvider.value ? aiSettings.model : "";
+    const option = element("option", "", model ? `${model} — сохранено` : "Сначала загрузите модели");
+    option.value = model;
+    aiModel.replaceChildren(option);
+    aiModel.value = model;
+    renderAiControls();
+    aiMessage(aiHasKey() ? "" : `Сохраните API-ключ ${aiProvider.value === "openai" ? "OpenAI" : "DeepSeek"} в настройках расширения, затем обновите панель.`, !aiHasKey());
+  }
+
+  function renderAiSaved() {
+    aiSaved.textContent = aiSettings.model
+      ? `Сохранено: ${aiSettings.provider === "openai" ? "OpenAI" : "DeepSeek"} · ${aiSettings.model}` : "Модель панели ещё не сохранена";
+  }
+
+  async function loadPanelAiSettings() {
+    renderAiControls();
+    try {
+      const result = await extensionRequest("subsanywhere.panel.ai.get");
+      if (!validAiSettings(result.settings)) throw new Error("Расширение вернуло неверные настройки ИИ. Обновите расширение и панель.");
+      aiSettings = result.settings;
+      aiProvider.value = aiSettings.provider;
+      renderAiSaved();
+      resetAiCatalog();
+    } catch (error) { aiMessage(error.message, true); }
+  }
+
+  async function loadPanelAiModels() {
+    if (aiLoad.disabled) return;
+    const provider = aiProvider.value;
+    const revision = ++aiRevision;
+    aiLoading = true;
+    aiCatalog = [];
+    renderAiControls();
+    aiMessage("Загрузка моделей…");
+    try {
+      const result = await extensionRequest("subsanywhere.panel.ai.models", { provider }, 30000);
+      if (revision !== aiRevision || provider !== aiProvider.value) return;
+      // AIClient.filterAvailableModels returns original model IDs as strings.
+      if (result.provider !== provider || !Array.isArray(result.models)
+        || result.models.some(model => typeof model !== "string" || !model.trim())) {
+        throw new Error("Расширение вернуло неверный список моделей.");
+      }
+      if (!result.models.length) throw new Error("Доступных моделей нет. Проверьте ключ и доступ к моделям в настройках расширения.");
+      aiCatalog = [...new Set(result.models)];
+      const selected = aiCatalog.includes(aiModel.value) ? aiModel.value : "";
+      const placeholder = element("option", "", "Выберите модель");
+      placeholder.value = "";
+      aiModel.replaceChildren(placeholder);
+      for (const model of aiCatalog) {
+        const option = element("option", "", model);
+        option.value = model;
+        aiModel.append(option);
+      }
+      aiModel.value = selected;
+      aiMessage("Модели загружены. Выберите одну и сохраните настройки.");
+    } catch (error) {
+      if (revision === aiRevision) aiMessage(error.message, true);
+    } finally {
+      if (revision === aiRevision) { aiLoading = false; renderAiControls(); }
+    }
+  }
+
+  async function savePanelAiSettings() {
+    if (aiSave.disabled) return;
+    const provider = aiProvider.value;
+    const model = aiModel.value;
+    const revision = aiRevision;
+    aiSaving = true;
+    renderAiControls();
+    aiMessage("Сохранение настроек панели…");
+    try {
+      const result = await extensionRequest("subsanywhere.panel.ai.save", { provider, model });
+      if (!validAiSettings(result.settings) || result.settings.provider !== provider || result.settings.model !== model) {
+        throw new Error("Расширение не подтвердило настройки панели. Попробуйте сохранить ещё раз.");
+      }
+      const confirmed = await extensionRequest("subsanywhere.panel.ai.get");
+      if (!validAiSettings(confirmed.settings) || confirmed.settings.provider !== provider || confirmed.settings.model !== model) {
+        throw new Error("Не удалось подтвердить сохранение настроек панели. Попробуйте ещё раз.");
+      }
+      if (revision !== aiRevision || provider !== aiProvider.value) return;
+      aiSettings = confirmed.settings;
+      renderAiSaved();
+      aiMessage("Настройки панели сохранены.");
+    } catch (error) {
+      if (revision === aiRevision) aiMessage(error.message, true);
+    } finally {
+      aiSaving = false;
+      renderAiControls();
+    }
+  }
+
+  aiLoad.addEventListener("click", loadPanelAiModels);
+  aiSave.addEventListener("click", savePanelAiSettings);
+  aiProvider.addEventListener("change", () => {
+    aiRevision += 1;
+    aiLoading = false;
+    resetAiCatalog();
+  });
+  aiModel.addEventListener("change", renderAiControls);
 
   search.addEventListener("input", render);
   language.addEventListener("change", render);
@@ -789,6 +958,7 @@ if (typeof document !== "undefined") (() => {
   studyExplain.addEventListener("click", () => {
     const word = studyWords[studyPosition];
     if (!word) return;
+    if (word.language === "zh") { analyzeWord(word); return; }
     if (word.explanation) {
       studyExplanationOpen = !studyExplanationOpen;
       renderStudy();
@@ -800,15 +970,13 @@ if (typeof document !== "undefined") (() => {
     const word = studyWords[studyPosition];
     if (word) setLearned(word, !word.learned, true);
   });
-  studyTranslate.addEventListener("click", () => {
-    const word = studyWords[studyPosition];
-    if (word) translateWord(word);
-  });
+
   studyDelete.addEventListener("click", () => {
     const word = studyWords[studyPosition];
     if (word) openDeleteDialog(word, studyDelete);
   });
   window.addEventListener("focus", load);
   loadSpeechSettings();
+  loadPanelAiSettings();
   load();
 })();

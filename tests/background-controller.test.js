@@ -264,7 +264,7 @@ async function backgroundHarness(setAccessLevel) {
   const sandbox = {
     chrome, MESSAGE, failure, console, fetch() { throw new Error('No network in bootstrap tests'); },
     StateStore: class {}, AiCredentialStore: class {}, AIClient: class {}, LocalSubtitleClient: class {}, VocabularyClient: class {},
-    SpeechService: class {},
+    SpeechService: class {}, PanelAiConfigStore: class {},
     BackgroundController: class {
       async handle(message) { handled.push(message); return { ok: true }; }
       async initialize() {}

@@ -912,11 +912,15 @@ class SubtitleService:
 
 
 WORDS_ROUTES = frozenset({
+    "/api/words/analysis", "/api/sentences/analysis",
     "/api/words", "/api/words/learned", "/api/words/explanation", "/api/words/ai-translations", "/api/words/delete",
     "/api/sentences", "/api/sentences/learned", "/api/sentences/explanation", "/api/sentences/delete",
 })
 WORDS_DELETE_ROUTES = frozenset({"/api/words/delete", "/api/sentences/delete"})
-WORDS_EXTENSION_WRITE_ROUTES = frozenset({"/api/words/ai-translations"})
+WORDS_ANALYSIS_ROUTES = frozenset({"/api/words/analysis", "/api/sentences/analysis"})
+# Full bounded 120-component analyses can exceed the ordinary capture limit.
+MAX_ANALYSIS_BODY_BYTES = 1024 * 1024
+WORDS_EXTENSION_WRITE_ROUTES = frozenset({"/api/words/ai-translations"}) | WORDS_ANALYSIS_ROUTES
 WORDS_ASSETS = {
     "/words": ("index.html", "text/html; charset=utf-8"),
     "/words/words.js": ("words.js", "text/javascript; charset=utf-8"),
@@ -974,7 +978,8 @@ def handler_for(service, words_store=None):
             if words_post and not lengths:
                 self._send_json(HTTPStatus.LENGTH_REQUIRED, {"error": "Content-Length required"})
                 return False
-            if lengths and int(lengths[0]) > (MAX_WORD_BODY_BYTES if words_post else 0):
+            body_limit = (MAX_ANALYSIS_BODY_BYTES if self.path in WORDS_ANALYSIS_ROUTES else MAX_WORD_BODY_BYTES) if words_post else 0
+            if lengths and int(lengths[0]) > body_limit:
                 self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {
                     "error": "Vocabulary body too large" if words_post else "Request bodies are not accepted"
                 })
@@ -1071,6 +1076,16 @@ def handler_for(service, words_store=None):
                     data = json.loads(body.decode("utf-8"), object_pairs_hook=unique_object, parse_constant=reject_constant)
                     if self.path == "/api/words":
                         payload = {"word": vocabulary.add(data)}
+                    elif self.path in WORDS_ANALYSIS_ROUTES:
+                        if not isinstance(data, dict) or set(data) != {"id", "analysis"}:
+                            raise ValueError("Expected ID and analysis")
+                        sentence = self.path == "/api/sentences/analysis"
+                        save = vocabulary.set_sentence_analysis if sentence else vocabulary.set_analysis
+                        result = save(data["id"], data["analysis"])
+                        if result is None:
+                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Chinese entry not found"})
+                            return
+                        payload = {"sentence" if sentence else "word": result}
                     elif self.path == "/api/words/learned":
                         if not isinstance(data, dict) or set(data) != {"id", "learned"} or type(data["learned"]) is not bool:
                             raise ValueError("Expected word ID and learned state")

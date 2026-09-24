@@ -13,6 +13,19 @@
   <main>
     <div class="page-heading">
       <h1>Словарь и практика</h1>
+      <div class="panel-settings">
+      <details id="panel-ai-settings" class="speech-settings panel-ai-settings">
+        <summary>Модель ИИ</summary>
+        <div class="speech-toolbar panel-ai-toolbar">
+          <p class="panel-ai-note">Только для этой панели, не для субтитров. Используются ключи, сохранённые в расширении.</p>
+          <label for="panel-ai-provider">Провайдер</label>
+          <select id="panel-ai-provider" disabled><option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option></select>
+          <label for="panel-ai-model">Модель</label>
+          <select id="panel-ai-model" disabled><option value="">Сначала загрузите модели</option></select>
+          <div class="panel-ai-actions"><button id="panel-ai-load" type="button" disabled>Загрузить модели</button><button id="panel-ai-save" type="button" disabled>Сохранить</button></div>
+          <p id="panel-ai-saved" class="panel-ai-note"></p>
+        </div>
+      </details>
       <details class="speech-settings">
         <summary><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg>Произношение</summary>
         <div class="speech-toolbar">
@@ -28,7 +41,9 @@
           <button id="speech-preview" type="button">Проверить голос</button>
         </div>
       </details>
+      </div>
     </div>
+    <p id="panel-ai-status" class="speech-status" role="status" aria-live="polite"></p>
     <p id="speech-status" class="speech-status" role="status" aria-live="polite"></p>
     <section class="vocabulary" aria-label="Сохранённые слова и предложения">
       <div id="list-controls">
@@ -77,13 +92,13 @@
             <h2 id="study-word" class="study-word" tabindex="-1"></h2>
             <p id="study-pinyin" class="study-pinyin"></p>
             <p id="study-translation" class="study-translation"></p>
-            <section id="study-ai-translations" class="study-ai-translations" hidden><h3>Перевод ИИ</h3><ol id="study-ai-translations-list"></ol></section>
+            <section id="study-analysis" class="word-analysis study-analysis" aria-label="Разбор" hidden></section>
             <section id="study-explanation" class="study-explanation" hidden><h3>Объяснение</h3><p id="study-explanation-text"></p></section>
           </div>
           <div class="study-tools" role="group" aria-label="Действия с карточкой">
             <button id="study-speak" class="speak quiet" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m11 4-6 5H2v6h3l6 5zM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/></svg>Произнести</button>
             <button id="study-explain" class="quiet" type="button">Объяснить</button>
-            <button id="study-translate" class="ai-translate quiet" type="button">Получить перевод</button>
+
             <button id="study-delete" class="delete quiet" type="button">Удалить</button>
           </div>
         </div>

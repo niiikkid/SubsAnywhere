@@ -17,8 +17,8 @@ MAX_EXPLANATION_CHARS = 1200
 MAX_AI_TRANSLATIONS = 3
 MAX_AI_TRANSLATION_CHARS = 320
 MAX_AI_USAGE_CHARS = 240
-PUBLIC_WORD_COLUMNS = "id, language, text, pinyin, translation, explanation, ai_translations, created_at, learned"
-PUBLIC_SENTENCE_COLUMNS = "id, language, text, pinyin, translation, explanation, created_at, learned"
+PUBLIC_WORD_COLUMNS = "id, language, text, pinyin, translation, explanation, ai_translations, analysis, created_at, learned"
+PUBLIC_SENTENCE_COLUMNS = "id, language, text, pinyin, translation, explanation, analysis, created_at, learned"
 HAN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f\U00030000-\U000323af]")
 
 
@@ -111,6 +111,95 @@ def validate_ai_translations(payload) -> list[dict]:
     return translations
 
 
+def _analysis_display(value, limit, *, pinyin=False):
+    value = _field(value, limit, collapse=True)
+    if HAN.search(value):
+        raise ValueError("Han is not allowed in analysis display fields")
+    if pinyin and (not any("LATIN" in unicodedata.name(char, "") for char in value) or any(
+        char.isalpha() and "LATIN" not in unicodedata.name(char, "") for char in value
+    )):
+        raise ValueError("Invalid analysis pinyin")
+    return value
+
+
+def _coverage_text(value):
+    # Ignore punctuation and whitespace, not digits/symbols or repeated Han.
+    return "".join(char for char in value if not char.isspace() and not unicodedata.category(char).startswith("P"))
+
+
+def _analysis_syllables(value):
+    parts, token = [], ""
+    for char in value:
+        category = unicodedata.category(char)
+        latin = "LATIN" in unicodedata.name(char, "")
+        if latin or (category.startswith("M") and token):
+            token += char
+        elif char in "12345":
+            if token:
+                parts.append(token + char)
+                token = ""
+        elif category.startswith("P") or category == "Zs":
+            if token:
+                parts.append(token)
+                token = ""
+        else:
+            raise ValueError("Invalid analysis pinyin character")
+    if token:
+        parts.append(token)
+    if not parts:
+        raise ValueError("Empty analysis pronunciation")
+    return parts
+
+
+def validate_analysis(payload, source, *, word=False):
+    if not isinstance(payload, dict) or set(payload) != {"pinyin", "translation", "components", "grammar", "example"}:
+        raise ValueError("Invalid analysis fields")
+    if not HAN.search(source) or any(char.isalpha() and not HAN.fullmatch(char) for char in source):
+        raise ValueError("Analysis requires Chinese source text")
+    components = payload["components"]
+    if not isinstance(components, list) or not 1 <= len(components) <= 120:
+        raise ValueError("Invalid analysis components")
+    normalized = []
+    for component in components:
+        if not isinstance(component, dict) or set(component) != {"text", "pinyin", "translation", "usage"}:
+            raise ValueError("Invalid analysis component")
+        text = _field(component["text"], 120, collapse=True)
+        if not _coverage_text(text):
+            raise ValueError("Empty analysis component")
+        normalized.append({
+            "text": text,
+            "pinyin": _analysis_display(component["pinyin"], 120, pinyin=True),
+            "translation": _analysis_display(component["translation"], 160),
+            "usage": _analysis_display(component["usage"], 240),
+        })
+    if "".join(_coverage_text(item["text"]) for item in normalized) != _coverage_text(source):
+        raise ValueError("Analysis components must cover source in order")
+    example = payload["example"]
+    if not isinstance(example, dict) or set(example) != {"pinyin", "translation"}:
+        raise ValueError("Invalid analysis example")
+    pronunciation = _analysis_display(payload["pinyin"], 120 if word else 500, pinyin=True)
+    component_syllables = []
+    for item in normalized:
+        han = _coverage_text(item["text"])
+        syllables = _analysis_syllables(item["pinyin"])
+        if not all(HAN.fullmatch(char) for char in han) or len(han) != len(syllables):
+            raise ValueError("Analysis pronunciation must cover each Han character")
+        component_syllables.extend(syllables)
+    if component_syllables != _analysis_syllables(pronunciation):
+        raise ValueError("Analysis component pronunciation must match full pinyin")
+    _analysis_syllables(_analysis_display(example["pinyin"], 300, pinyin=True))
+    return {
+        "pinyin": pronunciation,
+        "translation": _analysis_display(payload["translation"], 1000),
+        "components": normalized,
+        "grammar": _analysis_display(payload["grammar"], 700),
+        "example": {
+            "pinyin": _analysis_display(example["pinyin"], 300, pinyin=True),
+            "translation": _analysis_display(example["translation"], 300),
+        },
+    }
+
+
 class WordsStore:
     def __init__(self, path: Path):
         self.path = Path(path).expanduser()
@@ -166,6 +255,10 @@ class WordsStore:
                     UNIQUE (language, text_key, pinyin_key)
                 )
             """)
+            for table in ("words", "sentences"):
+                columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+                if "analysis" not in columns:
+                    connection.execute(f"ALTER TABLE {table} ADD COLUMN analysis TEXT DEFAULT NULL")
             with connection:
                 yield connection
         finally:
@@ -182,6 +275,8 @@ class WordsStore:
     def _public_word(row) -> dict:
         word = dict(row)
         word["learned"] = bool(word["learned"])
+        if word.get("analysis") is not None:
+            word["analysis"] = validate_analysis(json.loads(word["analysis"]), word["text"], word="ai_translations" in word)
         if "ai_translations" in word:
             try:
                 word["ai_translations"] = validate_ai_translations(json.loads(word["ai_translations"])) if word["ai_translations"] != "[]" else []
@@ -195,6 +290,9 @@ class WordsStore:
         pinyin_key = word["pinyin"].lower()
         created_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         with self._connection() as connection:
+            existing = self._captured_or_current(connection, "words", PUBLIC_WORD_COLUMNS, word, text_key, pinyin_key)
+            if existing is not None:
+                return self._public_word(existing)
             connection.execute("""
                 INSERT INTO words (language, text, pinyin, translation, created_at, text_key, pinyin_key)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -218,6 +316,9 @@ class WordsStore:
         pinyin_key = sentence["pinyin"].lower()
         created_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         with self._connection() as connection:
+            existing = self._captured_or_current(connection, "sentences", PUBLIC_SENTENCE_COLUMNS, sentence, text_key, pinyin_key)
+            if existing is not None:
+                return self._public_word(existing)
             connection.execute("""
                 INSERT INTO sentences (language, text, pinyin, translation, created_at, text_key, pinyin_key)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -229,6 +330,48 @@ class WordsStore:
                 (sentence["language"], text_key, pinyin_key),
             ).fetchone()
             return self._public_word(row)
+
+    @staticmethod
+    def _captured_or_current(connection, table, columns, item, text_key, pinyin_key):
+        # Immutable captured keys win ties. Unicode lower() is done in Python:
+        # SQLite lower() does not fold accented pinyin. BEGIN IMMEDIATE makes
+        # matching and insertion atomic across independent store instances.
+        rows = connection.execute(
+            f"SELECT {columns}, pinyin_key FROM {table} WHERE language = ? AND text_key = ? ORDER BY id",
+            (item["language"], text_key),
+        ).fetchall()
+        match = next((row for row in rows if row["pinyin_key"] == pinyin_key), None)
+        if match is None:
+            match = next((row for row in rows if row["pinyin"].lower() == pinyin_key), None)
+        if match is None:
+            return None
+        return {key: match[key] for key in match.keys() if key != "pinyin_key"}
+
+    def set_analysis(self, identifier, analysis) -> dict | None:
+        return self._set_analysis("words", PUBLIC_WORD_COLUMNS, identifier, analysis)
+
+    def set_sentence_analysis(self, identifier, analysis) -> dict | None:
+        return self._set_analysis("sentences", PUBLIC_SENTENCE_COLUMNS, identifier, analysis)
+
+    def _set_analysis(self, table, columns, identifier, analysis):
+        identifier = validate_word_id(identifier)
+        with self._connection() as connection:
+            row = connection.execute(
+                f"SELECT {columns} FROM {table} WHERE id = ? AND language = 'zh'", (identifier,),
+            ).fetchone()
+            if row is None:
+                return None
+            analysis = validate_analysis(analysis, row["text"], word=table == "words")
+            # Never rewrite text_key/pinyin_key: pronunciation corrections must
+            # neither collide with another captured reading nor erase history.
+            connection.execute(
+                f"UPDATE {table} SET analysis = ?, pinyin = ?, translation = ?, explanation = ? WHERE id = ?",
+                (json.dumps(analysis, ensure_ascii=False, separators=(",", ":")), analysis["pinyin"],
+                 analysis["translation"], analysis["grammar"], identifier),
+            )
+            return self._public_word(connection.execute(
+                f"SELECT {columns} FROM {table} WHERE id = ?", (identifier,),
+            ).fetchone())
 
     def set_learned(self, identifier, learned: bool) -> dict | None:
         identifier = validate_word_id(identifier)

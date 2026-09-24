@@ -1,4 +1,4 @@
-import { AIClient, AiCredentialStore } from './ai-client.js';
+import { AIClient, AiCredentialStore, PanelAiConfigStore } from './ai-client.js';
 import { BackgroundController } from './background-controller.js';
 import { LocalSubtitleClient } from './local-subtitles-client.js';
 import { VocabularyClient } from './vocabulary-client.js';
@@ -10,10 +10,12 @@ const storage = chrome.storage.local;
 const store = new StateStore(storage);
 const credentialStore = new AiCredentialStore(storage);
 const aiClient = new AIClient(globalThis.fetch.bind(globalThis), credentialStore);
+const panelConfigStore = new PanelAiConfigStore(storage, credentialStore);
+const panelAiClient = new AIClient(globalThis.fetch.bind(globalThis), panelConfigStore);
 const localSubtitles = new LocalSubtitleClient(globalThis.fetch.bind(globalThis));
 const vocabulary = new VocabularyClient(globalThis.fetch.bind(globalThis));
 const speech = new SpeechService(chrome, storage);
-const controller = new BackgroundController(chrome, store, { credentialStore, aiClient, localSubtitles, vocabulary, speech });
+const controller = new BackgroundController(chrome, store, { credentialStore, aiClient, panelConfigStore, panelAiClient, localSubtitles, vocabulary, speech });
 const PANEL_STORAGE_KEY = 'dualCaptionsPanel';
 
 function normalizePanelState(value = {}) {
@@ -53,7 +55,8 @@ async function handlePanelState(message, sender) {
 
 const protectedMessages = new Set([
   MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.AI_MODELS_GET, MESSAGE.CAPTION_TRANSLATE,
-  MESSAGE.WORD_EXPLAIN, MESSAGE.SENTENCE_EXPLAIN,
+  MESSAGE.WORD_EXPLAIN, MESSAGE.SENTENCE_EXPLAIN, MESSAGE.WORD_TRANSLATE, MESSAGE.WORD_ANALYZE, MESSAGE.SENTENCE_ANALYZE,
+  MESSAGE.PANEL_AI_GET, MESSAGE.PANEL_AI_MODELS, MESSAGE.PANEL_AI_SAVE,
 ]);
 const storageProtection = (async () => {
   try {
