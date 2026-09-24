@@ -11,13 +11,39 @@ export function normalizeSpeechSettings(value = {}) {
   return { rate: normalizeSpeechRate(source.rate) };
 }
 
+const NOVELTY_CHINESE_VOICES = /^(eddy|flo|grandma|grandpa|reed|rocko|sandy|shelley)(\s|$)/i;
+
+export function selectSpeechVoice(voices, language) {
+  if (!Array.isArray(voices)) return '';
+  const locale = language.toLowerCase();
+  const matching = voices.filter((voice) => String(voice?.lang || '').toLowerCase().replace('_', '-').startsWith(locale));
+  const preferred = matching.find((voice) => /ting[ -]?ting/i.test(String(voice.voiceName || '')));
+  const natural = matching.find((voice) => !NOVELTY_CHINESE_VOICES.test(String(voice.voiceName || '')));
+  return String(preferred?.voiceName || natural?.voiceName || matching[0]?.voiceName || '');
+}
+
 export class SpeechService {
   #chrome;
   #storage;
+  #voices;
 
   constructor(chromeApi, storage) {
     this.#chrome = chromeApi;
     this.#storage = storage;
+    this.#voices = null;
+  }
+
+  async getVoices() {
+    if (this.#voices) return this.#voices;
+    if (typeof this.#chrome.tts?.getVoices !== 'function') return [];
+    this.#voices = await new Promise((resolve) => {
+      try {
+        this.#chrome.tts.getVoices((voices) => resolve(Array.isArray(voices) ? voices : []));
+      } catch {
+        resolve([]);
+      }
+    });
+    return this.#voices;
   }
 
   async getSettings() {
@@ -39,12 +65,14 @@ export class SpeechService {
     if (typeof this.#chrome.tts?.speak !== 'function') throw new Error('Системное озвучивание недоступно');
     const settings = await this.getSettings();
     const language = value.language === 'zh' ? 'zh-CN' : 'en-US';
+    const voiceName = selectSpeechVoice(await this.getVoices(), language);
     await new Promise((resolve, reject) => {
       try {
         this.#chrome.tts.speak(text, {
           lang: language,
           rate: settings.rate,
           enqueue: false,
+          ...(voiceName ? { voiceName } : {}),
         }, () => {
           const error = this.#chrome.runtime?.lastError;
           if (error) reject(new Error(error.message || 'Не удалось запустить произношение'));

@@ -6,6 +6,7 @@ import {
   SpeechService,
   normalizeSpeechRate,
   normalizeSpeechSettings,
+  selectSpeechVoice,
 } from '../speech-service.js';
 
 function memoryStorage(initial = {}) {
@@ -25,12 +26,27 @@ test('speech rate stays in the useful learning range', () => {
   assert.deepEqual(normalizeSpeechSettings({ rate: 0.55 }), { rate: 0.55 });
 });
 
+test('Chinese speech prefers the natural Tingting voice over novelty voices', () => {
+  const voices = [
+    { voiceName: 'Grandma (Китайский)', lang: 'zh-CN' },
+    { voiceName: 'Tingting', lang: 'zh_CN' },
+    { voiceName: 'Meijia', lang: 'zh-TW' },
+  ];
+  assert.equal(selectSpeechVoice(voices, 'zh-CN'), 'Tingting');
+});
+
 test('speech settings persist globally and are used for Chinese system speech', async () => {
   const calls = [];
   const storage = memoryStorage();
   const chrome = {
     runtime: { lastError: null },
     tts: {
+      getVoices(callback) {
+        callback([
+          { voiceName: 'Eddy (Chinese)', lang: 'zh-CN' },
+          { voiceName: 'Tingting', lang: 'zh-CN' },
+        ]);
+      },
       speak(text, options, callback) {
         calls.push({ text, options });
         callback();
@@ -45,7 +61,7 @@ test('speech settings persist globally and are used for Chinese system speech', 
   assert.deepEqual(await service.speak({ text: '你好', language: 'zh' }), { language: 'zh', rate: 0.55 });
   assert.deepEqual(calls, [{
     text: '你好',
-    options: { lang: 'zh-CN', rate: 0.55, enqueue: false },
+    options: { lang: 'zh-CN', rate: 0.55, enqueue: false, voiceName: 'Tingting' },
   }]);
 });
 
