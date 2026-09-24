@@ -28,6 +28,8 @@ const hydrationErrors = new Map();
 let hydrationRevision = 0;
 let aiLoadRevision = 0;
 let aiLoaded = false;
+let speechRate = 0.8;
+let speechRevision = 0;
 let youtubeLoaded = false;
 let selectedFrameId;
 let syncTrackId = '';
@@ -328,6 +330,7 @@ function drawSync() {
 
 function drawSettings() {
   const settings = state.settings;
+  $('speechRate').value = String(speechRate);
   $('youtubeLanguage').value = settings.youtubeLanguage;
   $('youtubeLanguage').disabled = !pageKey;
   for (const id of ['fontSize', 'inlineTranslations', 'subtitleColor', 'subtitleBackground', 'originalTrack', 'subtitleFile']) $(id).disabled = !pageKey;
@@ -724,6 +727,35 @@ async function loadAiSettings() {
   }
 }
 
+async function loadSpeechSettings() {
+  const revision = speechRevision;
+  try {
+    const data = await request(MESSAGE.SPEECH_SETTINGS_GET);
+    if (revision === speechRevision && Number.isFinite(Number(data.settings?.rate))) {
+      speechRate = Number(data.settings.rate);
+      drawSettings();
+    }
+    hydrationErrors.delete('speech');
+    drawSaveFeedback();
+    return data;
+  } catch (error) {
+    if (revision === speechRevision) hydrationErrors.set('speech', error);
+    drawSaveFeedback();
+    return {};
+  }
+}
+
+function saveSpeechRate() {
+  const requested = Number($('speechRate').value);
+  speechRevision += 1;
+  speechRate = requested;
+  return saveRequest('speech:rate', MESSAGE.SPEECH_SETTINGS_PATCH, { rate: requested }, (data) => {
+    if (Number.isFinite(Number(data.settings?.rate))) speechRate = Number(data.settings.rate);
+    hydrationErrors.delete('speech');
+    drawSettings();
+  }).catch((error) => setStatus(`Не удалось сохранить скорость: ${error.message}`, true));
+}
+
 async function hydratePage(aiPromise) {
   if (!pageKey) return;
   const revision = ++hydrationRevision;
@@ -764,6 +796,7 @@ async function init() {
   render();
   drawSaveFeedback();
   const aiPromise = loadAiSettings();
+  const speechPromise = loadSpeechSettings();
   let tab;
   if (embeddedPanel) {
     const context = await request(MESSAGE.PANEL_CONTEXT_GET);
@@ -779,7 +812,7 @@ async function init() {
   $('youtubeSubtitles').hidden = !youtubeId;
   pageKey = canonicalPageKey(tab.url || `https://local.invalid/tab/${tab.id}`);
   drawSettings();
-  await hydratePage(aiPromise);
+  await Promise.all([hydratePage(aiPromise), speechPromise]);
 }
 
 for (const [index, section] of sections.entries()) {
@@ -803,7 +836,7 @@ document.defaultView?.addEventListener('pagehide', () => {
 $('retrySave').addEventListener('click', () => {
   for (const entry of [...saves.values()]) if (entry.error) void entry.retry().catch(() => {});
 });
-$('retrySettings').addEventListener('click', () => { void hydratePage(loadAiSettings()); });
+$('retrySettings').addEventListener('click', () => { void Promise.all([hydratePage(loadAiSettings()), loadSpeechSettings()]); });
 $('activate').addEventListener('click', () => activate().catch((error) => setStatus(error.message, true)));
 $('restartSearch').addEventListener('click', () => activate(true).catch((error) => setStatus(error.message, true)));
 $('aiProvider').addEventListener('change', () => {
@@ -819,6 +852,7 @@ $('aiModel').addEventListener('change', () => drawSettings());
 $('loadAiModels').addEventListener('click', () => loadAiModels().catch((error) => setStatus(error.message, true)));
 $('clearAiKey').addEventListener('click', () => clearAiKey().catch((error) => setStatus(error.message, true)));
 $('saveAiSettings').addEventListener('click', () => saveAiSettings().catch((error) => setStatus(error.message, true)));
+$('speechRate').addEventListener('change', () => { void saveSpeechRate(); });
 $('subtitleFile').addEventListener('change', (event) => importFile(event.target.files?.[0]).catch((error) => setStatus(error.message, true)));
 $('createYoutubeSubtitles').addEventListener('click', () => createYoutubeSubtitles());
 $('retryYoutubeSubtitles').addEventListener('click', () => loadYoutubeSubtitles());

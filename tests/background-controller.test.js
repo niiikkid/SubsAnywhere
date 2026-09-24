@@ -212,6 +212,34 @@ test('the own popup page remains trusted when Chrome hosts it in an extension ta
   assert.equal(embedded.ok, true);
 });
 
+test('speech settings are shared by the popup and trusted learning panel', async () => {
+  const calls = [];
+  const speech = {
+    async getSettings() { calls.push('get'); return { rate: 0.8 }; },
+    async patchSettings(settings) { calls.push(['patch', settings]); return { rate: settings.rate }; },
+    async speak(value) { calls.push(['speak', value]); return { language: value.language, rate: 0.55 }; },
+  };
+  const controller = new RuntimeBackgroundController(makeChrome(), new FakeStore(), { speech });
+  const panel = {
+    id: EXTENSION_ID, frameId: 0, url: 'http://127.0.0.1:43817/words',
+    tab: { id: 91, url: 'http://127.0.0.1:43817/words' },
+  };
+
+  assert.deepEqual(await controller.handle({ type: MESSAGE.SPEECH_SETTINGS_GET }, POPUP), {
+    ok: true, data: { settings: { rate: 0.8 } },
+  });
+  assert.deepEqual(await controller.handle({ type: MESSAGE.SPEECH_SETTINGS_PATCH, rate: 0.55 }, panel), {
+    ok: true, data: { settings: { rate: 0.55 } },
+  });
+  assert.deepEqual(await controller.handle({ type: MESSAGE.SPEECH_SPEAK, text: '你好', language: 'zh' }, panel), {
+    ok: true, data: { language: 'zh', rate: 0.55 },
+  });
+  assert.deepEqual(calls, ['get', ['patch', { rate: 0.55 }], ['speak', { text: '你好', language: 'zh' }]]);
+  assert.equal((await controller.handle({ type: MESSAGE.SPEECH_SETTINGS_GET }, {
+    id: EXTENSION_ID, frameId: 0, url: 'https://video.example/', tab: { id: 3, url: 'https://video.example/' },
+  })).ok, false);
+});
+
 test('unknown extension and missing sender identities cannot read state', async () => {
   const controller = new RuntimeBackgroundController(makeChrome(), new FakeStore());
   for (const sender of [{}, { ...POPUP, id: 'other-extension' }, { id: EXTENSION_ID, url: 'https://untrusted.example/' }]) {
@@ -232,6 +260,7 @@ async function backgroundHarness(setAccessLevel) {
   const sandbox = {
     chrome, MESSAGE, failure, console, fetch() { throw new Error('No network in bootstrap tests'); },
     StateStore: class {}, AiCredentialStore: class {}, AIClient: class {}, LocalSubtitleClient: class {}, VocabularyClient: class {},
+    SpeechService: class {},
     BackgroundController: class {
       async handle(message) { handled.push(message); return { ok: true }; }
       async initialize() {}

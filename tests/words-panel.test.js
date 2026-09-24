@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  studyDeck, nextStudyPosition, previousStudyPosition, studyPositionForWord, learningText, wordsTsv
+  studyDeck, nextStudyPosition, previousStudyPosition, studyPositionForWord, learningText, pronunciationText, wordsTsv
 } from '../local-server/web/words.js';
 
 const words = [
@@ -38,6 +38,12 @@ test('Chinese saved sentences are learned through pinyin instead of Han characte
   assert.equal(learningText(sentence, 'sentences'), sentence.pinyin);
   assert.equal(learningText(sentence, 'words'), sentence.text);
   assert.equal(learningText({ language: 'en', text: 'I have already eaten.', pinyin: '' }, 'sentences'), 'I have already eaten.');
+});
+
+test('pronunciation always uses canonical source text instead of displayed pinyin', () => {
+  assert.equal(pronunciationText({ language: 'zh', text: '我已经吃过饭了。', pinyin: 'wǒ yǐjīng chī guò fàn le.' }), '我已经吃过饭了。');
+  assert.equal(pronunciationText({ language: 'en', text: 'take off', pinyin: '' }), 'take off');
+  assert.equal(pronunciationText({ language: 'fr', text: 'bonjour' }), '');
 });
 
 test('word export is compact TSV with source, Chinese pronunciation, and Russian translation only', () => {

@@ -15,12 +15,35 @@
     WORDS_SAVE: 'dualCaptions.words.save',
     SENTENCES_LIST: 'dualCaptions.sentences.list',
     SENTENCES_SAVE: 'dualCaptions.sentences.save',
+    SPEECH_SPEAK: 'dualCaptions.speech.speak',
 
     CONTENT_RESET: 'dualCaptions.content.reset',
   });
   function sendMessage(message) {
     try { return chrome.runtime.sendMessage(message); }
     catch { return Promise.resolve({ ok: false }); }
+  }
+
+  async function speakText(text, language, button) {
+    if (!text || !['zh', 'en'].includes(language) || button?.speaking) return;
+    const previous = button?.textContent;
+    if (button) {
+      button.speaking = true;
+      button.disabled = true;
+      button.textContent = '🔊…';
+    }
+    try {
+      const response = await sendMessage({ type: MESSAGE.SPEECH_SPEAK, text, language });
+      if (!response?.ok) throw new Error(response?.error || 'Не удалось произнести текст');
+    } catch (error) {
+      if (button) button.title = error?.message || 'Не удалось произнести текст';
+    } finally {
+      if (button) {
+        button.speaking = false;
+        button.disabled = false;
+        button.textContent = previous;
+      }
+    }
   }
 
   function createController() {
@@ -31,6 +54,9 @@
       root: null,
       second: null,
       dragHandle: null,
+      sentenceSpeakButton: null,
+      sentenceSpeechText: '',
+      sentenceSpeechLanguage: '',
       tooltip: null,
       tooltipItem: null,
       tooltipAnchor: null,
@@ -122,6 +148,7 @@
         Object.assign(state.settings, position);
         applyCaptionPosition();
         positionDragHandle();
+        positionSentenceSpeakButton();
       };
       const finishDrag = (event) => {
         if (!state.drag || event.pointerId !== state.drag.pointerId) return;
@@ -159,6 +186,19 @@
       dragHandle.addEventListener('pointercancel', finishDrag);
       root.append(dragHandle);
       state.dragHandle = dragHandle;
+      const sentenceSpeak = document.createElement('button');
+      sentenceSpeak.type = 'button';
+      sentenceSpeak.className = 'dual-captions-speak-sentence';
+      sentenceSpeak.textContent = '🔊';
+      sentenceSpeak.title = 'Произнести фразу';
+      sentenceSpeak.setAttribute('aria-label', 'Произнести фразу');
+      sentenceSpeak.style.cssText = 'position:absolute;z-index:2;display:none;width:30px;height:30px;place-items:center;border:1px solid rgba(166,190,255,.65);border-radius:8px;background:rgba(19,24,38,.92);color:#eef1ff;font:16px/1 Arial,sans-serif;box-shadow:0 3px 12px rgba(0,0,0,.5);cursor:pointer;pointer-events:auto;';
+      sentenceSpeak.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void speakText(state.sentenceSpeechText, state.sentenceSpeechLanguage, sentenceSpeak);
+      });
+      root.append(sentenceSpeak);
+      state.sentenceSpeakButton = sentenceSpeak;
       document.documentElement.append(root);
       state.root = root;
     }
@@ -253,6 +293,13 @@
     }
 
     function appendSentenceButton(descriptor, items) {
+      const speechText = descriptor.characters || descriptor.sourceText;
+      const speechLanguage = descriptor.characters ? 'zh' : 'en';
+      if (speechText && state.sentenceSpeakButton) {
+        state.sentenceSpeechText = speechText;
+        state.sentenceSpeechLanguage = speechLanguage;
+        state.sentenceSpeakButton.style.display = 'grid';
+      }
       if (!descriptor.characters) {
         state.sentence = null;
         return;
@@ -340,6 +387,20 @@
       });
       tooltip.append(button, status);
       state.wordButton = button;
+    }
+
+    function appendTooltipSpeechButton(tooltip, item) {
+      if (typeof item?.speechText !== 'string' || !item.speechText.trim() || !['zh', 'en'].includes(item.speechLanguage)) return;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'dual-captions-speak-word';
+      button.textContent = '🔊 Произнести';
+      button.style.cssText = 'display:block;margin-top:10px;padding:7px 10px;border:1px solid rgba(166,190,255,.45);border-radius:6px;background:rgba(91,110,174,.18);color:#eef1ff;font:600 12px/1.3 Arial,sans-serif;cursor:pointer;';
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void speakText(item.speechText, item.speechLanguage, button);
+      });
+      tooltip.append(button);
     }
 
     function dismissMeaningPreview() {
@@ -446,6 +507,7 @@
       } else {
         tooltip.append(close, dictionary);
       }
+      appendTooltipSpeechButton(tooltip, item);
       if (item.isVocabularyCell) appendWordButton(tooltip, item);
       state.root.append(tooltip);
       state.tooltip = tooltip;
@@ -774,6 +836,8 @@
             isSentenceTranslation: true,
             isVocabularyCell: true,
             word,
+            speechText: word?.text || '',
+            speechLanguage: word?.language || '',
           };
           cell.className = 'dual-captions-word-cell';
           cell.setAttribute('aria-label', `${segment.text}: ${cellItem.dictionary}`);
@@ -834,6 +898,9 @@
       state.sentenceCharacters = null;
       state.sentence = null;
       state.captionLayoutKey = '';
+      state.sentenceSpeechText = '';
+      state.sentenceSpeechLanguage = '';
+      if (state.sentenceSpeakButton) state.sentenceSpeakButton.style.display = 'none';
       dismissMeaningPreview();
       dismissTooltip();
       state.second.replaceChildren();
@@ -939,6 +1006,7 @@
       state.root.style.display = state.active && rect.width && rect.height ? 'block' : 'none';
       applyCaptionPosition();
       positionDragHandle();
+      positionSentenceSpeakButton();
       positionMeaningPreview();
       positionTooltip();
     }
@@ -996,6 +1064,18 @@
       const top = Math.min(rootRect.height - 28, Math.max(0, captionRect.top - rootRect.top - 5));
       state.dragHandle.style.left = `${left}px`;
       state.dragHandle.style.top = `${top}px`;
+    }
+
+    function positionSentenceSpeakButton() {
+      const button = state.sentenceSpeakButton;
+      if (!state.root || !state.second || !button || button.style.display === 'none') return;
+      const root = state.root.getBoundingClientRect();
+      const caption = state.second.getBoundingClientRect();
+      if (!root.width || !root.height) return;
+      const left = Math.max(0, Math.min(root.width - 30, caption.left - root.left - 34));
+      const top = Math.max(0, Math.min(root.height - 30, caption.top - root.top));
+      button.style.left = `${left}px`;
+      button.style.top = `${top}px`;
     }
 
     function subtitleBackgroundStyle() {

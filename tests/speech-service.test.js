@@ -1,0 +1,62 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  DEFAULT_SPEECH_SETTINGS,
+  SPEECH_STORAGE_KEY,
+  SpeechService,
+  normalizeSpeechRate,
+  normalizeSpeechSettings,
+} from '../speech-service.js';
+
+function memoryStorage(initial = {}) {
+  const values = structuredClone(initial);
+  return {
+    values,
+    async get(key) { return { [key]: structuredClone(values[key]) }; },
+    async set(patch) { Object.assign(values, structuredClone(patch)); },
+  };
+}
+
+test('speech rate stays in the useful learning range', () => {
+  assert.equal(normalizeSpeechRate(0.7), 0.7);
+  assert.equal(normalizeSpeechRate(0.1), 0.5);
+  assert.equal(normalizeSpeechRate(4), 1);
+  assert.equal(normalizeSpeechRate('bad'), DEFAULT_SPEECH_SETTINGS.rate);
+  assert.deepEqual(normalizeSpeechSettings({ rate: 0.55 }), { rate: 0.55 });
+});
+
+test('speech settings persist globally and are used for Chinese system speech', async () => {
+  const calls = [];
+  const storage = memoryStorage();
+  const chrome = {
+    runtime: { lastError: null },
+    tts: {
+      speak(text, options, callback) {
+        calls.push({ text, options });
+        callback();
+      },
+    },
+  };
+  const service = new SpeechService(chrome, storage);
+
+  assert.deepEqual(await service.getSettings(), DEFAULT_SPEECH_SETTINGS);
+  assert.deepEqual(await service.patchSettings({ rate: 0.55 }), { rate: 0.55 });
+  assert.deepEqual(storage.values[SPEECH_STORAGE_KEY], { rate: 0.55 });
+  assert.deepEqual(await service.speak({ text: '你好', language: 'zh' }), { language: 'zh', rate: 0.55 });
+  assert.deepEqual(calls, [{
+    text: '你好',
+    options: { lang: 'zh-CN', rate: 0.55, enqueue: false },
+  }]);
+});
+
+test('speech rejects empty text and unsupported languages before calling Chrome', async () => {
+  let calls = 0;
+  const service = new SpeechService({
+    runtime: {},
+    tts: { speak() { calls += 1; } },
+  }, memoryStorage());
+
+  await assert.rejects(service.speak({ text: '', language: 'zh' }), /Некорректный текст/);
+  await assert.rejects(service.speak({ text: 'bonjour', language: 'fr' }), /Язык произношения/);
+  assert.equal(calls, 0);
+});

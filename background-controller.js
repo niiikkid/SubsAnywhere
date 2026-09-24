@@ -6,6 +6,10 @@ const CONTENT_MESSAGES = new Set([
   MESSAGE.PLAYER_REPORT, MESSAGE.CONTENT_POSITION_PATCH, MESSAGE.TRACK_CACHE_BUILTIN, MESSAGE.CAPTION_TRANSLATE,
   MESSAGE.WORDS_LIST, MESSAGE.WORDS_SAVE, MESSAGE.WORD_EXPLAIN, MESSAGE.WORD_TRANSLATE,
   MESSAGE.SENTENCES_LIST, MESSAGE.SENTENCES_SAVE, MESSAGE.SENTENCE_EXPLAIN,
+  MESSAGE.SPEECH_SETTINGS_GET, MESSAGE.SPEECH_SETTINGS_PATCH, MESSAGE.SPEECH_SPEAK,
+]);
+const SHARED_MESSAGES = new Set([
+  MESSAGE.SPEECH_SETTINGS_GET, MESSAGE.SPEECH_SETTINGS_PATCH, MESSAGE.SPEECH_SPEAK,
 ]);
 const SERIALIZED_MESSAGES = new Set([
   MESSAGE.PLAYER_REPORT, MESSAGE.PLAYER_SELECT, MESSAGE.STATE_PATCH, MESSAGE.CONTENT_POSITION_PATCH,
@@ -121,6 +125,7 @@ export class BackgroundController {
   #aiClient;
   #localSubtitles;
   #vocabulary;
+  #speech;
   #discoveryTimeoutMs;
   #discoveryQuietMs;
   #contentRegistration;
@@ -136,6 +141,7 @@ export class BackgroundController {
     this.#aiClient = options.aiClient ?? options.deepSeek;
     this.#localSubtitles = options.localSubtitles;
     this.#vocabulary = options.vocabulary;
+    this.#speech = options.speech;
     this.#discoveryTimeoutMs = options.discoveryTimeoutMs ?? 5000;
     this.#discoveryQuietMs = options.discoveryQuietMs ?? 300;
   }
@@ -167,6 +173,9 @@ export class BackgroundController {
       const fromWordsPanel = fromContent && this.#isWordsPanelSender(sender);
       if ([MESSAGE.WORD_EXPLAIN, MESSAGE.WORD_TRANSLATE, MESSAGE.SENTENCE_EXPLAIN].includes(message.type) && !fromWordsPanel) {
         throw new Error('ИИ-действие доступно только из панели обучения');
+      }
+      if ([MESSAGE.SPEECH_SETTINGS_GET, MESSAGE.SPEECH_SETTINGS_PATCH].includes(message.type) && fromContent && !fromWordsPanel) {
+        throw new Error('Настройка произношения доступна только из панели обучения');
       }
       if (fromContent && !fromWordsPanel && message.type !== MESSAGE.PLAYER_REPORT) await this.#recoverSelectedSender(message, sender);
       const operation = () => this.#dispatch(message, sender);
@@ -286,6 +295,15 @@ export class BackgroundController {
             sentence.id, await this.#aiClient.explainSentence(sentence),
           ));
         }
+        case MESSAGE.SPEECH_SETTINGS_GET:
+          if (!this.#speech) throw new Error('Системное озвучивание недоступно');
+          return ok({ settings: await this.#speech.getSettings() });
+        case MESSAGE.SPEECH_SETTINGS_PATCH:
+          if (!this.#speech) throw new Error('Системное озвучивание недоступно');
+          return ok({ settings: await this.#speech.patchSettings({ rate: message.rate }) });
+        case MESSAGE.SPEECH_SPEAK:
+          if (!this.#speech) throw new Error('Системное озвучивание недоступно');
+          return ok(await this.#speech.speak({ text: message.text, language: message.language }));
         case MESSAGE.LOCAL_SUBTITLE_EXISTING:
           if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');
           return ok(await this.#localSubtitles.existing(message.videoId, message.language));
@@ -306,7 +324,7 @@ export class BackgroundController {
     }
     const popupUrl = this.#chrome.runtime.getURL('popup.html');
     if (sender.url === popupUrl || sender.url?.startsWith(`${popupUrl}?`)) {
-      if (CONTENT_MESSAGES.has(message?.type)) throw new Error('Сообщение доступно только плееру');
+      if (CONTENT_MESSAGES.has(message?.type) && !SHARED_MESSAGES.has(message?.type)) throw new Error('Сообщение доступно только плееру');
       return false;
     }
     if (sender.tab) {

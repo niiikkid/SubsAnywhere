@@ -27,6 +27,11 @@ export function learningText(item, kind = "words") {
     ? item.pinyin : item.text;
 }
 
+export function pronunciationText(item) {
+  return item && ["zh", "en"].includes(item.language) && typeof item.text === "string"
+    ? item.text.trim() : "";
+}
+
 export function wordsTsv(words = []) {
   const cell = (value) => {
     const text = String(value ?? "").replace(/[\t\r\n]/gu, " ");
@@ -50,6 +55,8 @@ if (typeof document !== "undefined") (() => {
   const empty = document.getElementById("empty");
   const refresh = document.getElementById("refresh");
   const download = document.getElementById("download");
+  const speechRateControl = document.getElementById("speech-rate");
+  const speechStatus = document.getElementById("speech-status");
   const deleteModal = document.getElementById("delete-modal");
   const deleteTitle = document.getElementById("delete-title");
   const deleteText = document.getElementById("delete-text");
@@ -80,6 +87,7 @@ if (typeof document !== "undefined") (() => {
   const studyFinish = document.getElementById("study-finish");
   const studyFinishTitle = document.getElementById("study-finish-title");
   const studyBack = document.getElementById("study-back");
+  const studySpeak = document.getElementById("study-speak");
   const studyLearned = document.getElementById("study-learned");
   const studyExplain = document.getElementById("study-explain");
   const studyTranslate = document.getElementById("study-translate");
@@ -95,6 +103,7 @@ if (typeof document !== "undefined") (() => {
   let studyWords = [];
   let studyPosition = 0;
   let studyExplanationOpen = false;
+  let speechRate = 0.8;
   let deleteTarget = null;
   let deleteTrigger = null;
 
@@ -293,6 +302,11 @@ if (typeof document !== "undefined") (() => {
       explain.disabled = busy;
       explain.addEventListener("click", () => word.explanation ? details.toggleAttribute("open") : explainWord(word));
       const actions = element("div", "word-actions", "");
+      const speak = element("button", "speak", "🔊 Произнести");
+      speak.type = "button";
+      speak.setAttribute("aria-label", `Произнести: «${learningText(word, kind)}»`);
+      speak.addEventListener("click", () => speakItem(word, speak));
+      actions.append(speak);
       if (kind === "words" && word.language === "zh") {
         const translate = element("button", "ai-translate", word.ai_translations.length ? "Получить заново" : "Получить перевод");
         translate.type = "button";
@@ -340,6 +354,8 @@ if (typeof document !== "undefined") (() => {
     studyFinish.hidden = !complete;
     studyBack.hidden = total === 0;
     studyBack.disabled = busy || studyPosition === 0;
+    studySpeak.hidden = complete;
+    studySpeak.disabled = Boolean(studySpeak.speaking);
     studyNext.hidden = complete;
     studyLearned.hidden = complete;
     studyExplain.hidden = complete;
@@ -498,6 +514,73 @@ if (typeof document !== "undefined") (() => {
     }
   }
 
+  function requestSpeechAction(action, payload = {}) {
+    const requestId = crypto.randomUUID().replace(/-/gu, "");
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => finish(new Error("Расширение не ответило. Перезагрузите его на странице chrome://extensions.")), 10000);
+      function receive(event) {
+        const data = event.data;
+        if (event.source !== window || event.origin !== location.origin || !data
+          || data.type !== `${action}.result` || data.requestId !== requestId) return;
+        finish(data.ok ? data : new Error(data.error || "Не удалось запустить произношение"));
+      }
+      function finish(result) {
+        clearTimeout(timeout);
+        window.removeEventListener("message", receive);
+        result instanceof Error ? reject(result) : resolve(result);
+      }
+      window.addEventListener("message", receive);
+      window.postMessage({ type: action, requestId, ...payload }, location.origin);
+    });
+  }
+
+  function showSpeechStatus(text, error = false) {
+    speechStatus.textContent = text;
+    speechStatus.classList.toggle("error", error);
+  }
+
+  async function loadSpeechSettings() {
+    try {
+      const result = await requestSpeechAction("subsanywhere.speech.get");
+      if (Number.isFinite(Number(result.settings?.rate))) speechRate = Number(result.settings.rate);
+      speechRateControl.value = String(speechRate);
+      showSpeechStatus("");
+    } catch (error) {
+      showSpeechStatus(error.message, true);
+    }
+  }
+
+  async function saveSpeechRate() {
+    try {
+      const result = await requestSpeechAction("subsanywhere.speech.patch", { rate: Number(speechRateControl.value) });
+      speechRate = Number(result.settings?.rate) || speechRate;
+      speechRateControl.value = String(speechRate);
+      showSpeechStatus("Скорость сохранена");
+    } catch (error) {
+      speechRateControl.value = String(speechRate);
+      showSpeechStatus(error.message, true);
+    }
+  }
+
+  async function speakItem(item, button) {
+    const text = pronunciationText(item);
+    if (!text || button.speaking) return;
+    const label = button.textContent;
+    button.speaking = true;
+    button.disabled = true;
+    button.textContent = "🔊…";
+    showSpeechStatus("");
+    try {
+      await requestSpeechAction("subsanywhere.speech.speak", { text, language: item.language });
+    } catch (error) {
+      showSpeechStatus(error.message, true);
+    } finally {
+      button.speaking = false;
+      button.disabled = false;
+      button.textContent = label;
+    }
+  }
+
   function requestPanelAction(id, action) {
     const requestKind = kind;
     const requestId = crypto.randomUUID().replace(/-/gu, "");
@@ -578,6 +661,7 @@ if (typeof document !== "undefined") (() => {
   learnedTab.addEventListener("click", () => { view = "learned"; render(); });
   refresh.addEventListener("click", load);
   download.addEventListener("click", downloadWords);
+  speechRateControl.addEventListener("change", saveSpeechRate);
   deleteCancel.addEventListener("click", () => closeDeleteDialog());
   deleteConfirm.addEventListener("click", removeItem);
   deleteModal.addEventListener("click", (event) => { if (event.target === deleteModal) closeDeleteDialog(); });
@@ -602,6 +686,10 @@ if (typeof document !== "undefined") (() => {
   });
   studyStart.addEventListener("click", startStudy);
   studyExit.addEventListener("click", exitStudy);
+  studySpeak.addEventListener("click", () => {
+    const word = studyWords[studyPosition];
+    if (word) speakItem(word, studySpeak);
+  });
   studyBack.addEventListener("click", () => {
     studyPosition = previousStudyPosition(studyPosition, studyWords.length);
     studyExplanationOpen = false;
@@ -646,5 +734,6 @@ if (typeof document !== "undefined") (() => {
     if (word) openDeleteDialog(word, studyDelete);
   });
   window.addEventListener("focus", load);
+  loadSpeechSettings();
   load();
 })();

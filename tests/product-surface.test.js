@@ -47,8 +47,19 @@ test('manifest grants network access only to both AI providers and the fixed loc
     'https://api.openai.com/*',
     'http://127.0.0.1:43817/*',
   ]);
+  assert.ok(manifest.permissions.includes('tts'));
   assert.match(manifest.description, /оригинальн/i);
   assert.doesNotMatch(manifest.description, /две дорожки|находит/i);
+});
+
+test('pronunciation controls are exposed in extension settings and both learning views', async () => {
+  const [popup, words] = await Promise.all([
+    fs.readFile(new URL('../popup.html', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../local-server/web/index.html', import.meta.url), 'utf8'),
+  ]);
+  assert.match(popup, /id="speechRate"/);
+  assert.match(words, /id="speech-rate"/);
+  assert.match(words, /id="study-speak"[^>]*>🔊 Произнести/);
 });
 
 test('background protocol exposes local subtitle actions without page subtitle sampling', async () => {

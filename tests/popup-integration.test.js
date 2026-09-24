@@ -32,7 +32,7 @@ function makeDocument() {
     'controls', 'status', 'player', 'originalTrack',
     'fontSize', 'subtitleColor', 'subtitleBackground', 'subtitleBackgroundColor', 'subtitleBackgroundOpacity', 'subtitleBackgroundOpacityValue', 'fontSizeValue', 'externalList',
     'syncBox', 'syncTrack', 'offsetSeconds', 'timeScalePercent', 'activate', 'restartSearch', 'subtitleFile',
-    'aiProvider', 'aiKey', 'aiKeyLabel', 'aiModel', 'aiModelHint', 'loadAiModels', 'clearAiKey', 'saveAiSettings', 'aiKeyState',
+    'aiProvider', 'aiKey', 'aiKeyLabel', 'aiModel', 'aiModelHint', 'loadAiModels', 'clearAiKey', 'saveAiSettings', 'aiKeyState', 'speechRate',
     'youtubeSubtitles', 'youtubeSubtitleStatus', 'createYoutubeSubtitles',
     'youtubeProgressBox', 'youtubeProgress', 'youtubeProgressValue', 'youtubeProgressDetail', 'youtubeLanguage',
     'playerTab', 'appearanceTab', 'settingsTab', 'playerPanel', 'appearancePanel', 'settingsPanel',
@@ -75,6 +75,8 @@ async function bootPopup(overrides = {}, tab = { id: 77, url: 'https://video.exa
     'dualCaptions.state.get': () => ({ state: {} }),
     'dualCaptions.player.get': () => ({ players: [] }),
     'dualCaptions.ai.get': () => aiInfo(),
+    'dualCaptions.speech.settings.get': () => ({ settings: { rate: 0.8 } }),
+    'dualCaptions.speech.settings.patch': (message) => ({ settings: { rate: message.rate } }),
     'dualCaptions.state.patch': () => ({ state: {} }),
     ...overrides,
   };
@@ -208,6 +210,7 @@ test('production popup startup performs read-only hydration and never overwrites
         }
         if (message.type === 'dualCaptions.player.get') return { ok: true, data: { players: [] } };
         if (message.type === 'dualCaptions.ai.get') return { ok: true, data: { hasApiKey: false } };
+        if (message.type === 'dualCaptions.speech.settings.get') return { ok: true, data: { settings: { rate: 0.8 } } };
         throw new Error(`Unexpected startup write: ${message.type}`);
       },
     },
@@ -220,6 +223,7 @@ test('production popup startup performs read-only hydration and never overwrites
   assert.deepEqual(messages.map((message) => message.type).sort(), [
     'dualCaptions.ai.get',
     'dualCaptions.player.get',
+    'dualCaptions.speech.settings.get',
     'dualCaptions.state.get',
   ]);
   assert.equal(messages.find((message) => message.type === 'dualCaptions.state.get').pageKey, 'https://video.example/episode-1');

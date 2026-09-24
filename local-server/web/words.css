@@ -21,6 +21,10 @@ button:hover:not(:disabled) { background: #282c34; border-color: #727eac; }
 button:disabled { opacity: .55; cursor: wait; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .vocabulary { border: 1px solid var(--border); border-radius: 12px; background: #16181b; overflow: hidden; }
+.speech-toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+.speech-toolbar select { width: 150px; min-height: 32px; padding: 5px 9px; }
+#speech-status { min-width: 0; overflow-wrap: anywhere; }
+#speech-status.error { color: #f2b9b9; }
 .entity-tabs { display: flex; gap: 8px; padding: 14px 16px 10px; border-bottom: 1px solid var(--border); }
 .entity-tabs button { min-width: 124px; }
 .entity-tabs button[aria-selected="true"] { color: #f0f3ff; border-color: #707eb8; background: rgba(106, 121, 190, .18); }
@@ -47,7 +51,9 @@ h2 { margin: 0; font-size: 14px; font-weight: 500; }
 .word-translation { margin: 0; color: #d2d5dd; overflow-wrap: anywhere; white-space: pre-wrap; }
 .word-translation > p { margin: 0; }
 .word-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.explain, .ai-translate, .learned, .delete { min-height: 34px; padding: 5px 10px; font-size: 12px; }
+.speak, .explain, .ai-translate, .learned, .delete { min-height: 34px; padding: 5px 10px; font-size: 12px; }
+.speak { color: #e7ebff; border-color: #59669e; background: rgba(92, 106, 174, .16); }
+.speak:hover:not(:disabled) { color: #fff; border-color: #8799e7; background: rgba(104, 122, 202, .27); }
 .ai-translate { color: #dce2ff; border-color: #59669e; background: rgba(92, 106, 174, .16); }
 .ai-translate:hover:not(:disabled) { color: #fff; border-color: #8799e7; background: rgba(104, 122, 202, .27); }
 .delete { color: #ffc8c8; border-color: #75454a; background: rgba(145, 55, 64, .16); }
@@ -96,6 +102,7 @@ footer { margin-top: 24px; color: var(--muted); font-size: 12px; }
   main { padding: 14px 12px 20px; }
   .site-header { padding: 10px 12px; gap: 12px; }
   .toolbar { grid-template-columns: minmax(0, 1fr) auto; padding: 10px; }
+  .speech-toolbar { align-items: flex-start; flex-wrap: wrap; padding: 10px 12px; }
   .entity-tabs { padding: 10px 12px; }
   .entity-tabs button { min-width: 0; flex: 1; }
   #search { grid-column: 1 / -1; }
