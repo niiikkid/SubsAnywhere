@@ -21,6 +21,18 @@ export function studyPositionForWord(words = [], id) {
   return studyDeck(words).findIndex((word) => word.id === id);
 }
 
+export function removeStudyItem(words = [], position, id) {
+  const items = Array.isArray(words) ? words : [];
+  const safePosition = Number.isSafeInteger(position) ? Math.min(Math.max(position, 0), items.length) : 0;
+  const removedPosition = items.findIndex((word) => word?.id === id);
+  if (removedPosition < 0) return { words: items, position: safePosition };
+  const remaining = items.filter((word) => word?.id !== id);
+  return {
+    words: remaining,
+    position: Math.min(Math.max(safePosition - (removedPosition < safePosition ? 1 : 0), 0), remaining.length),
+  };
+}
+
 export function learningText(item, kind = "words") {
   if (!item || typeof item.text !== "string") return "";
   return kind === "sentences" && item.language === "zh" && typeof item.pinyin === "string"
@@ -145,7 +157,10 @@ if (typeof document !== "undefined") (() => {
   }
 
   function persistStudy() {
-    if (!studyWords.length) return;
+    if (!studyWords.length) {
+      clearSavedStudy();
+      return;
+    }
     try {
       localStorage.setItem(STUDY_STORAGE_KEYS[kind], JSON.stringify({ ids: studyWords.map(word => word.id), position: studyPosition }));
     } catch { /* Browser storage can be unavailable; the study itself still works. */ }
@@ -511,7 +526,13 @@ if (typeof document !== "undefined") (() => {
       if (fresh.some(item => item.id === target.word.id)) throw new Error("Словарь не подтвердил удаление.");
       if (target.kind === "sentences") sentences = fresh;
       else words = fresh;
-      clearSavedStudy(target.kind);
+      if (deletedDuringStudy) {
+        ({ words: studyWords, position: studyPosition } = removeStudyItem(studyWords, studyPosition, target.word.id));
+        studyExplanationOpen = false;
+        persistStudy();
+      } else {
+        clearSavedStudy(target.kind);
+      }
       removed = true;
       message(`${label} «${learningText(target.word, target.kind)}» удалено.`);
     } catch (error) {
@@ -521,17 +542,13 @@ if (typeof document !== "undefined") (() => {
       deleteCancel.disabled = false;
       deleteConfirm.disabled = false;
       if (removed) closeDeleteDialog({ restoreFocus: false });
-      if (removed && deletedDuringStudy) {
-        studyWords = [];
-        studyPosition = 0;
-        studyExplanationOpen = false;
-        studyMode.hidden = true;
-        entityTabs.hidden = false;
-        listControls.hidden = false;
-        wordPanel.hidden = false;
-      }
       render();
-      if (removed) search.focus();
+      if (deletedDuringStudy) {
+        renderStudy();
+        if (removed) (studyPosition >= studyWords.length ? studyRestart : studyWord).focus();
+      } else if (removed) {
+        search.focus();
+      }
     }
   }
 

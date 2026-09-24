@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  studyDeck, nextStudyPosition, previousStudyPosition, studyPositionForWord, learningText, pronunciationText, wordsTsv
+  studyDeck, nextStudyPosition, previousStudyPosition, studyPositionForWord, removeStudyItem, learningText, pronunciationText, wordsTsv
 } from '../local-server/web/words.js';
 
 const words = [
@@ -31,6 +31,13 @@ test('saved study word restores its exact unlearned card after a page reload', (
   assert.equal(studyPositionForWord(words, 3), 1);
   assert.equal(studyPositionForWord(words, 2), -1);
   assert.equal(studyPositionForWord(words, 999), -1);
+});
+
+test('deleting the active study word keeps the round open on the following word', () => {
+  assert.deepEqual(removeStudyItem(words, 1, 2), {
+    words: [words[0], words[2]],
+    position: 1,
+  });
 });
 
 test('Chinese saved sentences are learned through pinyin instead of Han characters', () => {
