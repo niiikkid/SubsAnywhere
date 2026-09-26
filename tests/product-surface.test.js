@@ -52,18 +52,12 @@ test('manifest grants network access only to both AI providers and the fixed loc
   assert.doesNotMatch(manifest.description, /две дорожки|находит/i);
 });
 
-test('pronunciation controls are exposed in extension settings and both learning views', async () => {
-  const [popup, words] = await Promise.all([
-    fs.readFile(new URL('../popup.html', import.meta.url), 'utf8'),
-    fs.readFile(new URL('../local-server/web/index.html', import.meta.url), 'utf8'),
-  ]);
+test('pronunciation controls remain available in extension settings without a study panel', async () => {
+  const popup = await fs.readFile(new URL('../popup.html', import.meta.url), 'utf8');
   assert.match(popup, /id="speechVoice"/);
   assert.match(popup, /id="speechRate"/);
   assert.match(popup, /id="speechPreview"/);
-  assert.match(words, /id="speech-voice"/);
-  assert.match(words, /id="speech-rate"/);
-  assert.match(words, /id="speech-preview"/);
-  assert.match(words, /id="study-speak"[^>]*>[\s\S]*?Произнести<\/button>/);
+  assert.doesNotMatch(popup, /id="openWords"|id="openReview"/);
 });
 
 test('background protocol exposes local subtitle actions without page subtitle sampling', async () => {
@@ -76,5 +70,6 @@ test('background protocol exposes local subtitle actions without page subtitle s
   assert.match(protocol, /LOCAL_SUBTITLE_GENERATE/);
   assert.match(protocol, /TRACK_UPSERT_LOCAL/);
   assert.doesNotMatch(protocol, /CONTENT_SAMPLE_TRACK|sampleTrack/);
+  assert.doesNotMatch(protocol, /WORDS_|SENTENCES_|PANEL_AI_|SENTENCE_EXPLAIN|WORD_TRANSLATE/);
   assert.match(background, /LocalSubtitleClient/);
 });

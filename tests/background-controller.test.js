@@ -138,64 +138,6 @@ test('popup loads the selected provider model catalog through the background cli
   });
 });
 
-test('sentence grammar is generated only from the trusted panel and saved after canonical lookup', async () => {
-  const sentence = {
-    id: 7, language: 'zh', text: '我已经吃过饭了。', pinyin: 'wǒ yǐjīng chī guò fàn le.',
-    translation: 'Я уже поел.', explanation: '', learned: false, created_at: '2026-01-01T00:00:00Z',
-  };
-  const calls = [];
-  const controller = new RuntimeBackgroundController(makeChrome(), new FakeStore(), {
-    vocabulary: {
-      async listSentences() { calls.push('list'); return { sentences: [sentence] }; },
-      async saveSentenceExplanation(id, explanation) {
-        calls.push(['save', id, explanation]);
-        return { sentence: { ...sentence, explanation } };
-      },
-    },
-    aiClient: {
-      async explainSentence(value) { calls.push(['ai', value.id]); return 'Короткий разбор грамматики.'; },
-    },
-  });
-  const panel = {
-    id: EXTENSION_ID, frameId: 0, url: 'http://127.0.0.1:43817/words',
-    tab: { id: 91, url: 'http://127.0.0.1:43817/words' },
-  };
-  const response = await controller.handle({ type: MESSAGE.SENTENCE_EXPLAIN, id: 7 }, panel);
-  assert.equal(response.ok, true);
-  assert.equal(response.data.sentence.explanation, 'Короткий разбор грамматики.');
-  assert.deepEqual(calls, ['list', ['ai', 7], ['save', 7, 'Короткий разбор грамматики.']]);
-  assert.equal((await controller.handle({ type: MESSAGE.SENTENCE_EXPLAIN, id: 7 }, {
-    ...panel, url: 'https://evil.example/', tab: { id: 91, url: 'https://evil.example/' },
-  })).ok, false);
-});
-
-test('AI translation variants for a Chinese word are generated from canonical storage only and saved separately', async () => {
-  const word = {
-    id: 5, language: 'zh', text: '行', pinyin: 'xíng', translation: 'старый перевод',
-    ai_translations: [], explanation: '', learned: false, created_at: '2026-01-01T00:00:00Z',
-  };
-  const translations = [{ translation: 'годится; можно', usage: 'когда что-то допустимо или подходит' }];
-  const calls = [];
-  const controller = new RuntimeBackgroundController(makeChrome(), new FakeStore(), {
-    vocabulary: {
-      async list() { calls.push('list'); return { words: [word] }; },
-      async saveAiTranslations(id, value) { calls.push(['save', id, value]); return { word: { ...word, ai_translations: value } }; },
-    },
-    aiClient: { async translateSavedChineseWord(value) { calls.push(['ai', value.id]); return translations; } },
-  });
-  const panel = {
-    id: EXTENSION_ID, frameId: 0, url: 'http://127.0.0.1:43817/words',
-    tab: { id: 91, url: 'http://127.0.0.1:43817/words' },
-  };
-
-  const response = await controller.handle({ type: MESSAGE.WORD_TRANSLATE, id: 5 }, panel);
-  assert.deepEqual(response, { ok: true, data: { word: { ...word, ai_translations: translations } } });
-  assert.deepEqual(calls, ['list', ['ai', 5], ['save', 5, translations]]);
-  assert.equal((await controller.handle({ type: MESSAGE.WORD_TRANSLATE, id: 5 }, {
-    ...panel, url: 'https://evil.example/', tab: { id: 91, url: 'https://evil.example/' },
-  })).ok, false);
-});
-
 test('the own popup page remains trusted when Chrome hosts it in an extension tab', async () => {
   const store = new FakeStore();
   const controller = new RuntimeBackgroundController(makeChrome(), store);
@@ -212,7 +154,7 @@ test('the own popup page remains trusted when Chrome hosts it in an extension ta
   assert.equal(embedded.ok, true);
 });
 
-test('speech settings are shared by the popup and trusted learning panel', async () => {
+test('speech settings and pronunciation remain available in the popup but not an untrusted page', async () => {
   const calls = [];
   const speech = {
     async getSettings() { calls.push('get'); return { rate: 0.8, voiceName: '' }; },
@@ -221,18 +163,13 @@ test('speech settings are shared by the popup and trusted learning panel', async
     async speak(value) { calls.push(['speak', value]); return { language: value.language, rate: 0.55, voiceName: 'Tingting' }; },
   };
   const controller = new RuntimeBackgroundController(makeChrome(), new FakeStore(), { speech });
-  const panel = {
-    id: EXTENSION_ID, frameId: 0, url: 'http://127.0.0.1:43817/words',
-    tab: { id: 91, url: 'http://127.0.0.1:43817/words' },
-  };
-
   assert.deepEqual(await controller.handle({ type: MESSAGE.SPEECH_SETTINGS_GET }, POPUP), {
     ok: true, data: { settings: { rate: 0.8, voiceName: '' }, voices: [{ voiceName: 'Tingting', lang: 'zh-CN' }] },
   });
-  assert.deepEqual(await controller.handle({ type: MESSAGE.SPEECH_SETTINGS_PATCH, rate: 0.55, voiceName: 'Tingting' }, panel), {
+  assert.deepEqual(await controller.handle({ type: MESSAGE.SPEECH_SETTINGS_PATCH, rate: 0.55, voiceName: 'Tingting' }, POPUP), {
     ok: true, data: { settings: { rate: 0.55, voiceName: 'Tingting' }, voices: [{ voiceName: 'Tingting', lang: 'zh-CN' }] },
   });
-  assert.deepEqual(await controller.handle({ type: MESSAGE.SPEECH_SPEAK, text: '你好', language: 'zh' }, panel), {
+  assert.deepEqual(await controller.handle({ type: MESSAGE.SPEECH_SPEAK, text: '你好', language: 'zh' }, POPUP), {
     ok: true, data: { language: 'zh', rate: 0.55, voiceName: 'Tingting' },
   });
   assert.deepEqual(calls, [
@@ -263,8 +200,8 @@ async function backgroundHarness(setAccessLevel) {
   const handled = [];
   const sandbox = {
     chrome, MESSAGE, failure, console, fetch() { throw new Error('No network in bootstrap tests'); },
-    StateStore: class {}, AiCredentialStore: class {}, AIClient: class {}, LocalSubtitleClient: class {}, VocabularyClient: class {},
-    SpeechService: class {}, PanelAiConfigStore: class {},
+    StateStore: class {}, AiCredentialStore: class {}, AIClient: class {}, LocalSubtitleClient: class {},
+    SpeechService: class {},
     BackgroundController: class {
       async handle(message) { handled.push(message); return { ok: true }; }
       async initialize() {}
@@ -1112,17 +1049,12 @@ test('completed discovery restores a same-URL replacement only after the stored 
 });
 
 test('the first selected action after a worker restart re-registers before authorization', async () => {
-  for (const type of [MESSAGE.CAPTION_TRANSLATE, MESSAGE.CONTENT_POSITION_PATCH, MESSAGE.TRACK_CACHE_BUILTIN,
-    MESSAGE.WORDS_LIST, MESSAGE.WORDS_SAVE, MESSAGE.SENTENCES_LIST, MESSAGE.SENTENCES_SAVE]) {
+  for (const type of [MESSAGE.CAPTION_TRANSLATE, MESSAGE.CONTENT_POSITION_PATCH, MESSAGE.TRACK_CACHE_BUILTIN]) {
     const { chrome, storage, pageKey, sender, player, report } = await persistedSelectedPlayer();
     let translations = 0;
     const controller = new RuntimeBackgroundController(chrome, new StateStore(storage), {
       discoveryTimeoutMs: 50,
       deepSeek: { async translateCaption() { translations += 1; return []; } },
-      vocabulary: {
-        async list() { return { words: [] }; }, async save(word) { return { word }; },
-        async listSentences() { return { sentences: [] }; }, async saveSentence(sentence) { return { sentence }; },
-      },
     });
     let handshakes = 0;
     chrome.onSend = async (tabId, message, options) => {
@@ -1133,8 +1065,6 @@ test('the first selected action after a worker restart re-registers before autho
       return controller.handle(report, sender);
     };
     const action = { type, text: 'After restart', secondLeft: 72, secondBottom: 27,
-      word: { language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет' },
-      sentence: { language: 'zh', text: '你好，世界！', pinyin: 'nǐ hǎo, shì jiè!', translation: 'Привет, мир!' },
       sourceKey: `${player.key}\u0000track-0`,
       track: { id: 'builtin-cache-snapshot', sourceType: 'builtin-cache', name: 'English',
         cues: [{ start: 1, end: 2, text: 'Saved caption' }] } };
@@ -1148,8 +1078,6 @@ test('the first selected action after a worker restart re-registers before autho
     assert.equal(state.settings.selectedPlayerKey, player.key);
     assert.equal(state.settings.fontSize, 31);
     assert.equal(translations, type === MESSAGE.CAPTION_TRANSLATE ? 1 : 0);
-    if (type === MESSAGE.WORDS_SAVE) assert.deepEqual(response.data.word, action.word);
-    if (type === MESSAGE.SENTENCES_SAVE) assert.deepEqual(response.data.sentence, action.sentence);
     if (type === MESSAGE.CONTENT_POSITION_PATCH) {
       assert.equal(state.settings.secondLeft, 72);
       assert.equal(state.settings.secondBottom, 27);

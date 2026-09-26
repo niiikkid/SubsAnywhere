@@ -632,6 +632,31 @@ class HttpSecurityTests(unittest.TestCase):
         self.assertEqual(self.request(path="/api/subtitles/generated?video_id=" + VIDEO + "&video_id=" + VIDEO,
                                      headers=headers)[0], 400)
 
+    def test_removed_vocabulary_routes_reject_requests_without_touching_legacy_db(self):
+        # Isolated fixture: never test against the user's existing database.
+        with tempfile.TemporaryDirectory() as directory:
+            database = pathlib.Path(directory) / "words.sqlite3"
+            database.write_bytes(b"legacy database fixture")
+            with mock.patch.dict(os.environ, {"SUBSANYWHERE_WORDS_DB": str(database)}):
+                host = f"127.0.0.1:{self.port}"
+                client = {"X-SubsAnywhere-Client": "extension-v1"}
+                same_origin = {**client, "Origin": f"http://{host}"}
+                extension_origin = "chrome-extension://" + "a" * 32
+                for path in ("/words", "/words/words.js", "/words/words.css",
+                             "/api/words", "/api/words/learned", "/api/words/analysis",
+                             "/api/sentences", "/api/sentences/analysis"):
+                    with self.subTest(path=path):
+                        self.assertEqual(self.request(path=path, headers=client)[0], 404)
+                        self.assertEqual(self.request(path=path, headers=same_origin)[0], 403)
+                        self.assertEqual(self.request(path=path, method="POST", headers=client)[0], 404)
+                        self.assertEqual(self.request(path=path, method="POST", headers=client, body=b"{}")[0], 413)
+                status, headers, _ = self.request(path="/api/words", method="OPTIONS", headers={
+                    "Origin": extension_origin, "Access-Control-Request-Method": "POST",
+                    "Access-Control-Request-Headers": "X-SubsAnywhere-Client, Content-Type"})
+                self.assertEqual(status, 403)
+                self.assertEqual(headers["Access-Control-Allow-Headers"], "X-SubsAnywhere-Client")
+            self.assertEqual(database.read_bytes(), b"legacy database fixture")
+
     def test_http_errors_never_expose_exception_text(self):
         self.service.generated.side_effect = RuntimeError("token=secret /private/key")
         status, _, body = self.request(headers={"X-SubsAnywhere-Client": "extension-v1"})

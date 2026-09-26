@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  AIClient,
   AiCredentialStore,
   buildAIRequest,
   buildModelListRequest,
@@ -534,97 +533,4 @@ test('Chinese source identity never truncates an oversized source into a savable
 test('punctuation-only labels cannot acquire savable Han through unique-match fallback', async () => {
   const { result } = await chineseGlossaryFixture('你好', 'nǐhǎo ,', [{ text: '你好', pinyin: ',', translation: 'запятая' }]);
   assert.equal(result.glossary.some((term) => 'text' in term), false);
-});
-
-test('word explanation uses the active provider and returns only a concise saved explanation', async () => {
-  const requests = [];
-  const client = new AIClient(async (url, options) => {
-    requests.push({ url, options });
-    return Response.json({ choices: [{ message: { content: JSON.stringify({
-      explanation: 'Nǐ hǎo — обычное приветствие. Nǐ значит «ты», hǎo — «хорошо». Подходит и знакомым, и незнакомым.',
-    }) } }] });
-  }, { async getActive() { return { provider: 'deepseek', apiKey: 'secret-key', model: 'deepseek-chat' }; } });
-
-  const explanation = await client.explainWord({
-    id: 1, language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет', learned: false,
-  });
-
-  assert.match(explanation, /обычное приветствие/);
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].url, 'https://api.deepseek.com/chat/completions');
-  assert.equal(JSON.parse(requests[0].options.body).messages[1].content, JSON.stringify({
-    language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет',
-  }));
-  assert.match(JSON.parse(requests[0].options.body).messages[0].content, /never write Han characters/i);
-});
-
-test('word explanation rejects Chinese characters instead of saving them', async () => {
-  const client = new AIClient(async () => Response.json({ choices: [{ message: { content: JSON.stringify({
-    explanation: '你好 — приветствие.',
-  }) } }] }), { async getActive() { return { provider: 'deepseek', apiKey: 'fixture-key', model: 'deepseek-chat' }; } });
-
-  await assert.rejects(client.explainWord({ language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'привет' }), /иероглифы/);
-});
-
-test('saved Chinese word translations use only its canonical Han and return distinct usage meanings', async () => {
-  const requests = [];
-  const client = new AIClient(async (url, options) => {
-    requests.push({ url, options });
-    return Response.json({ choices: [{ message: { content: JSON.stringify({ translations: [
-      { translation: 'идти; быть в движении', usage: 'о движении или ходе процесса' },
-      { translation: 'годится; можно', usage: 'когда что-то допустимо или подходит' },
-    ] }) } }] });
-  }, { async getActive() { return { provider: 'deepseek', apiKey: 'test-key', model: 'deepseek-chat' }; } });
-
-  const translations = await client.translateSavedChineseWord({
-    id: 5, language: 'zh', text: '行', pinyin: 'xíng', translation: 'старый перевод из видео', learned: false,
-  });
-
-  assert.deepEqual(translations, [
-    { translation: 'идти; быть в движении', usage: 'о движении или ходе процесса' },
-    { translation: 'годится; можно', usage: 'когда что-то допустимо или подходит' },
-  ]);
-  const body = JSON.parse(requests[0].options.body);
-  assert.deepEqual(JSON.parse(body.messages[1].content), { text: '行' });
-  assert.equal(body.messages[1].content.includes('старый перевод из видео'), false);
-  assert.match(body.messages[0].content, /one to three/i);
-});
-
-test('saved Chinese word translations reject empty, duplicate and oversized AI options', async () => {
-  for (const translations of [[], [{ translation: '', usage: 'контекст' }], [
-    { translation: 'можно', usage: 'о допустимости' }, { translation: 'Можно', usage: 'дубликат' },
-  ], Array.from({ length: 4 }, (_, index) => ({ translation: `значение ${index}`, usage: 'контекст' }))]) {
-    const client = new AIClient(async () => Response.json({ choices: [{ message: { content: JSON.stringify({ translations }) } }] }), {
-      async getActive() { return { provider: 'deepseek', apiKey: 'test-key', model: 'deepseek-chat' }; },
-    });
-    await assert.rejects(client.translateSavedChineseWord({
-      language: 'zh', text: '行', pinyin: 'xíng', translation: 'идти',
-    }), /перевод/iu);
-  }
-  const english = new AIClient(async () => { throw new Error('must not call'); }, {
-    async getActive() { return { provider: 'deepseek', apiKey: 'test-key', model: 'deepseek-chat' }; },
-  });
-  await assert.rejects(english.translateSavedChineseWord({ language: 'en', text: 'go', pinyin: '', translation: 'идти' }), /китайск/iu);
-});
-
-test('sentence explanation asks for a concise Russian grammar comparison and uses pinyin for Chinese', async () => {
-  const requests = [];
-  const client = new AIClient(async (url, options) => {
-    requests.push({ url, options });
-    return Response.json({ choices: [{ message: { content: JSON.stringify({
-      explanation: 'Yǐjīng и le показывают, что действие уже завершилось. По-русски это обычно передаётся словом «уже» и прошедшим временем.',
-    }) } }] });
-  }, { async getActive() { return { provider: 'deepseek', apiKey: 'fixture-key', model: 'deepseek-chat' }; } });
-
-  const explanation = await client.explainSentence({
-    language: 'zh', text: '我已经吃过饭了。', pinyin: 'wǒ yǐjīng chī guò fàn le.', translation: 'Я уже поел.',
-  });
-  assert.match(explanation, /Yǐjīng/iu);
-  const body = JSON.parse(requests[0].options.body);
-  assert.match(body.messages[0].content, /grammar/i);
-  assert.match(body.messages[0].content, /Russian-speaking learner/i);
-  assert.match(body.messages[0].content, /never write Han characters/i);
-  assert.deepEqual(JSON.parse(body.messages[1].content), {
-    language: 'zh', text: '我已经吃过饭了。', pinyin: 'wǒ yǐjīng chī guò fàn le.', translation: 'Я уже поел.',
-  });
 });

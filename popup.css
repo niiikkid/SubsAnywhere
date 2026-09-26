@@ -14,9 +14,6 @@ html.embedded .panel-window-controls { display: flex; }
 .section-tabs button { padding: 8px 4px; border-color: transparent; background: transparent; color: #aebbd3; font-size: 12px; }
 .section-tabs button[aria-selected="true"] { border-color: #647ab0; background: #293652; color: #fff; }
 .scope-note { padding: 2px 3px; }
-.words-link { display: block; margin: 0 0 10px; color: #c5d2ec; font-size: 12px; text-decoration: none; }
-.words-link:hover { color: #fff; text-decoration: underline; }
-.words-link:focus-visible { outline: 2px solid #89a6ff; outline-offset: 3px; border-radius: 3px; }
 .save-feedback { min-height: 22px; margin: 8px 0; color: #aabbdc; font-size: 11px; }
 .save-feedback p { margin: 0; }
 .save-feedback button { margin-top: 6px; font-size: 11px; }

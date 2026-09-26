@@ -190,38 +190,18 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
   }
 });
 
-test('inline cell saves only its own translation, highlights repeats and refreshes learned words', async () => {
+test('inline cells show their own meaning without save controls or vocabulary messages', async () => {
   const harness = await makeHarness();
   const source = 'nǐ hǎo, nǐ hǎo, shì jiè';
-  const word = { language: 'zh', text: '你好', pinyin: 'nǐ hǎo', translation: 'здравствуйте, приветствую вас' };
-  let words = [];
-  let rejectSave = true;
-  let translateCalls = 0;
-  let saves = 0;
-  let releaseList;
-  let firstList = true;
+  const messages = [];
   harness.context.chrome.runtime.sendMessage = async (message) => {
-    if (message.type === 'dualCaptions.words.list') {
-      if (firstList) {
-        firstList = false;
-        return new Promise((resolve) => { releaseList = resolve; });
-      }
-      return { ok: true, data: { words } };
-    }
-    if (message.type === 'dualCaptions.words.save') {
-      saves += 1;
-      assert.deepEqual(JSON.parse(JSON.stringify(message.word)), word);
-      if (rejectSave) return { ok: false, error: 'Запустите сервер Docker' };
-      words = [{ ...word, id: 1, learned: false }];
-      return { ok: true, data: { word: words[0] } };
-    }
+    messages.push(message.type);
     if (message.type !== 'dualCaptions.caption.translate') return { ok: true };
-    translateCalls += 1;
     return { ok: true, data: { items: [{ start: 0, end: source.length,
       dictionary: 'Полный перевод всей реплики', isSentenceTranslation: true,
-      glossary: [0, source.indexOf(word.pinyin, word.pinyin.length)].map((start) => ({
-        text: word.text, pinyin: word.pinyin, translation: word.translation,
-        pinyinStart: start, pinyinEnd: start + word.pinyin.length,
+      glossary: [0, source.indexOf('nǐ hǎo', 1)].map((start) => ({
+        text: '你好', pinyin: 'nǐ hǎo', translation: 'здравствуйте',
+        pinyinStart: start, pinyinEnd: start + 'nǐ hǎo'.length,
       })) }] } };
   };
   vm.runInContext(harness.runtimeSource, harness.context);
@@ -231,124 +211,33 @@ test('inline cell saves only its own translation, highlights repeats and refresh
   listener({ type: 'dualCaptions.content.fullState', settings,
     externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: `\u2063${source}\n\u2064你好，你好，世界` }] }],
   }, {}, () => {});
-  const flush = async () => { for (let index = 0; index < 15; index += 1) await Promise.resolve(); };
-  await flush();
-  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
-  const cells = () => overlay.children[0].children[0].children[1].children;
-  const click = (element) => element.dispatch('click', { stopPropagation() {} });
-  const allText = (element) => [element.textContent, ...element.children.map(allText)].join(' ');
-  click(cells()[0]);
-  let tooltip = overlay.children.at(-1);
-  assert.match(allText(tooltip), /здравствуйте, приветствую вас/);
-  assert.doesNotMatch(allText(tooltip), /Полный перевод всей реплики|Слова|Фразы/);
-  const save = tooltip.children.find((child) => child.className === 'dual-captions-save-word');
-  click(save);
-  await flush();
-  assert.match(allText(tooltip), /Docker/);
-  assert.equal(cells()[0].style.backgroundColor, '');
-  assert.equal(save.disabled, false);
-  rejectSave = false;
-  click(save);
-  click(save);
-  await flush();
-  assert.equal(saves, 2, 'Double click must not send two writes');
-  assert.equal(save.textContent, '✓ Сохранено');
-  releaseList({ ok: true, data: { words: [] } });
-  await flush();
-  for (const cell of cells().slice(0, 2)) {
-    assert.equal(cell.style.backgroundColor, 'rgba(80, 170, 115, .18)');
-    cell.dispatch('focus'); cell.dispatch('blur');
-    assert.equal(cell.style.backgroundColor, 'rgba(80, 170, 115, .18)');
-  }
-  words = [{ ...word, id: 1, learned: true }];
-  harness.context.dispatch('focus');
-  await flush();
-  for (const cell of cells().slice(0, 2)) {
-    assert.equal(cell.style.backgroundColor, 'rgba(74, 176, 184, .16)');
-    assert.equal(cell.style.borderColor, 'rgba(112, 202, 207, .4)');
-  }
-  click(cells()[2]);
-  tooltip = overlay.children.at(-1);
-  assert.match(allText(tooltip), /Перевод этой ячейки пока отсутствует/);
-  assert.doesNotMatch(allText(tooltip), /Полный перевод всей реплики/);
-  assert.equal(tooltip.children.find((child) => child.className === 'dual-captions-save-word').disabled, true);
-  listener({ type: 'dualCaptions.content.settings', settings: { ...settings, inlineTranslations: false } }, {}, () => {});
-  listener({ type: 'dualCaptions.content.settings', settings }, {}, () => {});
-  assert.equal(cells()[0].style.backgroundColor, 'rgba(74, 176, 184, .16)');
-  words = [];
-  harness.context.dispatch('focus');
-  await flush();
-  assert.equal(cells()[0].style.backgroundColor, '');
-  assert.equal(translateCalls, 1, 'Saving and refreshing must never request another AI translation');
-});
-
-test('a full Chinese sentence saves beside the Han line and marks the saved Han softly green', async () => {
-  const harness = await makeHarness();
-  const sentence = {
-    language: 'zh', text: '我已经吃过饭了。', pinyin: 'wǒ yǐjīng chī guò fàn le.', translation: 'Я уже поел.',
-  };
-  let sentences = [];
-  let saves = 0;
-  harness.context.chrome.runtime.sendMessage = async (message) => {
-    if (message.type === 'dualCaptions.sentences.list') return { ok: true, data: { sentences } };
-    if (message.type === 'dualCaptions.sentences.save') {
-      saves += 1;
-      assert.deepEqual(JSON.parse(JSON.stringify(message.sentence)), sentence);
-      sentences = [{ ...sentence, id: 7, learned: false, explanation: '' }];
-      return { ok: true, data: { sentence: sentences[0] } };
-    }
-    if (message.type === 'dualCaptions.words.list') return { ok: true, data: { words: [] } };
-    if (message.type === 'dualCaptions.caption.translate') return { ok: true, data: { items: [{
-      start: 0, end: sentence.pinyin.length, dictionary: sentence.translation, isSentenceTranslation: true, glossary: [],
-    }] } };
-    return { ok: true };
-  };
-  vm.runInContext(harness.runtimeSource, harness.context);
-  vm.runInContext(harness.contentSource, harness.context);
-  [...harness.onMessage.listeners][0]({ type: 'dualCaptions.content.fullState',
-    settings: { secondTrackId: 'external:mine', inlineTranslations: false },
-    externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: `\u2063${sentence.pinyin}\n\u2064${sentence.text}` }] }],
-  }, {}, () => {});
   for (let index = 0; index < 15; index += 1) await Promise.resolve();
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
-  const findClass = (node, className) => node.className === className ? node
-    : node.children.map((child) => findClass(child, className)).find(Boolean);
-  const button = findClass(overlay, 'dual-captions-save-sentence');
-  const characters = findClass(overlay, 'dual-captions-sentence-characters');
-  assert.ok(button);
-  assert.equal(button.textContent, 'Сохранить предложение');
-  assert.equal(characters.textContent, sentence.text);
-  button.dispatch('click', { stopPropagation() {} });
-  button.dispatch('click', { stopPropagation() {} });
-  for (let index = 0; index < 12; index += 1) await Promise.resolve();
-  assert.equal(saves, 1);
-  assert.equal(button.textContent, '✓ Предложение сохранено');
-  assert.equal(characters.style.color, 'rgba(151, 213, 169, .88)');
+  const cells = () => overlay.children[0].children[0].children[1].children;
+  cells()[0].dispatch('click', { stopPropagation() {} });
+  const tooltip = overlay.children.at(-1);
+  const tooltipText = (element) => [element.textContent, ...element.children.map(tooltipText)].join(' ');
+  assert.match(tooltipText(tooltip), /здравствуйте/);
+  assert.doesNotMatch(tooltipText(tooltip), /Полный перевод всей реплики/);
+  assert.equal(tooltip.children.some((child) => child.className === 'dual-captions-save-word'), false);
+  cells()[2].dispatch('click', { stopPropagation() {} });
+  assert.match(tooltipText(overlay.children.at(-1)), /Перевод этой ячейки пока отсутствует/);
+  listener({ type: 'dualCaptions.content.settings', settings: { ...settings, inlineTranslations: false } }, {}, () => {});
+  listener({ type: 'dualCaptions.content.settings', settings }, {}, () => {});
+  assert.equal(messages.filter((type) => type === 'dualCaptions.caption.translate').length, 1);
+  assert.equal(messages.some((type) => /dualCaptions\.(words|sentences)\./.test(type)), false);
 });
 
-test('a Han-only Chinese caption receives pinyin before its translation is saved for review', async () => {
+test('a Han-only Chinese caption receives pinyin and a translation without saving', async () => {
   const harness = await makeHarness();
-  const sentence = {
-    language: 'zh', text: '你好，世界', pinyin: 'nǐ hǎo, shì jiè', translation: 'Привет, мир',
-  };
-  const translations = [];
-  let saved;
+  const sentence = { text: '你好，世界', pinyin: 'nǐ hǎo, shì jiè', translation: 'Привет, мир' };
+  const messages = [];
   harness.context.chrome.runtime.sendMessage = async (message) => {
-    if (message.type === 'dualCaptions.words.list') return { ok: true, data: { words: [] } };
-    if (message.type === 'dualCaptions.sentences.list') return { ok: true, data: { sentences: saved ? [{ ...saved, id: 8, learned: false, explanation: '' }] : [] } };
-    if (message.type === 'dualCaptions.caption.translate') {
-      translations.push({ text: message.text, displayText: message.displayText, language: message.language });
-      return { ok: true, data: { items: [{
-        start: 0, end: sentence.pinyin.length, text: sentence.pinyin, dictionary: sentence.translation,
-        context: sentence.translation, isSentenceTranslation: true,
-        glossary: [{ text: '你好', pinyin: 'nǐ hǎo', translation: 'привет', pinyinStart: 0, pinyinEnd: 6 }],
-      }] } };
-    }
-    if (message.type === 'dualCaptions.sentences.save') {
-      saved = JSON.parse(JSON.stringify(message.sentence));
-      return { ok: true, data: { sentence: { ...saved, id: 8, learned: false, explanation: '' } } };
-    }
-    return { ok: true };
+    messages.push(message);
+    if (message.type !== 'dualCaptions.caption.translate') return { ok: true };
+    return { ok: true, data: { items: [{ start: 0, end: sentence.pinyin.length,
+      text: sentence.pinyin, dictionary: sentence.translation, isSentenceTranslation: true, glossary: [],
+    }] } };
   };
   vm.runInContext(harness.runtimeSource, harness.context);
   vm.runInContext(harness.contentSource, harness.context);
@@ -357,42 +246,29 @@ test('a Han-only Chinese caption receives pinyin before its translation is saved
     externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: sentence.text }] }],
   }, {}, () => {});
   for (let index = 0; index < 15; index += 1) await Promise.resolve();
-
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
   const findClass = (node, className) => node.className === className ? node
     : node.children.map((child) => findClass(child, className)).find(Boolean);
-  const button = findClass(overlay, 'dual-captions-save-sentence');
-  assert.deepEqual(translations, [{ text: sentence.text, displayText: '', language: 'zh' }]);
+  assert.deepEqual(messages.filter((message) => message.type === 'dualCaptions.caption.translate')
+    .map(({ text, displayText, language }) => ({ text, displayText, language })),
+  [{ text: sentence.text, displayText: '', language: 'zh' }]);
   assert.equal(overlay.children[0].children[0].children.map((child) => child.textContent).join(''), sentence.pinyin);
   assert.equal(findClass(overlay, 'dual-captions-sentence-characters').textContent, sentence.text);
-  button.dispatch('click', { stopPropagation() {} });
-  for (let index = 0; index < 12; index += 1) await Promise.resolve();
-  assert.deepEqual(saved, sentence);
+  assert.equal(findClass(overlay, 'dual-captions-save-sentence'), undefined);
+  assert.equal(messages.some((message) => /dualCaptions\.(words|sentences)\./.test(message.type)), false);
 });
 
-test('a Chinese translation replaces broken displayed pinyin before sentence review saves it', async () => {
+test('a Chinese translation replaces broken displayed pinyin without saving', async () => {
   const harness = await makeHarness();
   const sourcePinyin = 'ni hao shi jie';
-  const sentence = {
-    language: 'zh', text: '你好，世界', pinyin: 'nǐ hǎo, shì jiè', translation: 'Привет, мир',
-  };
+  const sentence = { text: '你好，世界', pinyin: 'nǐ hǎo, shì jiè', translation: 'Привет, мир' };
   const translations = [];
-  let saved;
   harness.context.chrome.runtime.sendMessage = async (message) => {
-    if (message.type === 'dualCaptions.words.list') return { ok: true, data: { words: [] } };
-    if (message.type === 'dualCaptions.sentences.list') return { ok: true, data: { sentences: [] } };
-    if (message.type === 'dualCaptions.caption.translate') {
-      translations.push({ text: message.text, displayText: message.displayText, language: message.language });
-      return { ok: true, data: { items: [{
-        start: 0, end: sentence.pinyin.length, text: sentence.pinyin, dictionary: sentence.translation,
-        context: sentence.translation, isSentenceTranslation: true, glossary: [],
-      }] } };
-    }
-    if (message.type === 'dualCaptions.sentences.save') {
-      saved = JSON.parse(JSON.stringify(message.sentence));
-      return { ok: true, data: { sentence: { ...saved, id: 9, learned: false, explanation: '' } } };
-    }
-    return { ok: true };
+    if (message.type !== 'dualCaptions.caption.translate') return { ok: true };
+    translations.push({ text: message.text, displayText: message.displayText, language: message.language });
+    return { ok: true, data: { items: [{ start: 0, end: sentence.pinyin.length,
+      text: sentence.pinyin, dictionary: sentence.translation, isSentenceTranslation: true, glossary: [],
+    }] } };
   };
   vm.runInContext(harness.runtimeSource, harness.context);
   vm.runInContext(harness.contentSource, harness.context);
@@ -401,21 +277,15 @@ test('a Chinese translation replaces broken displayed pinyin before sentence rev
     externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: `\u2063${sourcePinyin}\n\u2064${sentence.text}` }] }],
   }, {}, () => {});
   for (let index = 0; index < 15; index += 1) await Promise.resolve();
-
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
-  const findClass = (node, className) => node.className === className ? node
-    : node.children.map((child) => findClass(child, className)).find(Boolean);
   assert.deepEqual(translations, [{ text: sentence.text, displayText: sourcePinyin, language: 'zh' }]);
   assert.equal(overlay.children[0].children[0].children.map((child) => child.textContent).join(''), sentence.pinyin);
-  findClass(overlay, 'dual-captions-save-sentence').dispatch('click', { stopPropagation() {} });
-  for (let index = 0; index < 12; index += 1) await Promise.resolve();
-  assert.deepEqual(saved, sentence);
 });
 
-test('Chinese glossary without mapped Han still shows cell translation but cannot save guessed characters', async () => {
+test('Chinese glossary without mapped Han still shows cell translation without save controls', async () => {
   const harness = await makeHarness();
   harness.context.chrome.runtime.sendMessage = async (message) => {
-    if (message.type !== 'dualCaptions.caption.translate') return { ok: true, data: { words: [] } };
+    if (message.type !== 'dualCaptions.caption.translate') return { ok: true };
     return { ok: true, data: { items: [{ start: 0, end: 6, dictionary: 'Вся фраза',
       isSentenceTranslation: true, glossary: [{ pinyin: 'nǐ hǎo', translation: 'привет' }] }] } };
   };
@@ -430,7 +300,7 @@ test('Chinese glossary without mapped Han still shows cell translation but canno
   overlay.children[0].children[0].children[1].children[0].dispatch('click', { stopPropagation() {} });
   const tooltip = overlay.children.at(-1);
   assert.equal(tooltip.children[1].children[1].textContent, 'привет');
-  assert.equal(tooltip.children.find((child) => child.className === 'dual-captions-save-word').disabled, true);
+  assert.equal(tooltip.children.some((child) => child.className === 'dual-captions-save-word'), false);
 });
 
 test('inline pinyin cells hide grammatical meanings for untoned de, le, zhe and la', async () => {

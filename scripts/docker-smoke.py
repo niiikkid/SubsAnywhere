@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline Docker API/persistence smoke test in disposable, isolated volumes."""
+"""Offline Docker subtitle API/persistence smoke test in disposable, isolated volumes."""
 
 import json
 import os
@@ -64,25 +64,13 @@ path.write_text("1\\n00:00:01,000 --> 00:00:02,000\\n你好\\n", encoding="utf-8
         code, ready = request("/api/subtitles/generated?video_id=rwnyaH6cTDE", origin)
         assert code == 200 and ready["status"] == "ready", ready
         assert "nǐ hǎo" in ready["srt"] and "你好" in ready["srt"], ready
-        word = {"language": "zh", "text": "你好", "pinyin": "nǐ hǎo", "translation": "привет"}
-        code, saved = request("/api/words", origin, word)
-        assert code == 200 and saved["word"]["text"] == "你好", saved
-        assert request("/api/words", origin, word)[1] == saved
-        assert request("/api/words", "https://untrusted.example")[0] == 403
-        assert request("/api/words", origin)[1]["words"] == [saved["word"]]
+        assert request("/api/words", origin)[0] == 404
+        assert request("/api/sentences", origin)[0] == 404
         compose("restart", "subtitles")
         compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "90", "subtitles")
         assert request("/api/subtitles/generated?video_id=rwnyaH6cTDE", origin)[1]["srt"] == ready["srt"]
-        assert request("/api/words", origin)[1]["words"] == [saved["word"]]
-        panel_origin = f"http://127.0.0.1:{port}"
-        learned = {**saved["word"], "learned": True}
-        assert request("/api/words/learned", panel_origin, {"id": saved["word"]["id"], "learned": True}) == (200, {"word": learned})
-        assert request("/api/words", origin)[1]["words"] == [learned]
-        with urllib.request.urlopen(f"{panel_origin}/words", timeout=8) as panel:
-            assert panel.status == 200 and b'word-list' in panel.read()
-            assert "frame-ancestors 'none'" in panel.headers["Content-Security-Policy"]
-        print("PASS: Docker vocabulary save/readback/dedup, persistence across restart, panel same-origin learned marking and static assets.")
-        print("PASS: Docker health, non-root user, API validation, hostile-origin rejection, real pinyin conversion and SRT persistence across restart. No YouTube, AI or model downloads.")
+        assert request("/words", origin)[0] == 404
+        print("PASS: Docker health, non-root user, API validation, hostile-origin rejection, removed vocabulary routes, real pinyin conversion and SRT persistence across restart. No YouTube, AI or model downloads.")
         print(json.dumps(health, ensure_ascii=False))
     finally:
         # This project name is newly generated above. Never touch user volumes.

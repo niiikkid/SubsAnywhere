@@ -16,13 +16,14 @@ services:
       # safe: the server falls back to unauthenticated YouTube requests.
       SUBSANYWHERE_COOKIES_FILE: /run/cookies/youtube.txt
       SUBSANYWHERE_MAX_JOBS: "1"
-      SUBSANYWHERE_WORDS_DB: /data/words.sqlite3
       SUBSANYWHERE_ASR_MODEL: "${SUBSANYWHERE_ASR_MODEL:-auto}"
       # CPU/RAM are already budgeted below; do not divide cgroup limits again.
       SUBSANYWHERE_RESOURCE_FRACTION: "1"
       OMP_NUM_THREADS: "4"
       MKL_NUM_THREADS: "4"
     volumes:
+      # Retain the existing volume, including any legacy words.sqlite3.
+      # The subtitle service no longer opens the vocabulary database.
       - subtitles:/data
       - models:/models:ro
       - cookies:/run/cookies:ro

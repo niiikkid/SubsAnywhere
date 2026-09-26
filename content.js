@@ -11,10 +11,6 @@
     CONTENT_TRACKS: 'dualCaptions.content.tracks',
     TRACK_CACHE_BUILTIN: 'dualCaptions.track.cacheBuiltin',
     CONTENT_POSITION_PATCH: 'dualCaptions.content.positionPatch',
-    WORDS_LIST: 'dualCaptions.words.list',
-    WORDS_SAVE: 'dualCaptions.words.save',
-    SENTENCES_LIST: 'dualCaptions.sentences.list',
-    SENTENCES_SAVE: 'dualCaptions.sentences.save',
     SPEECH_SPEAK: 'dualCaptions.speech.speak',
 
     CONTENT_RESET: 'dualCaptions.content.reset',
@@ -69,20 +65,7 @@
       sentenceTranslationLine: null,
       characterLine: null,
       captionLayoutKey: '',
-      wordCells: [],
-      wordButton: null,
-      sentenceButton: null,
-      sentenceCharacters: null,
-      sentence: null,
     };
-    let savedWords = new Map();
-    let wordsRequest = null;
-    let lastWordsSync = -Infinity;
-    let wordsRevision = 0;
-    let savedSentences = new Map();
-    let sentencesRequest = null;
-    let lastSentencesSync = -Infinity;
-    let sentencesRevision = 0;
     const builtInTrackResolver = runtime.createBuiltInTrackResolver();
     const originalTrackModes = new Map();
     const localBuiltInTracks = new Map();
@@ -105,10 +88,6 @@
 
     function cancelPendingWork() {
       lifecycle += 1;
-      wordsRevision += 1;
-      sentencesRevision += 1;
-      lastWordsSync = -Infinity;
-      lastSentencesSync = -Infinity;
       queuedTranslations.length = 0;
       queuedTranslationSet.clear();
       clearTimeout(translationTimer);
@@ -208,91 +187,9 @@
       state.tooltip = null;
       state.tooltipItem = null;
       state.tooltipAnchor = null;
-      state.wordButton = null;
     }
 
-    function wordKey(word) {
-      if (!word) return '';
-      const clean = (value) => String(value ?? '').normalize('NFC').trim().replace(/\s+/gu, ' ');
-      return JSON.stringify([word.language, word.language === 'en' ? clean(word.text).toLowerCase() : clean(word.text),
-        clean(word.pinyin).toLowerCase()]);
-    }
-
-    function sentenceKey(sentence) {
-      return wordKey(sentence);
-    }
-
-    function updateSavedWords() {
-      for (const { cell, key } of state.wordCells) {
-        const word = key ? savedWords.get(key) : null;
-        const saved = Boolean(word);
-        const learned = word?.learned === true;
-        cell.style.backgroundColor = learned ? 'rgba(74, 176, 184, .16)' : (saved ? 'rgba(80, 170, 115, .18)' : '');
-        cell.style.borderColor = learned ? 'rgba(112, 202, 207, .4)' : (saved ? 'rgba(110, 195, 140, .42)' : '');
-        cell.setAttribute('data-word-saved', String(saved));
-        cell.setAttribute('data-word-learned', String(learned));
-      }
-      if (state.wordButton && !state.wordButton.saving) {
-        const saved = savedWords.has(wordKey(state.tooltipItem?.word));
-        state.wordButton.textContent = saved ? '✓ Сохранено' : 'Сохранить слово';
-        state.wordButton.disabled = saved || !state.tooltipItem?.word;
-      }
-    }
-
-    function syncWords(force = false) {
-      if (!state.active || destroyed || wordsRequest || (!force && Date.now() - lastWordsSync < 15000)) return;
-      lastWordsSync = Date.now();
-      const generation = lifecycle;
-      const revision = wordsRevision;
-      wordsRequest = Promise.resolve().then(() => sendMessage({ type: MESSAGE.WORDS_LIST }))
-        .then((response) => {
-          if (generation !== lifecycle || revision !== wordsRevision || destroyed
-            || !response?.ok || !Array.isArray(response.data?.words)) return;
-          savedWords = new Map(response.data.words.map((word) => [wordKey(word), word]));
-          updateSavedWords();
-        }).catch(() => undefined).finally(() => { wordsRequest = null; });
-    }
-
-    function updateSavedSentence() {
-      const saved = Boolean(state.sentence && savedSentences.has(sentenceKey(state.sentence)));
-      if (state.sentenceCharacters) {
-        state.sentenceCharacters.style.color = saved ? 'rgba(151, 213, 169, .88)' : 'inherit';
-        state.sentenceCharacters.style.opacity = saved ? '.88' : '.68';
-      }
-      if (state.sentenceButton && !state.sentenceButton.saving) {
-        state.sentenceButton.textContent = saved ? '✓ Предложение сохранено' : 'Сохранить предложение';
-        state.sentenceButton.disabled = saved || !state.sentence;
-      }
-    }
-
-    function syncSentences(force = false) {
-      if (!state.active || destroyed || sentencesRequest || (!force && Date.now() - lastSentencesSync < 15000)) return;
-      lastSentencesSync = Date.now();
-      const generation = lifecycle;
-      const revision = sentencesRevision;
-      sentencesRequest = Promise.resolve().then(() => sendMessage({ type: MESSAGE.SENTENCES_LIST }))
-        .then((response) => {
-          if (generation !== lifecycle || revision !== sentencesRevision || destroyed
-            || !response?.ok || !Array.isArray(response.data?.sentences)) return;
-          savedSentences = new Map(response.data.sentences.map((sentence) => [sentenceKey(sentence), sentence]));
-          updateSavedSentence();
-        }).catch(() => undefined).finally(() => { sentencesRequest = null; });
-    }
-
-    function captionSentence(descriptor, items) {
-      const sentenceItem = Array.isArray(items)
-        ? items.find((item) => item?.isSentenceTranslation && typeof item.dictionary === 'string' && item.dictionary.trim())
-        : null;
-      if (!sentenceItem) return null;
-      return {
-        language: descriptor.characters ? 'zh' : 'en',
-        text: descriptor.sourceText,
-        pinyin: descriptor.characters ? descriptor.displayText : '',
-        translation: sentenceItem.dictionary.trim(),
-      };
-    }
-
-    function appendSentenceButton(descriptor, items) {
+    function showSentenceSpeech(descriptor) {
       const speechText = descriptor.characters || descriptor.sourceText;
       const speechLanguage = descriptor.characters ? 'zh' : 'en';
       if (speechText && state.sentenceSpeakButton) {
@@ -300,93 +197,6 @@
         state.sentenceSpeechLanguage = speechLanguage;
         state.sentenceSpeakButton.style.display = 'grid';
       }
-      if (!descriptor.characters) {
-        state.sentence = null;
-        return;
-      }
-      state.sentence = captionSentence(descriptor, items);
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'dual-captions-save-sentence';
-      button.style.cssText = 'display:block;width:max-content;max-width:100%;margin:3px auto 0;padding:2px 7px;border:1px solid rgba(126,190,146,.38);border-radius:5px;background:rgba(66,120,82,.16);color:#dce8df;font:600 10px/1.25 Arial,sans-serif;white-space:normal;cursor:pointer;pointer-events:auto;';
-      button.addEventListener('click', async (event) => {
-        event.stopPropagation();
-        if (!state.sentence || button.disabled || button.saving) return;
-        const sentence = state.sentence;
-        const generation = lifecycle;
-        sentencesRevision += 1;
-        button.saving = true;
-        button.disabled = true;
-        button.textContent = 'Сохраняем предложение…';
-        try {
-          const response = await sendMessage({ type: MESSAGE.SENTENCES_SAVE, sentence });
-          if (!response?.ok || !response.data?.sentence) throw new Error(response?.error || 'Не удалось сохранить предложение');
-          if (generation !== lifecycle || destroyed) return;
-          savedSentences.set(sentenceKey(response.data.sentence), response.data.sentence);
-        } catch (error) {
-          button.failed = true;
-          button.title = error?.message || 'Не удалось сохранить предложение';
-        } finally {
-          button.saving = false;
-          sentencesRevision += 1;
-          if (generation === lifecycle && !destroyed) {
-            updateSavedSentence();
-            if (button.failed && !button.disabled) button.textContent = 'Не удалось сохранить — повторить';
-          }
-        }
-      });
-      state.second.append(button);
-      state.sentenceButton = button;
-      updateSavedSentence();
-    }
-
-    function cellWord(segment, descriptor) {
-      const term = segment.term;
-      if (!term || !segment.translation) return null;
-      if (descriptor.characters) {
-        if (typeof term.text !== 'string' || !/\p{Script=Han}/u.test(term.text)
-          || !descriptor.characters.includes(term.text) || typeof term.pinyin !== 'string') return null;
-        return { language: 'zh', text: term.text, pinyin: term.pinyin, translation: segment.translation };
-      }
-      return { language: 'en', text: segment.text, pinyin: '', translation: segment.translation };
-    }
-
-    function appendWordButton(tooltip, item) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'dual-captions-save-word';
-      button.style.cssText = 'display:block;margin-top:10px;padding:7px 10px;border:1px solid rgba(150,185,165,.4);border-radius:6px;background:rgba(100,155,120,.12);color:#e5ede8;font:600 12px/1.3 Arial,sans-serif;cursor:pointer;';
-      const status = document.createElement('div');
-      status.setAttribute('role', 'status');
-      status.style.cssText = 'margin-top:5px;font-size:11px;color:#c4cbd6;';
-      if (!item.word) status.textContent = item.dictionary === 'Перевод этой ячейки пока отсутствует'
-        ? 'Сохранение доступно после перевода.' : 'ИИ не указал иероглифы этой ячейки. Сохранение недоступно.';
-      button.addEventListener('click', async (event) => {
-        event.stopPropagation();
-        if (!item.word || button.disabled || button.saving) return;
-        const generation = lifecycle;
-        wordsRevision += 1;
-        button.saving = true;
-        button.disabled = true;
-        button.textContent = 'Сохраняем…';
-        status.textContent = '';
-        try {
-          const response = await sendMessage({ type: MESSAGE.WORDS_SAVE, word: item.word });
-          if (!response?.ok || !response.data?.word) throw new Error(response?.error || 'Не удалось сохранить слово. Проверьте сервер Docker');
-          if (generation !== lifecycle || destroyed) return;
-          savedWords.set(wordKey(response.data.word), response.data.word);
-          status.textContent = 'Добавлено в неизвестные слова';
-        } catch (error) {
-          if (generation === lifecycle && !destroyed) status.textContent = error.message || 'Не удалось сохранить слово';
-        } finally {
-          button.saving = false;
-          wordsRevision += 1;
-          if (generation === lifecycle && !destroyed) updateSavedWords();
-          if (state.tooltip === tooltip) positionTooltip();
-        }
-      });
-      tooltip.append(button, status);
-      state.wordButton = button;
     }
 
     function appendTooltipSpeechButton(tooltip, item) {
@@ -508,13 +318,10 @@
         tooltip.append(close, dictionary);
       }
       appendTooltipSpeechButton(tooltip, item);
-      if (item.isVocabularyCell) appendWordButton(tooltip, item);
       state.root.append(tooltip);
       state.tooltip = tooltip;
       state.tooltipItem = item;
       state.tooltipAnchor = anchor;
-      updateSavedWords();
-      if (item.isVocabularyCell) syncWords();
       positionTooltip();
     }
 
@@ -830,18 +637,14 @@
           cell.tabIndex = 0;
           cell.setAttribute('role', 'button');
           makeCaptionFocusable(cell);
-          const word = cellWord(segment, descriptor);
           const cellItem = {
             dictionary: segment.translation || 'Перевод этой ячейки пока отсутствует',
             isSentenceTranslation: true,
-            isVocabularyCell: true,
-            word,
-            speechText: word?.text || '',
-            speechLanguage: word?.language || '',
+            speechText: descriptor.characters ? segment.term?.text || '' : segment.text,
+            speechLanguage: descriptor.characters ? 'zh' : 'en',
           };
           cell.className = 'dual-captions-word-cell';
           cell.setAttribute('aria-label', `${segment.text}: ${cellItem.dictionary}`);
-          state.wordCells.push({ cell, key: wordKey(word) });
           const show = () => showTooltip(cellItem, cell);
           cell.addEventListener('click', (event) => { event.stopPropagation(); show(); });
           cell.addEventListener('keydown', (event) => {
@@ -860,7 +663,6 @@
         }
       }
       state.inlineCells = cells;
-      updateSavedWords();
       return true;
     }
 
@@ -890,13 +692,9 @@
       if (state.renderedCaptionKey === key && state.renderedCaptionItems === items) return;
       state.renderedCaptionKey = key;
       state.renderedCaptionItems = items;
-      state.wordCells = [];
       state.inlineCells = null;
       state.sentenceTranslationLine = null;
       state.characterLine = null;
-      state.sentenceButton = null;
-      state.sentenceCharacters = null;
-      state.sentence = null;
       state.captionLayoutKey = '';
       state.sentenceSpeechText = '';
       state.sentenceSpeechLanguage = '';
@@ -919,17 +717,16 @@
         characters.style.cssText = 'margin-top:2px;color:inherit;font-size:.72em;font-weight:600;line-height:1.15;opacity:.68;pointer-events:none;';
         state.second.append(target, characters);
         state.characterLine = characters;
-        state.sentenceCharacters = characters;
       }
       if (state.settings.inlineTranslations && items?.length) {
         if (renderInlineCaption(target, descriptor.displayText, items, descriptor)) {
-          appendSentenceButton(descriptor, items);
+          showSentenceSpeech(descriptor);
           return;
         }
       }
       if (!items || !items.length) {
         renderPendingCaption(target, descriptor.displayText, descriptor, failure);
-        appendSentenceButton(descriptor, items);
+        showSentenceSpeech(descriptor);
         if (!items && !failure) requestTranslation(descriptor, true);
         return;
       }
@@ -951,7 +748,7 @@
         target.append(phrase);
       }
       if (!descriptor.characters && !state.settings.inlineTranslations) appendEnglishSentenceTranslation(items);
-      appendSentenceButton(descriptor, items);
+      showSentenceSpeech(descriptor);
     }
 
     function restoreTrackMode(track) {
@@ -1093,8 +890,6 @@
         return;
       }
       ensureOverlay();
-      if (state.settings.inlineTranslations) syncWords();
-      syncSentences();
       for (const track of video.textTracks) {
         if (track.kind === 'subtitles' || track.kind === 'captions') {
           if (!originalTrackModes.has(track)) originalTrackModes.set(track, track.mode);
@@ -1190,7 +985,6 @@
         state.active = false;
         state.renderedCaptionKey = '';
         state.renderedCaptionItems = null;
-        state.wordCells = [];
         if (state.second) state.second.textContent = '';
         dismissTooltip();
         if (state.root) state.root.style.display = 'none';
@@ -1218,7 +1012,6 @@
 
     for (const [target, type, listener, options] of [
       [window, 'resize', positionOverlay],
-      [window, 'focus', () => { if (state.settings.inlineTranslations) syncWords(true); syncSentences(true); }],
       [window, 'scroll', positionOverlay, true],
       [document, 'fullscreenchange', positionOverlay],
       [document, 'webkitfullscreenchange', positionOverlay],

@@ -12,7 +12,6 @@ import re
 import shutil
 import signal
 import socket
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -28,7 +27,6 @@ from urllib.parse import parse_qs, urlparse
 
 from pinyin import bilingual_srt, contains_han
 from asr_models import nano_model_available, select_engine
-from words import MAX_WORD_BODY_BYTES, WordsStore, default_words_path
 
 VIDEO_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
 EXTENSION_ORIGIN_PATTERN = re.compile(r"chrome-extension://[a-p]{32}\Z")
@@ -911,27 +909,7 @@ class SubtitleService:
         }
 
 
-WORDS_ROUTES = frozenset({
-    "/api/words/analysis", "/api/sentences/analysis",
-    "/api/words", "/api/words/learned", "/api/words/explanation", "/api/words/ai-translations", "/api/words/delete",
-    "/api/sentences", "/api/sentences/learned", "/api/sentences/explanation", "/api/sentences/delete",
-})
-WORDS_DELETE_ROUTES = frozenset({"/api/words/delete", "/api/sentences/delete"})
-WORDS_ANALYSIS_ROUTES = frozenset({"/api/words/analysis", "/api/sentences/analysis"})
-# Full bounded 120-component analyses can exceed the ordinary capture limit.
-MAX_ANALYSIS_BODY_BYTES = 1024 * 1024
-WORDS_EXTENSION_WRITE_ROUTES = frozenset({"/api/words/ai-translations"}) | WORDS_ANALYSIS_ROUTES
-WORDS_ASSETS = {
-    "/words": ("index.html", "text/html; charset=utf-8"),
-    "/words/words.js": ("words.js", "text/javascript; charset=utf-8"),
-    "/words/words.css": ("words.css", "text/css; charset=utf-8"),
-}
-WORDS_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
-             "base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'")
-
-
-def handler_for(service, words_store=None):
-    vocabulary = words_store if words_store is not None else WordsStore(default_words_path())
+def handler_for(service):
 
     class SubtitleRequestHandler(BaseHTTPRequestHandler):
         server_version = "SubsAnywhereLocal/1"
@@ -961,41 +939,25 @@ def handler_for(service, words_store=None):
             mapped = re.fullmatch(r"(?:127\.0\.0\.1|localhost|\[::1\]):([0-9]{1,5})", host)
             valid_host = host in hosts or (self.server.server_address[0] in {"0.0.0.0", "::"}
                                            and mapped is not None and 1 <= int(mapped[1]) <= 65535)
-            # Only the vocabulary surface accepts the local browser origin.
-            # Do not grant the panel any new access to subtitle/job endpoints.
-            panel_origin = (self.path in WORDS_ROUTES or self.path in WORDS_ASSETS) and origins == [f"http://{host}"]
             if (len(self.headers.get_all("Host", [])) != 1 or not valid_host
-                    or len(origins) > 1 or (origins and not panel_origin and not EXTENSION_ORIGIN_PATTERN.fullmatch(origins[0]))):
+                    or len(origins) > 1 or (origins and not EXTENSION_ORIGIN_PATTERN.fullmatch(origins[0]))):
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden host or origin"}, cors=False)
                 return False
             lengths = self.headers.get_all("Content-Length", [])
             if self.headers.get_all("Transfer-Encoding") or len(lengths) > 1 or (lengths and not re.fullmatch(r"[0-9]{1,10}", lengths[0])):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid request framing"})
                 return False
-            # JSON bodies are limited to the exact learning-panel POST routes.
-            # Subtitle endpoints retain their no-body contract.
-            words_post = self.command == "POST" and self.path in WORDS_ROUTES
-            if words_post and not lengths:
-                self._send_json(HTTPStatus.LENGTH_REQUIRED, {"error": "Content-Length required"})
-                return False
-            body_limit = (MAX_ANALYSIS_BODY_BYTES if self.path in WORDS_ANALYSIS_ROUTES else MAX_WORD_BODY_BYTES) if words_post else 0
-            if lengths and int(lengths[0]) > body_limit:
-                self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {
-                    "error": "Vocabulary body too large" if words_post else "Request bodies are not accepted"
-                })
+            if lengths and int(lengths[0]) > 0:
+                self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "Request bodies are not accepted"})
                 return False
             return True
 
         def do_OPTIONS(self) -> None:
             origin = self.headers.get("Origin", "")
             requested_headers = {name.strip().lower() for name in self.headers.get("Access-Control-Request-Headers", "").split(",") if name.strip()}
-            allowed_headers = {"x-subsanywhere-client"}
-            if self.path in WORDS_ROUTES:
-                allowed_headers.add("content-type")
-            if (self.path in WORDS_DELETE_ROUTES
-                    or not EXTENSION_ORIGIN_PATTERN.fullmatch(origin)
+            if (not EXTENSION_ORIGIN_PATTERN.fullmatch(origin)
                     or self.headers.get("Access-Control-Request-Method", "GET") not in {"GET", "POST"}
-                    or not requested_headers.issubset(allowed_headers)):
+                    or not requested_headers.issubset({"x-subsanywhere-client"})):
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden origin"})
                 return
             self.send_response(HTTPStatus.NO_CONTENT)
@@ -1003,9 +965,6 @@ def handler_for(service, words_store=None):
             self.end_headers()
 
         def do_GET(self) -> None:
-            if self.path in WORDS_ASSETS:
-                self._send_words_asset()
-                return
             parsed = urlparse(self.path)
             if parsed.path == "/health":
                 payload = service.health() if hasattr(service, "health") else {"ok": True, "service": "subsanywhere", "api_version": 1}
@@ -1013,9 +972,6 @@ def handler_for(service, words_store=None):
                 return
             if not self._authorized():
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden client"})
-                return
-            if self.path in {"/api/words", "/api/sentences"}:
-                self._run_words(write=False)
                 return
             actions = {
                 "/api/subtitles/existing": getattr(service, "existing_job", service.existing),
@@ -1025,151 +981,12 @@ def handler_for(service, words_store=None):
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
-            if self.path in WORDS_DELETE_ROUTES and not self._panel_authorized():
-                self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden client"})
-                return
-            if (self.path in WORDS_EXTENSION_WRITE_ROUTES
-                    and not EXTENSION_ORIGIN_PATTERN.fullmatch(self.headers.get("Origin", ""))):
-                self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden client"})
-                return
             if not self._authorized():
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden client"})
-                return
-            if self.path in WORDS_ROUTES:
-                content_types = self.headers.get_all("Content-Type", [])
-                if len(content_types) != 1 or not re.fullmatch(
-                    r'application/json(?:\s*;\s*charset=(?:utf-8|"utf-8"))?', content_types[0], re.IGNORECASE
-                ):
-                    self._send_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "Expected application/json (UTF-8)"})
-                    return
-                self._run_words(write=True)
                 return
             action = {"/api/subtitles/generate": service.generate,
                       "/api/subtitles/cancel": getattr(service, "cancel", None)}.get(parsed.path)
             self._run_action(action, parsed)
-
-        def _run_words(self, *, write: bool) -> None:
-            try:
-                if not write:
-                    payload = ({"sentences": vocabulary.list_sentences()} if self.path == "/api/sentences"
-                               else {"words": vocabulary.list()})
-                else:
-                    length = int(self.headers["Content-Length"])
-                    try:
-                        body = self.rfile.read(length)
-                    except (TimeoutError, ConnectionError) as error:
-                        raise ValueError("Incomplete JSON body") from error
-                    if len(body) != length:
-                        raise ValueError("Incomplete JSON body")
-
-                    def unique_object(pairs):
-                        result = {}
-                        for key, value in pairs:
-                            if key in result:
-                                raise ValueError("Duplicate JSON field")
-                            result[key] = value
-                        return result
-
-                    def reject_constant(value):
-                        raise ValueError("Invalid JSON constant")
-
-                    data = json.loads(body.decode("utf-8"), object_pairs_hook=unique_object, parse_constant=reject_constant)
-                    if self.path == "/api/words":
-                        payload = {"word": vocabulary.add(data)}
-                    elif self.path in WORDS_ANALYSIS_ROUTES:
-                        if not isinstance(data, dict) or set(data) != {"id", "analysis"}:
-                            raise ValueError("Expected ID and analysis")
-                        sentence = self.path == "/api/sentences/analysis"
-                        save = vocabulary.set_sentence_analysis if sentence else vocabulary.set_analysis
-                        result = save(data["id"], data["analysis"])
-                        if result is None:
-                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Chinese entry not found"})
-                            return
-                        payload = {"sentence" if sentence else "word": result}
-                    elif self.path == "/api/words/learned":
-                        if not isinstance(data, dict) or set(data) != {"id", "learned"} or type(data["learned"]) is not bool:
-                            raise ValueError("Expected word ID and learned state")
-                        word = vocabulary.set_learned(data["id"], data["learned"])
-                        if word is None:
-                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Word not found"})
-                            return
-                        payload = {"word": word}
-                    elif self.path == "/api/words/explanation":
-                        if not isinstance(data, dict) or set(data) != {"id", "explanation"}:
-                            raise ValueError("Expected word ID and explanation")
-                        word = vocabulary.set_explanation(data["id"], data["explanation"])
-                        if word is None:
-                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Word not found"})
-                            return
-                        payload = {"word": word}
-                    elif self.path == "/api/words/ai-translations":
-                        if not isinstance(data, dict) or set(data) != {"id", "translations"}:
-                            raise ValueError("Expected word ID and AI translations")
-                        word = vocabulary.set_ai_translations(data["id"], data["translations"])
-                        if word is None:
-                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Chinese word not found"})
-                            return
-                        payload = {"word": word}
-                    elif self.path == "/api/words/delete":
-                        if not isinstance(data, dict) or set(data) != {"id"}:
-                            raise ValueError("Expected word ID")
-                        if not vocabulary.remove(data["id"]):
-                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Word not found"})
-                            return
-                        payload = {"deleted": True}
-                    elif self.path == "/api/sentences":
-                        payload = {"sentence": vocabulary.add_sentence(data)}
-                    elif self.path == "/api/sentences/learned":
-                        if not isinstance(data, dict) or set(data) != {"id", "learned"} or type(data["learned"]) is not bool:
-                            raise ValueError("Expected sentence ID and learned state")
-                        sentence = vocabulary.set_sentence_learned(data["id"], data["learned"])
-                        if sentence is None:
-                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Sentence not found"})
-                            return
-                        payload = {"sentence": sentence}
-                    elif self.path == "/api/sentences/explanation":
-                        if not isinstance(data, dict) or set(data) != {"id", "explanation"}:
-                            raise ValueError("Expected sentence ID and explanation")
-                        sentence = vocabulary.set_sentence_explanation(data["id"], data["explanation"])
-                        if sentence is None:
-                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Sentence not found"})
-                            return
-                        payload = {"sentence": sentence}
-                    else:
-                        if not isinstance(data, dict) or set(data) != {"id"}:
-                            raise ValueError("Expected sentence ID")
-                        if not vocabulary.remove_sentence(data["id"]):
-                            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Sentence not found"})
-                            return
-                        payload = {"deleted": True}
-                self._send_json(HTTPStatus.OK, payload)
-            except (ValueError, RecursionError):
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid vocabulary fields or JSON"})
-            except (OSError, sqlite3.Error):
-                self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Vocabulary storage unavailable"})
-
-        def _send_words_asset(self) -> None:
-            # Fixed trusted filenames only; never turn request text into a path.
-            name, content_type = WORDS_ASSETS[self.path]
-            try:
-                body = (Path(__file__).with_name("web") / name).read_bytes()
-            except OSError:
-                self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Vocabulary panel unavailable"})
-                return
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Content-Security-Policy", WORDS_CSP)
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("X-Frame-Options", "DENY")
-            self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Connection", "close")
-            self.end_headers()
-            try:
-                self.wfile.write(body)
-            except (BrokenPipeError, ConnectionResetError, TimeoutError):
-                pass
 
         def _run_action(self, action, parsed) -> None:
             if action is None:
@@ -1199,10 +1016,6 @@ def handler_for(service, words_store=None):
         def _authorized(self) -> bool:
             return self.headers.get_all("X-SubsAnywhere-Client", []) == ["extension-v1"]
 
-        def _panel_authorized(self) -> bool:
-            host = self.headers.get("Host", "").lower()
-            return self._authorized() and self.headers.get_all("Origin", []) == [f"http://{host}"]
-
         def _send_json(self, status: HTTPStatus, payload: dict, cors=True) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
@@ -1228,8 +1041,7 @@ def handler_for(service, words_store=None):
         def _cors_headers(self, origin: str) -> None:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            allowed = "X-SubsAnywhere-Client, Content-Type" if self.path in WORDS_ROUTES else "X-SubsAnywhere-Client"
-            self.send_header("Access-Control-Allow-Headers", allowed)
+            self.send_header("Access-Control-Allow-Headers", "X-SubsAnywhere-Client")
             self.send_header("Vary", "Origin")
 
         def log_message(self, format: str, *args) -> None:
@@ -1279,8 +1091,8 @@ class BoundedHTTPServer(ThreadingHTTPServer):
         print("Local HTTP request failed", file=sys.stderr)
 
 
-def create_server(service, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, max_requests=16, words_store=None) -> BoundedHTTPServer:
-    return BoundedHTTPServer((host, port), handler_for(service, words_store), max_requests)
+def create_server(service, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, max_requests=16) -> BoundedHTTPServer:
+    return BoundedHTTPServer((host, port), handler_for(service), max_requests)
 
 
 def parse_args(argv=None):

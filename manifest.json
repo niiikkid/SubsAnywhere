@@ -9,10 +9,6 @@
   "optional_host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js", "type": "module" },
   "content_scripts": [{
-    "matches": ["http://127.0.0.1:43817/*"],
-    "js": ["words-bridge.js"],
-    "run_at": "document_start"
-  }, {
     "matches": ["http://*/*", "https://*/*"],
     "js": ["panel-layout.js", "panel-host.js"],
     "run_at": "document_idle"
