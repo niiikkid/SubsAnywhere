@@ -33,7 +33,7 @@ function makeDocument() {
     'fontSize', 'subtitleColor', 'subtitleBackground', 'subtitleBackgroundColor', 'subtitleBackgroundOpacity', 'subtitleBackgroundOpacityValue', 'fontSizeValue', 'externalList',
     'syncBox', 'syncTrack', 'offsetSeconds', 'timeScalePercent', 'activate', 'restartSearch', 'subtitleFile',
     'aiProvider', 'aiKey', 'aiKeyLabel', 'aiModel', 'aiModelHint', 'loadAiModels', 'clearAiKey', 'saveAiSettings', 'aiKeyState', 'speechVoice', 'speechRate', 'speechPreview',
-    'youtubeSubtitles', 'youtubeSubtitleStatus', 'createYoutubeSubtitles',
+    'youtubeSubtitles', 'youtubeSubtitleStatus', 'createYoutubeSubtitles', 'cancelYoutubeSubtitles',
     'youtubeProgressBox', 'youtubeProgress', 'youtubeProgressValue', 'youtubeProgressDetail', 'youtubeLanguage',
     'playerTab', 'appearanceTab', 'settingsTab', 'playerPanel', 'appearancePanel', 'settingsPanel',
     'subtitlePreview', 'inlineTranslations', 'saveStatus', 'retrySave', 'retryYoutubeSubtitles', 'retrySettings', 'pageScope',
@@ -579,6 +579,21 @@ test('interrupted generation is an error and server retry resumes status without
   assert.equal(elements.retryYoutubeSubtitles.hidden, true);
   assert.equal(messages.filter((message) => message.type === 'dualCaptions.localSubtitle.status').length, 2);
   assert.equal(messages.some((message) => message.type === 'dualCaptions.localSubtitle.generate'), false);
+});
+
+test('cancel stops a resumed server job and hides its progress', async () => {
+  const { elements, messages } = await bootPopup({
+    'dualCaptions.localSubtitle.status': () => ({ status: 'running', stage: 'recognizing', progress: 25 }),
+    'dualCaptions.localSubtitle.cancel': () => ({ status: 'error', error_code: 'cancelled', error: 'Generation cancelled' }),
+  }, { id: 88, url: 'https://www.youtube.com/watch?v=3FwnU94RnUM' });
+  assert.equal(elements.cancelYoutubeSubtitles.hidden, false);
+  assert.equal(elements.createYoutubeSubtitles.disabled, true);
+  elements.cancelYoutubeSubtitles.listeners.get('click')();
+  await tick();
+  assert.equal(messages.filter((message) => message.type === 'dualCaptions.localSubtitle.cancel').length, 1);
+  assert.equal(elements.cancelYoutubeSubtitles.hidden, true);
+  assert.equal(elements.createYoutubeSubtitles.disabled, false);
+  assert.match(elements.youtubeSubtitleStatus.textContent, /остановлено/);
 });
 
 test('a stale generation failure cannot hide a ready YouTube subtitle track', async () => {

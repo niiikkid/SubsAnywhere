@@ -121,6 +121,21 @@ test('generation forwards supported languages and defaults blank to Chinese', as
   assert.equal(new URL(calls.at(-1).url).searchParams.has('language'), false);
 });
 
+test('cancel sends a validated POST for the same video and accepts a cancelled job', async () => {
+  const calls = [];
+  const client = new LocalSubtitleClient(async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, json: async () => ({ status: 'error', error_code: 'cancelled', error: 'Generation cancelled' }) };
+  });
+  const result = await client.cancel('0Zaxca2sUGs');
+  assert.equal(result.status, 'error');
+  assert.match(result.error, /остановлено/);
+  assert.equal(new URL(calls[0].url).pathname, '/api/subtitles/cancel');
+  assert.equal(calls[0].options.method, 'POST');
+  await assert.rejects(() => client.cancel('../escape'), /YouTube video ID/i);
+  assert.equal(calls.length, 1);
+});
+
 test('local requests reject malformed success payloads rather than silently stopping polling', async () => {
   const client = new LocalSubtitleClient(async () => ({ ok: true, json: async () => ({ status: 'unknown' }) }));
   await assert.rejects(() => client.status('rwnyaH6cTDE'), /неверный ответ/);
@@ -139,12 +154,14 @@ test('local requests carry bounded abort signals and never follow redirects', as
   assert.equal(captured.cache, 'no-store');
 });
 
-test('server restart and resource failures explain recovery in Russian', async () => {
+test('stored generation errors remain status results so saved YouTube captions can still load', async () => {
   const client = new LocalSubtitleClient(async () => ({
     ok: true,
     json: async () => ({ status: 'error', error_code: 'interrupted', error: 'Generation interrupted by server restart; retry.' }),
   }));
-  await assert.rejects(() => client.status('rwnyaH6cTDE'), /Сервер перезапущен.*запустите.*заново/i);
+  const result = await client.status('rwnyaH6cTDE');
+  assert.equal(result.status, 'error');
+  assert.match(result.error, /Сервер перезапущен.*запустите.*заново/i);
 });
 
 test('memory-limit errors explain model and limit recovery without losing saved subtitles', async () => {
@@ -152,5 +169,16 @@ test('memory-limit errors explain model and limit recovery without losing saved 
     ok: true,
     json: async () => ({ status: 'error', error_code: 'resource_limit', error: 'Memory limit exceeded' }),
   }));
-  await assert.rejects(() => client.status('rwnyaH6cTDE'), /меньшую модель.*увеличьте лимит.*Прежние.*сохранены/);
+  const result = await client.status('rwnyaH6cTDE');
+  assert.equal(result.status, 'error');
+  assert.match(result.error, /меньшую модель.*увеличьте лимит.*Прежние.*сохранены/);
+});
+
+test('HTTP errors still reject instead of becoming saved job statuses', async () => {
+  const client = new LocalSubtitleClient(async () => ({
+    ok: false,
+    status: 503,
+    json: async () => ({ status: 'error', error_code: 'busy', error: 'Server busy' }),
+  }));
+  await assert.rejects(() => client.status('rwnyaH6cTDE'), /Сервер занят/);
 });

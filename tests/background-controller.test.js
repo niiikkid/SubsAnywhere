@@ -108,7 +108,7 @@ test('content cannot invoke popup-only credential, state, discovery or local-job
   const controller = new BackgroundController(makeChrome(), store, { credentialStore });
   const before = structuredClone(store.state);
   for (const type of [MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.AI_MODELS_GET, MESSAGE.STATE_GET, MESSAGE.STATE_PATCH,
-    MESSAGE.PLAYER_GET, MESSAGE.PLAYER_DISCOVER, MESSAGE.LOCAL_SUBTITLE_GENERATE, MESSAGE.TRACK_REMOVE]) {
+    MESSAGE.PLAYER_GET, MESSAGE.PLAYER_DISCOVER, MESSAGE.LOCAL_SUBTITLE_GENERATE, MESSAGE.LOCAL_SUBTITLE_CANCEL, MESSAGE.TRACK_REMOVE]) {
     const response = await controller.handle({ type, tabId: 77, pageKey: 'https://private.example/', patch: { fontSize: 48 }, apiKey: 'not-a-real-key' }, { tab: { id: 3 }, frameId: 8 });
     assert.equal(response.ok, false, type);
   }
@@ -1193,20 +1193,24 @@ test('background forwards explicit YouTube subtitle actions to the local client'
   const localSubtitles = {
     async existing(videoId) { calls.push(['existing', videoId]); return { status: 'ready' }; },
     async generate(videoId, language) { calls.push(['generate', videoId, language]); return { status: 'running' }; },
+    async cancel(videoId) { calls.push(['cancel', videoId]); return { status: 'error', error_code: 'cancelled' }; },
     async status(videoId) { calls.push(['status', videoId]); return { status: 'missing' }; },
   };
   const controller = new BackgroundController(makeChrome(), new FakeStore(), { localSubtitles });
 
   const existing = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_EXISTING, videoId: 'rwnyaH6cTDE' });
   const generated = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_GENERATE, videoId: 'rwnyaH6cTDE', language: 'en' });
+  const cancelled = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_CANCEL, videoId: 'rwnyaH6cTDE' });
   const status = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_STATUS, videoId: 'rwnyaH6cTDE' });
 
   assert.equal(existing.ok, true);
   assert.equal(generated.data.status, 'running');
+  assert.equal(cancelled.data.error_code, 'cancelled');
   assert.equal(status.data.status, 'missing');
   assert.deepEqual(calls, [
     ['existing', 'rwnyaH6cTDE'],
     ['generate', 'rwnyaH6cTDE', 'en'],
+    ['cancel', 'rwnyaH6cTDE'],
     ['status', 'rwnyaH6cTDE'],
   ]);
 });

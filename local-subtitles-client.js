@@ -108,6 +108,10 @@ export class LocalSubtitleClient {
     return this.#request('/api/subtitles/generate', videoId, 'POST', language || 'zh');
   }
 
+  cancel(videoId) {
+    return this.#request('/api/subtitles/cancel', videoId, 'POST');
+  }
+
   status(videoId) {
     return this.#request('/api/subtitles/generated', videoId);
   }
@@ -139,13 +143,15 @@ export class LocalSubtitleClient {
     } catch {
       throw new Error('Локальный сервер вернул неверный ответ');
     }
-    if (!response.ok || payload?.error) {
+    if (!response.ok || (payload?.error && payload.status !== 'error')) {
       throw new Error(SERVER_ERRORS[payload?.error_code] || payload?.error || `Локальный сервер вернул ошибку ${response.status}`);
     }
     if (!payload || !['ready', 'running', 'missing', 'error'].includes(payload.status)
       || (payload.status === 'ready' && (typeof payload.srt !== 'string' || !payload.srt.trim()))) {
       throw new Error('Локальный сервер вернул неверный ответ');
     }
-    return payload;
+    return payload.status === 'error'
+      ? { ...payload, error: SERVER_ERRORS[payload.error_code] || payload.error || 'Не удалось обработать видео' }
+      : payload;
   }
 }

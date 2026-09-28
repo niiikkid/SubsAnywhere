@@ -210,6 +210,8 @@ function youtubeFailure(error, canGenerate = false, epoch = youtubeEpoch) {
 function drawYoutubeProgress(payload) {
   const progress = formatGenerationProgress(payload);
   $('youtubeProgressBox').hidden = !progress.visible;
+  $('cancelYoutubeSubtitles').hidden = !progress.visible;
+  if (!progress.visible) $('cancelYoutubeSubtitles').disabled = false;
   $('youtubeProgress').value = progress.value;
   $('youtubeProgressValue').value = `${progress.value}%`;
   $('youtubeProgressDetail').textContent = progress.detail;
@@ -590,6 +592,8 @@ async function createYoutubeSubtitles() {
   selectGeneratedWhenReady = true;
   generatedSelectionRevision = selectionRevision;
   drawYoutubeProgress({ status: 'running', stage: 'preparing', progress: 0 });
+  // Wait for the server to admit the job before offering to cancel it.
+  $('cancelYoutubeSubtitles').hidden = true;
   try {
     const result = await request(MESSAGE.LOCAL_SUBTITLE_GENERATE, { videoId: youtubeId, language: state.settings.youtubeLanguage || 'zh' });
     if (popupClosed || epoch !== youtubeEpoch) return;
@@ -609,6 +613,32 @@ async function createYoutubeSubtitles() {
     youtubePollTimer = setTimeout(() => pollGeneratedSubtitle(epoch), 1500);
   } catch (error) {
     youtubeFailure(error, false, epoch);
+  }
+}
+
+async function cancelYoutubeSubtitles() {
+  const button = $('cancelYoutubeSubtitles');
+  if (!youtubeId || popupClosed || button.hidden || button.disabled) return;
+  button.disabled = true;
+  clearTimeout(youtubePollTimer);
+  const epoch = ++youtubeEpoch;
+  setYoutubeStatus('Останавливаю создание субтитров…');
+  try {
+    const result = await request(MESSAGE.LOCAL_SUBTITLE_CANCEL, { videoId: youtubeId });
+    if (popupClosed || epoch !== youtubeEpoch) return;
+    if (result.status === 'ready') {
+      await loadYoutubeSubtitles();
+      return;
+    }
+    drawYoutubeProgress(result);
+    $('createYoutubeSubtitles').disabled = false;
+    setYoutubeStatus(result.error_code === 'cancelled'
+      ? 'Создание остановлено. Сохранённые дорожки не удалены.'
+      : result.error || 'Задание уже остановлено. Сохранённые дорожки не удалены.');
+  } catch (error) {
+    youtubeFailure(error, false, epoch);
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -881,6 +911,7 @@ $('speechRate').addEventListener('change', () => { void saveSpeechSettings(); })
 $('speechPreview').addEventListener('click', () => { void previewSpeech(); });
 $('subtitleFile').addEventListener('change', (event) => importFile(event.target.files?.[0]).catch((error) => setStatus(error.message, true)));
 $('createYoutubeSubtitles').addEventListener('click', () => createYoutubeSubtitles());
+$('cancelYoutubeSubtitles').addEventListener('click', () => cancelYoutubeSubtitles());
 $('retryYoutubeSubtitles').addEventListener('click', () => loadYoutubeSubtitles());
 $('youtubeLanguage').addEventListener('change', () => {
   youtubeEpoch += 1;
