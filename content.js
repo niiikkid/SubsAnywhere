@@ -75,8 +75,8 @@
     const translationCache = new Map();
     const translationFailures = new Map();
     const maxCachedTranslations = 80;
-    const maxQueuedTranslations = 3;
-    let translationInFlight = false;
+    const maxQueuedTranslations = 6;
+    const maxConcurrentTranslations = 2;
     const queuedTranslations = [];
     const queuedTranslationSet = new Set();
     const inFlightTranslationKeys = new Set();
@@ -436,16 +436,16 @@
     }
 
     function pumpTranslations() {
-      if (!state.active || destroyed || translationInFlight || translationDispatchScheduled || !queuedTranslations.length) return;
+      if (!state.active || destroyed || inFlightTranslationKeys.size >= maxConcurrentTranslations
+        || translationDispatchScheduled || !queuedTranslations.length) return;
       const generation = lifecycle;
       const run = () => {
         if (generation !== lifecycle || !state.active || destroyed) return;
         translationDispatchScheduled = false;
-        if (translationInFlight) return;
+        if (inFlightTranslationKeys.size >= maxConcurrentTranslations) return;
         const next = queuedTranslations.shift();
         if (next) queuedTranslationSet.delete(next.key);
         if (!next) return;
-        translationInFlight = true;
         inFlightTranslationKeys.add(next.key);
         lastTranslationAt = Date.now();
         sendMessage({
@@ -466,11 +466,11 @@
             if (generation === lifecycle) rememberTranslationFailure(next.key, error?.message);
           })
           .finally(() => {
-            translationInFlight = false;
-            if (generation === lifecycle && !destroyed) render();
             inFlightTranslationKeys.delete(next.key);
+            if (generation === lifecycle && !destroyed) render();
             pumpTranslations();
           });
+        pumpTranslations();
       };
       const delay = Math.max(0, 750 - (Date.now() - lastTranslationAt));
       if (delay) {
@@ -487,13 +487,13 @@
         if (!external) return [];
         const scale = Number(external.timeScale) > 0 ? Number(external.timeScale) : 1;
         const sourceTime = (video.currentTime - Number(external.offsetSeconds || 0)) / scale;
-        return runtime.upcomingCueTexts(external.cues, sourceTime, { seconds: 30 / scale, limit: 3 });
+        return runtime.upcomingCueTexts(external.cues, sourceTime, { seconds: 30 / scale, limit: 6 });
       }
       const track = builtInTrackResolver.find(video.textTracks, id, fallbackId);
-      const nativeTexts = runtime.upcomingCueTexts(track?.cues, video.currentTime, { seconds: 30, limit: 3 });
+      const nativeTexts = runtime.upcomingCueTexts(track?.cues, video.currentTime, { seconds: 30, limit: 6 });
       if (nativeTexts.length) return nativeTexts;
       const cached = cachedBuiltInTrack(id);
-      return runtime.upcomingCueTexts(cached?.cues, video.currentTime, { seconds: 30, limit: 3 });
+      return runtime.upcomingCueTexts(cached?.cues, video.currentTime, { seconds: 30, limit: 6 });
     }
 
     function cachedBuiltInTrack(id) {

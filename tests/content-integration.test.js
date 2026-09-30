@@ -652,6 +652,51 @@ test('English inline fallback keeps the completed sentence translation out of th
   assert.equal(overlay.children[0].children.some((child) => child.className === 'dual-captions-sentence-translation'), false);
 });
 
+test('production prepares six future captions with at most two translations in flight', async () => {
+  const harness = await makeHarness();
+  const pending = [];
+  const requested = [];
+  let now = 10_000;
+  let peak = 0;
+  harness.context.Date = class extends Date { static now() { return now; } };
+  const video = harness.document.videos[0];
+  video.textTracks[0].activeCues = [{ text: 'Current line' }];
+  video.textTracks[0].cues = Array.from({ length: 8 }, (_, index) => ({
+    startTime: 1 + index * 3, endTime: 2 + index * 3,
+    text: index ? `Future ${index}` : 'Current line',
+  }));
+  harness.context.chrome.runtime.sendMessage = (message) => {
+    if (message.type !== 'dualCaptions.caption.translate') return Promise.resolve({ ok: true });
+    requested.push(message.text);
+    return new Promise((resolve) => {
+      pending.push({ resolve });
+      peak = Math.max(peak, pending.length);
+    });
+  };
+  const flush = async () => {
+    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+    now += 750;
+    while (harness.scheduled.length) harness.scheduled.shift()();
+  };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  [...harness.onMessage.listeners][0]({
+    type: 'dualCaptions.content.fullState', settings: { secondTrackId: 'track-0' }, externalTracks: [],
+  }, {}, () => {});
+  await flush();
+  assert.deepEqual(requested, ['Current line', 'Future 1']);
+  video.dispatch('timeupdate');
+  await flush();
+  assert.equal(pending.length, 2);
+  for (let index = 0; index < 7; index += 1) {
+    pending.shift().resolve({ ok: true, data: { items: [] } });
+    await flush();
+  }
+  assert.equal(peak, 2);
+  assert.deepEqual(requested, ['Current line', ...Array.from({ length: 6 }, (_, index) => `Future ${index + 1}`)]);
+  assert.equal(pending.length, 0);
+});
+
 test('production does not queue a second translation while the same caption is in flight', async () => {
   const harness = await makeHarness();
   const pending = [];
