@@ -275,11 +275,11 @@
       close.style.cssText = 'position:absolute;right:7px;top:6px;width:20px;height:20px;border:0;border-radius:6px;background:rgba(255,255,255,.09);color:#dce5ff;font:20px/18px Arial,sans-serif;cursor:pointer;';
       close.addEventListener('click', (event) => { event.stopPropagation(); dismissTooltip(); });
       const glossary = (Array.isArray(item.glossary) ? item.glossary : [])
+        .filter((term) => typeof term?.pinyin === 'string')
         .map((term) => ({
           source: typeof (term?.pinyin ?? term?.text ?? term?.phrase) === 'string'
             ? String(term.pinyin ?? term.text ?? term.phrase).trim().slice(0, 120)
             : '',
-          isPinyin: typeof term?.pinyin === 'string',
           translation: typeof term?.translation === 'string' ? term.translation.trim().slice(0, 160) : '',
         }))
         .filter((term) => term.source && term.translation);
@@ -306,7 +306,7 @@
         terms.style.cssText = 'margin-top:7px;padding-top:6px;border-top:1px solid rgba(177,196,255,.18);color:#d7e1ff;font-size:13px;line-height:1.4;';
         const termsLabel = document.createElement('span');
         termsLabel.style.cssText = 'display:block;margin-bottom:3px;color:#8f9ab3;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;';
-        termsLabel.textContent = glossary.some((term) => term.isPinyin) ? 'Слова' : 'Фразы';
+        termsLabel.textContent = 'Слова';
         terms.append(termsLabel);
         for (const term of glossary) {
           const row = document.createElement('div');
@@ -567,16 +567,7 @@
       const segments = runtime.glossarySegments(text, items);
       const hiddenPinyinParticles = ['de', 'le', 'zhe', 'la'];
       if (!segments.some((segment) => segment.item)) return false;
-      const sentenceItem = items.find((item) => item?.isSentenceTranslation && typeof item.dictionary === 'string');
-      const sentenceText = sentenceItem?.dictionary.trim();
-      if (sentenceText) {
-        const sentenceTranslation = document.createElement('div');
-        sentenceTranslation.className = 'dual-captions-sentence-translation';
-        sentenceTranslation.textContent = sentenceText;
-        sentenceTranslation.style.cssText = 'display:block;width:100%;box-sizing:border-box;margin:0 0 .18em;padding:0 .22em;color:inherit;text-align:center;font-size:.58em;font-weight:400;line-height:1.3;opacity:.88;white-space:normal;overflow-wrap:anywhere;pointer-events:none;';
-        target.append(sentenceTranslation);
-        state.sentenceTranslationLine = sentenceTranslation;
-      }
+      appendSentenceTranslation(target, items);
       const cells = document.createElement('div');
       cells.className = 'dual-captions-inline';
       cells.style.cssText = 'display:block;text-align:center;text-wrap:balance;white-space:normal;';
@@ -666,15 +657,15 @@
       return true;
     }
 
-    function appendEnglishSentenceTranslation(items) {
+    function appendSentenceTranslation(target, items) {
       const sentenceItem = items.find((item) => item?.isSentenceTranslation && typeof item.dictionary === 'string');
       const sentenceText = sentenceItem?.dictionary.trim();
       if (!sentenceText) return;
       const translation = document.createElement('div');
       translation.className = 'dual-captions-sentence-translation';
       translation.textContent = sentenceText;
-      translation.style.cssText = 'margin-top:2px;color:inherit;font-size:.72em;font-weight:600;line-height:1.15;opacity:.68;pointer-events:none;';
-      state.second.append(translation);
+      translation.style.cssText = 'display:block;width:100%;box-sizing:border-box;margin:0 0 .18em;padding:0 .22em;color:inherit;text-align:center;font-size:.58em;font-weight:400;line-height:1.3;opacity:.88;white-space:normal;overflow-wrap:anywhere;pointer-events:none;';
+      target.append(translation);
       state.sentenceTranslationLine = translation;
     }
 
@@ -730,6 +721,7 @@
         if (!items && !failure) requestTranslation(descriptor, true);
         return;
       }
+      if (!descriptor.characters) appendSentenceTranslation(target, items);
       for (const segment of runtime.captionSegments(descriptor.displayText, items)) {
         if (!segment.item) {
           target.append(document.createTextNode(segment.text));
@@ -747,7 +739,6 @@
         });
         target.append(phrase);
       }
-      if (!descriptor.characters && !state.settings.inlineTranslations) appendEnglishSentenceTranslation(items);
       showSentenceSpeech(descriptor);
     }
 

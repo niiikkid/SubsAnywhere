@@ -574,7 +574,7 @@ test('production shows a pinyin-to-Russian glossary with the full Chinese senten
   assert.equal(tooltip.children[2].children.map((child) => child.textContent).join(' '), 'Слова nǐ hǎo — здравствуйте shì jiè — мир wǒ — я men — множественное число xué — учиться zhōng wén — китайский язык hěn — очень yǒu — есть yì si — интересный xiè xie — спасибо zài jiàn — до свидания míng tiān — завтра jiàn — увидимся');
 });
 
-test('production shows a full English sentence translation with a phrase list', async () => {
+test('production shows only the full English translation above the original without a phrase list', async () => {
   const harness = await makeHarness();
   harness.context.chrome.runtime.sendMessage = (message) => {
     if (message.type === 'dualCaptions.caption.translate') {
@@ -607,28 +607,24 @@ test('production shows a full English sentence translation with a phrase list', 
   await Promise.resolve();
 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
-  const phrase = overlay.children[0].children[0];
+  const phrase = overlay.children[0].children[1];
   assert.equal(phrase.textContent, 'Built in');
-  const translationLine = overlay.children[0].children[1];
+  const translationLine = overlay.children[0].children[0];
   assert.equal(translationLine.className, 'dual-captions-sentence-translation');
   assert.equal(translationLine.textContent, 'Встроено.');
-  assert.match(translationLine.style.cssText, /font-size:\.72em/);
-  assert.match(translationLine.style.cssText, /opacity:\.68/);
+  assert.match(translationLine.style.cssText, /font-size:\.58em/);
   phrase.dispatch('click', { stopPropagation() {} });
   assert.equal(
     overlay.children.at(-1).children[1].children.map((child) => child.textContent).join(' '),
     'Перевод Встроено.',
   );
-  assert.equal(
-    overlay.children.at(-1).children[2].children.map((child) => child.textContent).join(' '),
-    'Фразы Built in — встроено',
-  );
+  assert.equal(overlay.children.at(-1).children.length, 2, 'close and full translation only');
 
   phrase.dispatch('click', { stopPropagation() {} });
   assert.equal(overlay.children.length, 3);
 });
 
-test('English inline fallback keeps the completed sentence translation out of the caption', async () => {
+test('English inline fallback still displays the full translation above the original', async () => {
   const harness = await makeHarness();
   harness.context.chrome.runtime.sendMessage = (message) => {
     if (message.type === 'dualCaptions.caption.translate') return Promise.resolve({ ok: true, data: {
@@ -649,7 +645,9 @@ test('English inline fallback keeps the completed sentence translation out of th
   for (let index = 0; index < 4; index += 1) await Promise.resolve();
 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
-  assert.equal(overlay.children[0].children.some((child) => child.className === 'dual-captions-sentence-translation'), false);
+  assert.equal(overlay.children[0].children[0].className, 'dual-captions-sentence-translation');
+  assert.equal(overlay.children[0].children[0].textContent, 'Встроено.');
+  assert.equal(overlay.children[0].children[1].textContent, 'Built in');
 });
 
 test('production prepares six future captions with at most two translations in flight', async () => {

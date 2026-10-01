@@ -147,7 +147,7 @@ test('active OpenAI settings drive the real translation client path', async () =
   assert.deepEqual(await client.translateCaption('Hello'), { translation: 'Привет', glossary: [] });
   assert.equal(requestUrl, 'https://api.openai.com/v1/responses');
   assert.equal(requestBody.model, 'gpt-5-mini');
-  assert.equal(requestBody.max_output_tokens, 1600);
+  assert.equal(requestBody.max_output_tokens, 4096);
   assert.match(requestBody.input, /json/i);
 });
 
@@ -165,8 +165,8 @@ test('caption translation keeps a full sentence translation and exact source phr
   assert.deepEqual(result, {
     translation: 'В конце концов я сдался.',
     glossary: [
-      { text: 'gave up', translation: 'сдался' },
-      { text: 'at last', translation: 'в конце концов' },
+      { text: 'gave up', translation: 'сдался', sourceStart: 2, sourceEnd: 9 },
+      { text: 'at last', translation: 'в конце концов', sourceStart: 10, sourceEnd: 17 },
     ],
   });
 });
@@ -177,7 +177,7 @@ test('caption translation rejects glossary text inside another word', () => {
     glossary: [{ text: 'he', translation: 'он' }, { text: 'therapist', translation: 'терапевт' }],
   });
 
-  assert.deepEqual(result.glossary, [{ text: 'therapist', translation: 'терапевт' }]);
+  assert.deepEqual(result.glossary, [{ text: 'therapist', translation: 'терапевт', sourceStart: 4, sourceEnd: 13 }]);
 });
 
 test('caption translation prefers a complete phrase over its component words', () => {
@@ -190,7 +190,7 @@ test('caption translation prefers a complete phrase over its component words', (
     ],
   });
 
-  assert.deepEqual(result.glossary, [{ text: 'look after', translation: 'присмотреть за' }]);
+  assert.deepEqual(result.glossary, [{ text: 'look after', translation: 'присмотреть за', sourceStart: 11, sourceEnd: 21 }]);
 });
 
 test('caption translation accepts concise common response field names from AI', () => {
@@ -201,7 +201,7 @@ test('caption translation accepts concise common response field names from AI', 
 
   assert.deepEqual(result, {
     translation: 'Я сдался.',
-    glossary: [{ text: 'gave up', translation: 'сдался' }],
+    glossary: [{ text: 'gave up', translation: 'сдался', sourceStart: 2, sourceEnd: 9 }],
   });
 });
 
@@ -214,7 +214,7 @@ test('caption translation never truncates the complete sentence translation', ()
   }).translation, translation);
 });
 
-test('DeepSeek prepares concise click translations for one caption only', async () => {
+test('DeepSeek requests complete English segmentation with everyday words in one request', async () => {
   const storage = new MemoryStorage();
   const credentials = new AiCredentialStore(storage);
   await credentials.patch({ provider: 'deepseek', apiKey: 'secret-key', model: 'deepseek-v4-pro', activate: true });
@@ -230,19 +230,51 @@ test('DeepSeek prepares concise click translations for one caption only', async 
 
   assert.deepEqual(result, {
     translation: 'Я сдался.',
-    glossary: [{ text: 'gave up', translation: 'сдался' }],
+    glossary: [{ text: 'gave up', translation: 'сдался', sourceStart: 2, sourceEnd: 9 }],
   });
-  assert.equal(request.max_tokens, 1600);
+  assert.equal(request.max_tokens, 4096);
   assert.equal(request.model, 'deepseek-v4-pro');
   assert.deepEqual(request.thinking, { type: 'disabled' });
   assert.equal('reasoning_effort' in request, false);
   assert.match(request.messages[0].content, /entire English subtitle sentence/i);
   assert.match(request.messages[0].content, /natural Russian/i);
-  assert.match(request.messages[0].content, /phrases, not a word-by-word breakdown/i);
+  assert.match(request.messages[0].content, /every source word exactly once/i);
+  assert.match(request.messages[0].content, /everyday words/i);
+  assert.match(request.messages[0].content, /two or three words/i);
+  assert.match(request.messages[0].content, /repeated occurrences as separate entries/i);
+  assert.match(request.messages[0].content, /contractions/i);
   assert.match(request.messages[0].content, /Before returning JSON/i);
   assert.match(request.messages[0].content, /Example input:/);
   assert.deepEqual(JSON.parse(request.messages[1].content), { caption: 'I gave up.' });
   assert.match(request.messages[1].content, /I gave up\./);
+});
+
+test('English segments retain repeated words with their own contextual meanings', () => {
+  const source = 'Well, it works well.';
+  const result = normalizeCaptionTranslation(source, { translation: 'Ну, это хорошо работает.', glossary: [
+    { text: 'Well', translation: 'ну' },
+    { text: 'it', translation: 'это' },
+    { text: 'works', translation: 'работает' },
+    { text: 'well', translation: 'хорошо' },
+  ] });
+  assert.deepEqual(result.glossary, [
+    { text: 'Well', translation: 'ну', sourceStart: 0, sourceEnd: 4 },
+    { text: 'it', translation: 'это', sourceStart: 6, sourceEnd: 8 },
+    { text: 'works', translation: 'работает', sourceStart: 9, sourceEnd: 14 },
+    { text: 'well', translation: 'хорошо', sourceStart: 15, sourceEnd: 19 },
+  ]);
+});
+
+test('English segments reject pieces of contractions, Unicode words and changed casing', () => {
+  const result = normalizeCaptionTranslation("Don't touch José's café.", { glossary: [
+    { text: 'Don', translation: 'не' }, { text: 't', translation: 'не' },
+    { text: 'José', translation: 'Хосе' }, { text: 'caf', translation: 'кафе' },
+    { text: "don't", translation: 'не' },
+    { text: "José's café", translation: 'кафе Хосе' },
+  ] });
+  assert.deepEqual(result.glossary, [
+    { text: "José's café", translation: 'кафе Хосе', sourceStart: 12, sourceEnd: 23 },
+  ]);
 });
 
 test('DeepSeek keeps a valid sentence translation without a repair request', async () => {
@@ -362,6 +394,60 @@ test('DeepSeek rejects generated pinyin that omits Chinese caption syllables', a
   }) } }] }), { async getActive() { return { provider: 'deepseek', apiKey: 'offline-fixture', model: 'deepseek-chat' }; } });
 
   await assert.rejects(client.translateChineseCaption('你好，世界'), /пиньинь/i);
+});
+
+test('Chinese numeric captions preserve identifiers and separate them from pinyin in one request', async () => {
+  const fixtures = [
+    { caption: '是,610路。', supplied: 'shì,610lù.', returned: 'shì,610lù.', expected: 'shì,610 lù.' },
+    { caption: '那个,还有一辆610路区间车,对吧？',
+      supplied: 'nà gè, hái yǒu yī liàng610lù qū jiān chē, duì ba?',
+      returned: 'nà gè, hái yǒu yī liàng610lù qū jiān chē, duì ba?',
+      expected: 'nà gè, hái yǒu yī liàng 610 lù qū jiān chē, duì ba?' },
+    { caption: '航班是0809。', returned: 'háng bān shì 0809.', expected: 'háng bān shì 0809.' },
+    { caption: '在12号，坐610路。', returned: 'zài12hào, zuò610lù.', expected: 'zài 12 hào, zuò 610 lù.' },
+  ];
+  for (const fixture of fixtures) {
+    let requests = 0;
+    let prompt;
+    const client = new DeepSeekClient(async (_url, options) => {
+      requests += 1;
+      prompt = JSON.parse(options.body).messages[0].content;
+      return Response.json({ choices: [{ message: { content: JSON.stringify({
+        pinyin: fixture.returned, translation: 'Полный перевод с номером',
+        glossary: [{ text: '路', pinyin: 'lù', translation: 'маршрут' }],
+      }) } }] });
+    }, { get: async () => ({ provider: 'deepseek', apiKey: 'offline-fixture', model: 'deepseek-chat' }) });
+    const result = await client.translateChineseCaption(fixture.caption, fixture.supplied);
+    assert.equal(result.pinyin, fixture.expected);
+    assert.equal(result.context, 'Полный перевод с номером');
+    if (fixture.caption.includes('路')) assert.equal(result.glossary[0].pinyin, 'lù');
+    assert.equal(requests, 1);
+    assert.match(prompt, /NUMBERS:/);
+  }
+});
+
+test('Chinese numeric pinyin still rejects missing syllables and changed or misplaced identifiers', async () => {
+  for (const pinyin of ['shì 610.', 'shì 619 lù.', 'shì lù.', '610 shì lù.', 'shì 610 lù 610.', 'shì liù yī líng lù.']) {
+    const client = new DeepSeekClient(async () => Response.json({ choices: [{ message: { content: JSON.stringify({
+      pinyin, translation: 'Это маршрут 610.', glossary: [],
+    }) } }] }), { get: async () => ({ provider: 'deepseek', apiKey: 'offline-fixture', model: 'deepseek-chat' }) });
+    await assert.rejects(client.translateChineseCaption('是610路。'), /пиньинь/i);
+  }
+});
+
+test('Chinese numeric glossary follows normalized number boundaries, including legacy replies', async () => {
+  for (const generated of [true, false]) {
+    const client = new DeepSeekClient(async () => Response.json({ choices: [{ message: { content: JSON.stringify({
+      ...(generated ? { pinyin: 'shì,610lù.' } : {}),
+      translation: 'Да, маршрут 610.',
+      glossary: [{ text: '610路', pinyin: '610lù', translation: 'маршрут 610' }],
+    }) } }] }), { get: async () => ({ provider: 'deepseek', apiKey: 'offline-fixture', model: 'deepseek-chat' }) });
+    const result = await client.translateChineseCaption('是,610路。', 'shì,610lù.');
+    assert.equal(result.pinyin, 'shì,610 lù.');
+    assert.deepEqual(result.glossary.map(({ pinyin, translation }) => ({ pinyin, translation })), [
+      { pinyin: '610 lù', translation: 'маршрут 610' },
+    ]);
+  }
 });
 
 test('DeepSeek keeps every valid Chinese glossary term returned for a caption', async () => {

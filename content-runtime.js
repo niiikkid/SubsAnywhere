@@ -71,8 +71,18 @@
     }
     const spans = [];
     const isWord = (character) => /[\p{L}\p{M}\p{N}_]/u.test(character ?? '');
-    const anchored = (entry) => Object.hasOwn(entry.term, 'pinyinStart') || Object.hasOwn(entry.term, 'pinyinEnd');
+    const sourceAnchored = (entry) => Object.hasOwn(entry.term, 'sourceStart') || Object.hasOwn(entry.term, 'sourceEnd');
+    const anchored = (entry) => sourceAnchored(entry)
+      || Object.hasOwn(entry.term, 'pinyinStart') || Object.hasOwn(entry.term, 'pinyinEnd');
     for (const term of terms.sort((a, b) => Number(anchored(b)) - Number(anchored(a)) || b.label.length - a.label.length)) {
+      if (sourceAnchored(term)) {
+        const { sourceStart: start, sourceEnd: end } = term.term;
+        if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > source.length
+          || source.slice(start, end) !== term.label || isWord(source[start - 1]) || isWord(source[end])
+          || spans.some((span) => start < span.end && end > span.start)) continue;
+        spans.push({ start, end, ...term });
+        continue;
+      }
       if (anchored(term)) {
         const { pinyinStart, pinyinEnd } = term.term;
         if (!Number.isInteger(pinyinStart) || !Number.isInteger(pinyinEnd) || pinyinStart < 0

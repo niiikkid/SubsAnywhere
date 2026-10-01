@@ -64,6 +64,20 @@ test('inline glossary segments preserve source, repeated phrases and pinyin boun
   assert.equal(runtime.glossarySegments(text, []).map((segment) => segment.text).join(''), text);
 });
 
+test('English inline segments use exact occurrence anchors for repeated contextual words', async () => {
+  const runtime = await loadRuntime();
+  const source = 'well, well.';
+  const glossary = [
+    { text: 'well', translation: 'ну', sourceStart: 0, sourceEnd: 4 },
+    { text: 'well', translation: 'хорошо', sourceStart: 6, sourceEnd: 10 },
+    { text: 'well', translation: 'неверное совпадение', sourceStart: 2, sourceEnd: 6 },
+  ];
+  const segments = runtime.glossarySegments(source, [{ glossary }]);
+  assert.equal(segments.map((segment) => segment.text).join(''), source);
+  assert.deepEqual(Array.from(segments.filter((segment) => segment.item), (segment) => segment.translation),
+    ['ну', 'хорошо']);
+});
+
 test('mapped pinyin terms retain their own Han across homophones and whitespace', async () => {
   const runtime = await loadRuntime();
   const glossary = [
