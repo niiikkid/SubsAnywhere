@@ -122,7 +122,7 @@ function drawSaveFeedback() {
     ? `Не удалось подтвердить сохранение: ${failed.error.message}`
     : hydrationError ? `Не удалось загрузить настройки: ${hydrationError.message}`
     : entries.some((entry) => entry.pending) ? 'Сохраняю изменения…'
-      : entries.length ? 'Сохранено на этом устройстве' : 'Изменения сохраняются автоматически';
+      : entries.length ? 'Сохранено на этом устройстве' : '';
 }
 
 function saveRequest(key, type, payload, apply = () => {}) {

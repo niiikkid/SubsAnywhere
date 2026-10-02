@@ -9,24 +9,18 @@
 <body>
   <main>
     <header class="app-header">
-      <div class="app-mark" aria-hidden="true">S</div>
-      <div>
-        <p class="eyebrow">СУБТИТРЫ БЕЗ ГРАНИЦ</p>
-        <h1>SubsAnywhere</h1>
-      </div>
+      <nav class="section-tabs" role="tablist" aria-label="Разделы расширения">
+        <button id="playerTab" type="button" role="tab" aria-controls="playerPanel" aria-selected="true">Player</button>
+        <button id="appearanceTab" type="button" role="tab" aria-controls="appearancePanel" aria-selected="false" tabindex="-1">Внешний вид</button>
+        <button id="settingsTab" type="button" role="tab" aria-controls="settingsPanel" aria-selected="false" tabindex="-1">Настройки</button>
+      </nav>
       <div class="panel-window-controls" hidden>
         <button id="panelDock" type="button" title="Встроить справа" aria-label="Встроить справа">↙</button>
         <button id="panelClose" type="button" title="Закрыть" aria-label="Закрыть">×</button>
       </div>
     </header>
-    <nav class="section-tabs" role="tablist" aria-label="Разделы расширения">
-      <button id="playerTab" type="button" role="tab" aria-controls="playerPanel" aria-selected="true">Плеер</button>
-      <button id="appearanceTab" type="button" role="tab" aria-controls="appearancePanel" aria-selected="false" tabindex="-1">Внешний вид</button>
-      <button id="settingsTab" type="button" role="tab" aria-controls="settingsPanel" aria-selected="false" tabindex="-1">Настройки</button>
-    </nav>
-    <p id="pageScope" class="hint scope-note">Внешний вид и SRT сохраняются для этой страницы. Настройки перевода — для всех сайтов.</p>
     <div class="save-feedback">
-      <p id="saveStatus" role="status" aria-live="polite">Изменения сохраняются автоматически</p>
+      <p id="saveStatus" role="status" aria-live="polite"></p>
       <button id="retrySave" type="button" hidden>Повторить сохранение</button>
       <button id="retrySettings" type="button" hidden>Загрузить настройки снова</button>
     </div>
@@ -79,10 +73,6 @@
 
     </section>
       <section id="appearancePanel" role="tabpanel" aria-labelledby="appearanceTab" class="control-card appearance-card" hidden>
-        <div class="section-heading">
-          <h2>Внешний вид</h2>
-          <span>для этой страницы</span>
-        </div>
         <div class="preview-scene" aria-label="Пример внешнего вида субтитров">
           <span class="preview-label">ПРЕДПРОСМОТР</span>
           <span id="subtitlePreview">One line at a time.</span>
@@ -95,7 +85,7 @@
         </label>
         <p class="hint">Короткий русский перевод над каждым словом или цельным выражением. Для английского полный перевод реплики всегда остаётся сверху; отдельного списка фраз нет.</p>
         <label>Размер текста <output id="fontSizeValue"></output>
-          <input id="fontSize" type="range" min="12" max="48" value="22">
+          <input id="fontSize" type="range" min="12" max="48" value="24">
         </label>
         <div class="two-columns">
           <label>Цвет текста
@@ -106,10 +96,10 @@
           </label>
         </div>
         <label>Непрозрачность фона <output id="subtitleBackgroundOpacityValue"></output>
-          <input id="subtitleBackgroundOpacity" type="range" min="10" max="100" value="78">
+          <input id="subtitleBackgroundOpacity" type="range" min="10" max="100" value="100">
         </label>
         <label class="toggle-control">
-          <input id="subtitleBackground" type="checkbox">
+          <input id="subtitleBackground" type="checkbox" checked>
           Показывать фон
         </label>
       </section>

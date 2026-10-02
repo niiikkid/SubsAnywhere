@@ -205,7 +205,7 @@ test('StateStore retries initialization after the first migration write fails', 
   const state = await store.get(PAGE_A);
   const root = await store.getRootForTests();
 
-  assert.equal(state.settings.fontSize, 22);
+  assert.equal(state.settings.fontSize, 24);
   assert.equal(root.legacyState.settings.fontSize, 31);
   assert.equal(storage.attempts, 2);
 });

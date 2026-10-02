@@ -70,7 +70,7 @@ test('normalizeState preserves a temporarily unavailable selected track id', () 
   assert.equal(state.settings.secondTrackId, 'track-not-loaded-yet');
 });
 
-test('normalizeState keeps subtitle colour and makes its background transparent by default', () => {
+test('normalizeState defaults to 24px text with an opaque background and preserves saved preferences', () => {
   const defaults = normalizeState({});
   const configured = normalizeState({
     settings: {
@@ -82,9 +82,14 @@ test('normalizeState keeps subtitle colour and makes its background transparent 
   });
 
   assert.equal(defaults.settings.subtitleColor, '#ffffff');
-  assert.equal(defaults.settings.subtitleBackground, false);
+  assert.equal(defaults.settings.fontSize, 24);
+  assert.equal(defaults.settings.subtitleBackground, true);
   assert.equal(defaults.settings.subtitleBackgroundColor, '#000000');
-  assert.equal(defaults.settings.subtitleBackgroundOpacity, 78);
+  assert.equal(defaults.settings.subtitleBackgroundOpacity, 100);
+  const saved = normalizeState({ settings: { fontSize: 22, subtitleBackground: false, subtitleBackgroundOpacity: 78 } });
+  assert.equal(saved.settings.fontSize, 22);
+  assert.equal(saved.settings.subtitleBackground, false);
+  assert.equal(saved.settings.subtitleBackgroundOpacity, 78);
   assert.equal(configured.settings.subtitleColor, '#3b82f6');
   assert.equal(configured.settings.subtitleBackground, true);
   assert.equal(configured.settings.subtitleBackgroundColor, '#18233f');

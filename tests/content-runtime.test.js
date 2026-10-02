@@ -396,6 +396,15 @@ test('runtime prefers a persisted fallback over a legacy track index after playe
 test('runtime normalizes settings at the content-script boundary', async () => {
   const runtime = await loadRuntime();
 
+  const defaults = runtime.normalizeSettings();
+  assert.equal(defaults.fontSize, 24);
+  assert.equal(defaults.subtitleBackground, true);
+  assert.equal(defaults.subtitleBackgroundOpacity, 100);
+  const saved = runtime.normalizeSettings({ fontSize: 22, subtitleBackground: false, subtitleBackgroundOpacity: 78 });
+  assert.equal(saved.fontSize, 22);
+  assert.equal(saved.subtitleBackground, false);
+  assert.equal(saved.subtitleBackgroundOpacity, 78);
+
   assert.deepEqual(
     { ...runtime.normalizeSettings({
       secondTrackId: 'saved',

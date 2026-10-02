@@ -282,12 +282,12 @@
       secondTrackCacheSource: typeof value.secondTrackCacheSource === 'string' ? value.secondTrackCacheSource : '',
       secondLeft: bounded(value.secondLeft, 4, 96, 50),
       secondBottom: bounded(value.secondBottom, 0, 95, 5),
-      fontSize: bounded(value.fontSize, 12, 48, 22),
+      fontSize: bounded(value.fontSize, 12, 48, 24),
       inlineTranslations: value.inlineTranslations === true,
       subtitleColor: /^#[0-9a-f]{6}$/i.test(String(value.subtitleColor)) ? String(value.subtitleColor).toLowerCase() : '#ffffff',
-      subtitleBackground: Boolean(value.subtitleBackground),
+      subtitleBackground: value.subtitleBackground === undefined ? true : Boolean(value.subtitleBackground),
       subtitleBackgroundColor: /^#[0-9a-f]{6}$/i.test(String(value.subtitleBackgroundColor)) ? String(value.subtitleBackgroundColor).toLowerCase() : '#000000',
-      subtitleBackgroundOpacity: bounded(value.subtitleBackgroundOpacity, 10, 100, 78),
+      subtitleBackgroundOpacity: bounded(value.subtitleBackgroundOpacity, 10, 100, 100),
       selectedPlayerKey: typeof value.selectedPlayerKey === 'string' ? value.selectedPlayerKey : '',
     };
   }
