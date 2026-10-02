@@ -15,8 +15,12 @@
         <button id="settingsTab" type="button" role="tab" aria-controls="settingsPanel" aria-selected="false" tabindex="-1">Настройки</button>
       </nav>
       <div class="panel-window-controls" hidden>
-        <button id="panelDock" type="button" title="Встроить справа" aria-label="Встроить справа">↙</button>
-        <button id="panelClose" type="button" title="Закрыть" aria-label="Закрыть">×</button>
+        <button id="panelDock" type="button" title="Встроить справа" aria-label="Встроить справа" aria-pressed="false">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3h6l-1 5 3 3H5l3-3-1-5Zm3 8v6"/></svg>
+        </button>
+        <button id="panelClose" type="button" title="Закрыть" aria-label="Закрыть">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>
+        </button>
       </div>
     </header>
     <div class="save-feedback">
@@ -54,7 +58,7 @@
       <button id="createYoutubeSubtitles" type="button">Создать свои субтитры</button>
       <button id="cancelYoutubeSubtitles" type="button" hidden>Остановить создание</button>
       <button id="retryYoutubeSubtitles" type="button" hidden>Проверить сервер и продолжить</button>
-      <p class="hint">Запускается только вручную: сервер скачает аудио и распознает английскую или китайскую речь локально. Выберите язык речи выше; в режиме «Авто» создание использует китайский.</p>
+
     </section>
 
       <section class="control-card player-card">
@@ -77,13 +81,12 @@
           <span class="preview-label">ПРЕДПРОСМОТР</span>
           <span id="subtitlePreview">One line at a time.</span>
         </div>
-        <p class="hint">Плеер не нужен для настройки. На видео размер зависит от масштаба кадра.</p>
-        <p class="hint">Перетаскивайте субтитры по видео за заметный значок ⠿.</p>
+
         <label class="toggle-control">
           <input id="inlineTranslations" type="checkbox">
           Переводы над фразами
         </label>
-        <p class="hint">Короткий русский перевод над каждым словом или цельным выражением. Для английского полный перевод реплики всегда остаётся сверху; отдельного списка фраз нет.</p>
+
         <label>Размер текста <output id="fontSizeValue"></output>
           <input id="fontSize" type="range" min="12" max="48" value="24">
         </label>
@@ -104,79 +107,82 @@
         </label>
       </section>
 
-      <section id="settingsPanel" role="tabpanel" aria-labelledby="settingsTab" hidden>
+      <section id="settingsPanel" role="tabpanel" aria-labelledby="settingsTab" class="compact-settings" hidden>
           <section class="control-card speech-settings">
             <div class="section-heading">
               <h2>Произношение</h2>
-              <span>системный голос</span>
+              <button id="speechPreview" type="button" title="Проверить голос">Проверить</button>
             </div>
-            <label>Голос
-              <select id="speechVoice">
-                <option value="">Автоматически — Google</option>
-              </select>
-            </label>
-            <label>Скорость
-              <select id="speechRate">
-                <option value="0.55">Очень медленно</option>
-                <option value="0.7">Медленно</option>
-                <option value="0.8">Спокойно</option>
-                <option value="1">Обычно</option>
-              </select>
-            </label>
-            <button id="speechPreview" type="button">🔊 Проверить голос</button>
-            <p class="hint">Голос и скорость сохраняются для субтитров, списка слов и режима повторения.</p>
+            <div class="two-columns speech-fields">
+              <label>Голос
+                <select id="speechVoice">
+                  <option value="">Авто · Google</option>
+                </select>
+              </label>
+              <label>Скорость
+                <select id="speechRate">
+                  <option value="0.55">Очень медленно</option>
+                  <option value="0.7">Медленно</option>
+                  <option value="0.8">Спокойно</option>
+                  <option value="1">Обычно</option>
+                </select>
+              </label>
+            </div>
           </section>
 
           <section class="control-card ai-settings">
             <div class="section-heading">
               <h2>Перевод через ИИ</h2>
-              <span>по клику</span>
             </div>
-            <p class="hint">Текущая короткая реплика заранее разбирается на кликабельные слова и выражения. Целый файл субтитров в ИИ не отправляется.</p>
-            <label>Сервис перевода
-              <select id="aiProvider">
-                <option value="deepseek">DeepSeek</option>
-                <option value="openai">OpenAI</option>
-              </select>
-            </label>
+            <div class="two-columns">
+              <label>Сервис
+                <select id="aiProvider">
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="openai">OpenAI</option>
+                </select>
+              </label>
+              <label>Модель
+                <select id="aiModel" disabled></select>
+              </label>
+            </div>
             <label><span id="aiKeyLabel">API-ключ DeepSeek</span>
               <input id="aiKey" type="password" autocomplete="new-password" placeholder="Вставьте ключ">
             </label>
-            <label>Текстовая модель
-              <select id="aiModel" disabled></select>
-            </label>
             <p id="aiModelHint" class="hint">Сначала сохраните ключ.</p>
             <div class="button-row">
-              <button id="loadAiModels" type="button">Сохранить ключ и загрузить модели</button>
+              <button id="loadAiModels" type="button" title="Сохранить ключ и загрузить модели">Ключ и модели</button>
               <button id="clearAiKey" type="button" class="danger-text">Удалить ключ</button>
             </div>
-            <button id="saveAiSettings" type="button" class="primary settings-save" disabled>Использовать для перевода</button>
+            <button id="saveAiSettings" type="button" class="primary settings-save" disabled>Использовать модель</button>
             <p id="aiKeyState" class="hint"></p>
           </section>
 
           <section class="control-card import-box">
             <div class="section-heading">
               <h2>Свой SRT</h2>
-              <span>файл субтитров</span>
+              <label class="file-button">Добавить SRT
+                <input id="subtitleFile" type="file" accept=".srt,application/x-subrip,text/plain">
+              </label>
             </div>
-            <p class="hint">Если нужной встроенной дорожки нет, можно добавить оригинальные субтитры вручную.</p>
-            <label class="file-button">Добавить SRT
-              <input id="subtitleFile" type="file" accept=".srt,application/x-subrip,text/plain">
-            </label>
+
             <div id="externalList" class="external-list"></div>
           </section>
 
           <section id="syncBox" class="control-card sync-box" hidden>
             <div class="section-heading">
               <h2>Ручная синхронизация</h2>
-              <span>для SRT</span>
             </div>
             <label>Файл
               <select id="syncTrack"></select>
             </label>
-            <label>Смещение, секунд
-              <input id="offsetSeconds" type="number" min="-3600" max="3600" step="0.1" value="0">
-            </label>
+            <div class="two-columns">
+              <label>Смещение, сек.
+                <input id="offsetSeconds" type="number" min="-3600" max="3600" step="0.1" value="0" title="Минус - показать раньше, плюс - позже">
+              </label>
+              <label>Скорость, %
+                <input id="timeScalePercent" type="number" min="90" max="110" step="0.001" value="100">
+              </label>
+            </div>
             <div class="sync-buttons" aria-label="Изменить смещение">
               <button type="button" data-shift="-5">−5</button>
               <button type="button" data-shift="-1">−1</button>
@@ -185,10 +191,7 @@
               <button type="button" data-shift="1">+1</button>
               <button type="button" data-shift="5">+5</button>
             </div>
-            <label>Скорость дорожки, %
-              <input id="timeScalePercent" type="number" min="90" max="110" step="0.001" value="100">
-            </label>
-            <p class="hint"><b>Минус</b> — показать раньше. <b>Плюс</b> — позже.</p>
+
           </section>
       </section>
     </section>

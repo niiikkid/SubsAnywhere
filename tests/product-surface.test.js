@@ -10,7 +10,7 @@ test('popup exposes one original track and explicit local YouTube subtitle contr
   assert.match(html, /id="youtubeSubtitles"/);
   assert.match(html, /id="createYoutubeSubtitles"[^>]*>Создать свои субтитры</);
   assert.match(html, /id="youtubeSubtitleStatus"/);
-  assert.match(html, /распознает английскую или китайскую речь/);
+  assert.doesNotMatch(html, /Запускается только вручную: сервер скачает аудио/);
   assert.match(html, /для создания — китайский/);
   assert.doesNotMatch(html, /id="firstTrack"|id="secondTrack"/);
 });
@@ -25,6 +25,8 @@ test('popup has accessible job navigation and an always-available appearance pre
   assert.match(html, /id="subtitlePreview"/);
   assert.match(html, /id="saveStatus"[^>]*role="status"/);
   assert.match(html, /id="retryYoutubeSubtitles"/);
+  assert.doesNotMatch(html, /Короткий русский перевод над каждым словом|Плеер не нужен для настройки|Перетаскивайте субтитры по видео/);
+  assert.match(html, /id="panelDock"[^>]*aria-pressed="false"/);
   assert.doesNotMatch(html, /id="controls" hidden/);
 });
 

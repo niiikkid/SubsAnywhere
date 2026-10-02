@@ -73,7 +73,7 @@ function setupEmbeddedPanel() {
     if (event.source !== window.parent || event.data?.source !== 'subs-anywhere-host'
       || event.data?.type !== 'panel-state') return;
     dock.hidden = !event.data.dockable;
-    dock.textContent = event.data.layout === 'docked' ? '↗' : '↙';
+    dock.setAttribute('aria-pressed', String(event.data.layout === 'docked'));
     dock.title = event.data.layout === 'docked' ? 'Открепить окно' : 'Встроить справа';
     dock.setAttribute('aria-label', dock.title);
   });
@@ -335,7 +335,7 @@ function drawSync() {
 function drawSettings() {
   const settings = state.settings;
   $('speechVoice').replaceChildren();
-  option($('speechVoice'), '', 'Автоматически — Google');
+  option($('speechVoice'), '', 'Авто · Google');
   for (const voice of speechVoices) option($('speechVoice'), voice.voiceName, voice.voiceName);
   $('speechVoice').value = speechVoices.some((voice) => voice.voiceName === speechVoiceName) ? speechVoiceName : '';
   $('speechRate').value = String(speechRate);
