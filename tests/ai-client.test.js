@@ -396,6 +396,66 @@ test('DeepSeek rejects generated pinyin that omits Chinese caption syllables', a
   await assert.rejects(client.translateChineseCaption('你好，世界'), /пиньинь/i);
 });
 
+test('Chinese captions retain English insertions without counting them as Han syllables', async () => {
+  const fixtures = [
+    { caption: '房间里都是Jellycat', pinyin: 'fáng jiān lǐ dōu shì Jellycat',
+      supplied: 'fáng jiān lǐ dōu shìJellycat', text: 'Jellycat', label: 'Jellycat' },
+    { caption: '我用iPhone15。', pinyin: 'wǒ yòng iPhone 15.', text: 'iPhone15', label: 'iPhone 15' },
+    { caption: '这个really cute啊！', pinyin: 'zhè gè really cute a!', text: 'really cute', label: 'really cute' },
+    { caption: 'Hello你好，OK再见。', pinyin: 'Hello nǐ hǎo, OK zài jiàn.', text: 'OK', label: 'OK' },
+    { caption: '我喜欢Café。', pinyin: 'wǒ xǐ huān Café.', text: 'Café', label: 'Café' },
+  ];
+  for (const fixture of fixtures) {
+    let requests = 0;
+    let prompt;
+    const client = new DeepSeekClient(async (_url, options) => {
+      requests += 1;
+      prompt = JSON.parse(options.body).messages[0].content;
+      return Response.json({ choices: [{ message: { content: JSON.stringify({
+        pinyin: fixture.pinyin, translation: 'Полный перевод смешанной реплики',
+        glossary: [{ text: fixture.text, pinyin: fixture.label, translation: 'английская вставка' }],
+      }) } }] });
+    }, { get: async () => ({ provider: 'deepseek', apiKey: 'offline-fixture', model: 'deepseek-chat' }) });
+    const result = await client.translateChineseCaption(fixture.caption, fixture.supplied);
+    assert.equal(result.pinyin, fixture.pinyin);
+    assert.equal(result.context, 'Полный перевод смешанной реплики');
+    const start = fixture.pinyin.indexOf(fixture.label);
+    assert.deepEqual(result.glossary, [{ text: fixture.text, pinyin: fixture.label,
+      translation: 'английская вставка', pinyinStart: start, pinyinEnd: start + fixture.label.length }]);
+    assert.equal(requests, 1);
+    assert.match(prompt, /MIXED LANGUAGE:/);
+    assert.match(prompt, /Jellycat/);
+  }
+});
+
+test('Chinese mixed captions reject missing, changed, duplicated or misplaced English insertions', async () => {
+  for (const pinyin of [
+    'fáng jiān lǐ dōu shì', 'fáng jiān lǐ dōu shì jellycat',
+    'Jellycat fáng jiān lǐ dōu shì', 'fáng jiān lǐ dōu shì Jellycat Jellycat',
+    'fáng jiān lǐ shì Jellycat', 'fáng jiān lǐ dōu shì jié lì māo',
+  ]) {
+    const client = new DeepSeekClient(async () => Response.json({ choices: [{ message: { content: JSON.stringify({
+      pinyin, translation: 'В комнате везде Jellycat.', glossary: [],
+    }) } }] }), { get: async () => ({ provider: 'deepseek', apiKey: 'offline-fixture', model: 'deepseek-chat' }) });
+    await assert.rejects(client.translateChineseCaption('房间里都是Jellycat'), /пиньинь/i);
+  }
+});
+
+test('mixed Chinese glossary maps repeated foreign words and Han homophones to their own occurrences', async () => {
+  const { result } = await chineseGlossaryFixture('她OK他OK她', 'tā OK tā OK tā', [
+    { text: '她', pinyin: 'tā', translation: 'она' },
+    { text: 'OK', pinyin: 'OK', translation: 'ладно' },
+    { text: '他', pinyin: 'tā', translation: 'он' },
+    { text: 'OK', pinyin: 'OK', translation: 'хорошо' },
+    { text: '她', pinyin: 'tā', translation: 'она снова' },
+  ]);
+  assert.deepEqual(result.glossary.map(({ text, pinyinStart, pinyinEnd }) => ({ text, pinyinStart, pinyinEnd })), [
+    { text: '她', pinyinStart: 0, pinyinEnd: 2 }, { text: 'OK', pinyinStart: 3, pinyinEnd: 5 },
+    { text: '他', pinyinStart: 6, pinyinEnd: 8 }, { text: 'OK', pinyinStart: 9, pinyinEnd: 11 },
+    { text: '她', pinyinStart: 12, pinyinEnd: 14 },
+  ]);
+});
+
 test('Chinese numeric captions preserve identifiers and separate them from pinyin in one request', async () => {
   const fixtures = [
     { caption: '是,610路。', supplied: 'shì,610lù.', returned: 'shì,610lù.', expected: 'shì,610 lù.' },
