@@ -156,14 +156,27 @@ function setStatus(text, error = false) {
   }
 }
 
-const sections = ['player', 'appearance', 'settings'];
-function showSection(name) {
-  for (const section of sections) {
-    const active = name === section;
-    $(`${section}Panel`).hidden = !active;
-    $(`${section}Tab`).setAttribute('aria-selected', active);
-    $(`${section}Tab`).tabIndex = active ? 0 : -1;
+function setupTabs(sections) {
+  const showSection = (name) => {
+    for (const section of sections) {
+      const active = name === section;
+      $(`${section}Panel`).hidden = !active;
+      $(`${section}Tab`).setAttribute('aria-selected', active);
+      $(`${section}Tab`).tabIndex = active ? 0 : -1;
+    }
+  };
+  for (const [index, section] of sections.entries()) {
+    const tab = $(`${section}Tab`);
+    tab.addEventListener('click', () => showSection(section));
+    tab.addEventListener('keydown', (event) => {
+      const target = { ArrowRight: (index + 1) % sections.length, ArrowLeft: (index + sections.length - 1) % sections.length, Home: 0, End: sections.length - 1 }[event.key];
+      if (target === undefined) return;
+      event.preventDefault();
+      showSection(sections[target]);
+      $(`${sections[target]}Tab`).focus();
+    });
   }
+  showSection(sections[0]);
 }
 
 function drawPreview() {
@@ -869,18 +882,8 @@ async function init() {
   await Promise.all([hydratePage(aiPromise), speechPromise]);
 }
 
-for (const [index, section] of sections.entries()) {
-  const tab = $(`${section}Tab`);
-  tab.addEventListener('click', () => showSection(section));
-  tab.addEventListener('keydown', (event) => {
-    const target = { ArrowRight: (index + 1) % sections.length, ArrowLeft: (index + sections.length - 1) % sections.length, Home: 0, End: sections.length - 1 }[event.key];
-    if (target === undefined) return;
-    event.preventDefault();
-    showSection(sections[target]);
-    $(`${sections[target]}Tab`).focus();
-  });
-}
-showSection('player');
+setupTabs(['player', 'appearance', 'settings']);
+setupTabs(['aiSettings', 'voiceSettings', 'subtitleSettings']);
 setupEmbeddedPanel();
 document.defaultView?.addEventListener('pagehide', () => {
   popupClosed = true;

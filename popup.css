@@ -87,16 +87,23 @@ optgroup { font-weight: 700; }
 .button-row button { flex: 1; font-size: 12px; }
 .settings-save { margin-top: 9px; }
 .danger-text { color: #ffb5c0; }
-.compact-settings .control-card { margin: 7px 0; padding: 9px; }
+.settings-tabs { display: grid; grid-template-columns: .8fr 1fr 1.35fr; gap: 4px; margin: 0 0 10px; padding: 4px; border: 1px solid #2d3544; border-radius: 11px; background: #141821; }
+.compact-settings .settings-tabs button { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 36px; padding: 7px 5px; border-color: transparent; border-radius: 7px; background: transparent; color: #9faabd; font-size: 12px; white-space: nowrap; }
+.settings-tabs svg { flex-shrink: 0; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.compact-settings .settings-tabs button:hover { border-color: #35435c; background: #202838; color: #e4eaff; }
+.compact-settings .settings-tabs button[aria-selected="true"] { border-color: #536999; background: linear-gradient(135deg, #2a3956, #302d4e); box-shadow: 0 2px 7px #0003, inset 0 1px 0 #ffffff0a; color: #f5f7ff; }
+.compact-settings .control-card { margin: 0 0 9px; padding: 12px; }
+.compact-settings .control-card:last-child { margin-bottom: 0; }
+.compact-settings .external-list { max-height: 112px; overflow: auto; scrollbar-color: #4f5c76 transparent; scrollbar-width: thin; }
 .compact-settings .section-heading { align-items: center; }
 .compact-settings label { min-width: 0; margin-top: 7px; }
 .compact-settings .two-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .compact-settings .speech-fields { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
-.compact-settings select, .compact-settings input { margin-top: 3px; padding: 5px 8px; font-size: 12px; }
+.compact-settings select, .compact-settings input { margin-top: 4px; padding: 7px 8px; font-size: 12px; }
 .compact-settings select { padding-right: 26px; background-position: right 9px center; }
 .compact-settings button { padding: 5px 8px; font-size: 11px; }
 .compact-settings .primary { padding: 6px 8px; box-shadow: none; }
-.compact-settings .hint { margin-top: 5px; font-size: 10px; }
+.compact-settings .hint { margin-top: 7px; font-size: 11px; }
 .compact-settings .hint:empty { display: none; }
 .compact-settings .button-row { gap: 6px; margin-top: 7px; }
 .compact-settings .settings-save { margin-top: 6px; }

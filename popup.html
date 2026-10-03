@@ -108,11 +108,28 @@
       </section>
 
       <section id="settingsPanel" role="tabpanel" aria-labelledby="settingsTab" class="compact-settings" hidden>
+        <nav class="settings-tabs" role="tablist" aria-label="Категории настроек">
+          <button id="aiSettingsTab" type="button" role="tab" aria-controls="aiSettingsPanel" aria-selected="true">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m10 2 2.2 5.8L18 10l-5.8 2.2L10 18l-2.2-5.8L2 10l5.8-2.2Z"/></svg>
+            <span>ИИ</span>
+          </button>
+          <button id="voiceSettingsTab" type="button" role="tab" aria-controls="voiceSettingsPanel" aria-selected="false" tabindex="-1">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 8h3l4-4v12l-4-4H3Zm10-1a4 4 0 0 1 0 6m2-9a8 8 0 0 1 0 12"/></svg>
+            <span>Голос</span>
+          </button>
+          <button id="subtitleSettingsTab" type="button" role="tab" aria-controls="subtitleSettingsPanel" aria-selected="false" tabindex="-1">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="4" width="16" height="12" rx="3"/><path d="M5 9h4m3 0h3M5 12h10"/></svg>
+            <span>Субтитры</span>
+          </button>
+        </nav>
+
+        <section id="voiceSettingsPanel" role="tabpanel" aria-labelledby="voiceSettingsTab" hidden>
           <section class="control-card speech-settings">
             <div class="section-heading">
-              <h2>Произношение</h2>
+              <h2>Голос и произношение</h2>
               <button id="speechPreview" type="button" title="Проверить голос">Проверить</button>
             </div>
+            <p class="hint">Озвучивание слов и фраз в субтитрах.</p>
             <div class="two-columns speech-fields">
               <label>Голос
                 <select id="speechVoice">
@@ -129,7 +146,9 @@
               </label>
             </div>
           </section>
+        </section>
 
+        <section id="aiSettingsPanel" role="tabpanel" aria-labelledby="aiSettingsTab">
           <section class="control-card ai-settings">
             <div class="section-heading">
               <h2>Перевод через ИИ</h2>
@@ -156,7 +175,9 @@
             <button id="saveAiSettings" type="button" class="primary settings-save" disabled>Использовать модель</button>
             <p id="aiKeyState" class="hint"></p>
           </section>
+        </section>
 
+        <section id="subtitleSettingsPanel" role="tabpanel" aria-labelledby="subtitleSettingsTab" hidden>
           <section class="control-card import-box">
             <div class="section-heading">
               <h2>Свой SRT</h2>
@@ -164,13 +185,13 @@
                 <input id="subtitleFile" type="file" accept=".srt,application/x-subrip,text/plain">
               </label>
             </div>
-
+            <p class="hint">Добавьте файл SRT, затем выберите дорожку в разделе Player.</p>
             <div id="externalList" class="external-list"></div>
           </section>
 
           <section id="syncBox" class="control-card sync-box" hidden>
             <div class="section-heading">
-              <h2>Ручная синхронизация</h2>
+              <h2>Синхронизация</h2>
             </div>
             <label>Файл
               <select id="syncTrack"></select>
@@ -191,8 +212,9 @@
               <button type="button" data-shift="1">+1</button>
               <button type="button" data-shift="5">+5</button>
             </div>
-
+            <p class="hint">Минус - показать раньше, плюс - позже. Скорость исправляет нарастающее расхождение.</p>
           </section>
+        </section>
       </section>
     </section>
   </main>

@@ -36,6 +36,7 @@ function makeDocument() {
     'youtubeSubtitles', 'youtubeSubtitleStatus', 'createYoutubeSubtitles', 'cancelYoutubeSubtitles',
     'youtubeProgressBox', 'youtubeProgress', 'youtubeProgressValue', 'youtubeProgressDetail', 'youtubeLanguage',
     'playerTab', 'appearanceTab', 'settingsTab', 'playerPanel', 'appearancePanel', 'settingsPanel',
+    'aiSettingsTab', 'voiceSettingsTab', 'subtitleSettingsTab', 'aiSettingsPanel', 'voiceSettingsPanel', 'subtitleSettingsPanel',
     'subtitlePreview', 'inlineTranslations', 'saveStatus', 'retrySave', 'retryYoutubeSubtitles', 'retrySettings', 'pageScope',
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement()]));
@@ -94,6 +95,41 @@ async function bootPopup(overrides = {}, tab = { id: 77, url: 'https://video.exa
   await tick();
   return { elements: document.elements, document, messages, handlers };
 }
+
+test('settings categories switch independently without resetting drafts or writing settings', async () => {
+  const { elements, messages } = await bootPopup();
+  elements.settingsTab.listeners.get('click')();
+  messages.length = 0;
+  elements.aiKey.value = 'unsaved-draft';
+  const names = ['aiSettings', 'voiceSettings', 'subtitleSettings'];
+  for (const name of names) {
+    elements[`${name}Tab`].listeners.get('click')();
+    for (const other of names) {
+      assert.equal(elements[`${other}Panel`].hidden, other !== name);
+      assert.equal(elements[`${other}Tab`].attributes['aria-selected'], String(other === name));
+      assert.equal(elements[`${other}Tab`].tabIndex, other === name ? 0 : -1);
+    }
+    assert.equal(elements.settingsPanel.hidden, false);
+    assert.equal(elements.playerPanel.hidden, true);
+  }
+  elements.appearanceTab.listeners.get('click')();
+  elements.settingsTab.listeners.get('click')();
+  assert.equal(elements.subtitleSettingsPanel.hidden, false);
+  for (const [from, key, target] of [
+    ['subtitleSettings', 'ArrowRight', 'aiSettings'],
+    ['aiSettings', 'ArrowLeft', 'subtitleSettings'],
+    ['subtitleSettings', 'Home', 'aiSettings'],
+    ['aiSettings', 'End', 'subtitleSettings'],
+  ]) {
+    let prevented = false;
+    elements[`${from}Tab`].listeners.get('keydown')({ key, preventDefault() { prevented = true; } });
+    assert.equal(prevented, true);
+    assert.equal(elements[`${target}Panel`].hidden, false);
+    assert.equal(elements[`${target}Tab`].focused, true);
+  }
+  assert.equal(elements.aiKey.value, 'unsaved-draft');
+  assert.deepEqual(messages, []);
+});
 
 test('inline translations toggle hydrates, previews and saves immediately', async () => {
   const { elements, messages } = await bootPopup({
