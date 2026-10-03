@@ -160,6 +160,32 @@ try {
   })()`);
   assert.equal(overlay.count, 1, 'Reinjection must not duplicate overlays');
   assert.equal(overlay.text, 'Hello from a local video.');
+  const clickInPlayerFrame = async (selector) => {
+    const point = await inspectVideo(`(() => {
+      const frame = document.querySelector('iframe');
+      const rect = frame.contentDocument.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+      const host = frame.getBoundingClientRect();
+      return { x: host.left + frame.clientLeft + rect.left + rect.width / 2,
+        y: host.top + frame.clientTop + rect.top + rect.height / 2 };
+    })()`);
+    await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, ...point }, videoSession);
+    await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, ...point }, videoSession);
+  };
+  await clickInPlayerFrame('.dual-captions-copy');
+  assert.equal(await inspectVideo(`document.querySelector('iframe').contentDocument.querySelectorAll('.dual-captions-copy-menu button').length`), 2);
+  await clickInPlayerFrame('.dual-captions-copy-menu button');
+  const copyDeadline = Date.now() + 5000;
+  while (!await inspectVideo(`document.querySelector('iframe').contentDocument.querySelector('.dual-captions-copy-menu [role="status"]')?.textContent === 'Скопировано'`)) {
+    if (Date.now() > copyDeadline) throw new Error('Caption copy did not succeed after a trusted click');
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+  // Only read back the fixture text just written, in this disposable profile.
+  await cdp('Browser.grantPermissions', { origin: new URL(fixtureUrl).origin, permissions: ['clipboardReadWrite'] });
+  assert.equal(await inspectVideo(`navigator.clipboard.readText()`), 'Hello from a local video.');
+  const { data: copyScreenshot } = await cdp('Page.captureScreenshot', { format: 'png' }, videoSession);
+  await writeFile(join(artifacts, 'copy-smoke.png'), Buffer.from(copyScreenshot, 'base64'));
+  await clickInPlayerFrame('.dual-captions-copy');
+  assert.equal(await inspectVideo(`document.querySelector('iframe').contentDocument.querySelector('.dual-captions-copy-menu') === null`), true);
   const { data: playerScreenshot } = await cdp('Page.captureScreenshot', { format: 'png' }, videoSession);
   await writeFile(join(artifacts, 'player-smoke.png'), Buffer.from(playerScreenshot, 'base64'));
   const positionExpression = `(async () => {

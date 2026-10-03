@@ -29,7 +29,10 @@ class FakeElement extends FakeTarget {
     this.className = '';
     this.parentElement = null;
   }
-  setAttribute() {}
+  setAttribute(name, value) { (this.attributes ??= {})[name] = String(value); }
+  focus() { this.focused = true; }
+  select() { this.selected = true; }
+  contains(node) { return node === this || this.children.some((child) => child.contains(node)); }
   append(...children) {
     for (const child of children) {
       if (child.parentElement) {
@@ -100,6 +103,7 @@ async function makeHarness() {
     videos: [fakeVideo()],
     documentElement: new FakeElement('html'),
     createElement: (tag) => new FakeElement(tag),
+    createElementNS: (_namespace, tag) => new FakeElement(tag),
     createTextNode: (text) => Object.assign(new FakeElement('#text'), { textContent: text }),
     querySelectorAll(selector) { return selector === 'video' ? this.videos : []; },
   });
@@ -135,6 +139,132 @@ async function makeHarness() {
   const context = vm.createContext(sandbox);
   return { context, runtimeSource, contentSource, document, reports, onMessage, observers, scheduled };
 }
+
+test('caption copy selects exact original, full translation and corrected Chinese pinyin without more AI calls', async () => {
+  for (const chinese of [false, true]) {
+    for (const inlineTranslations of [false, true]) {
+      const harness = await makeHarness();
+      const copied = [];
+      harness.context.navigator = { clipboard: { async writeText(text) { copied.push(text); } } };
+      const source = chinese ? '你好，世界' : 'Hello,\nworld!';
+      const displayed = chinese ? 'nǐ hǎo, shì jiè' : source;
+      let requests = 0;
+      harness.context.chrome.runtime.sendMessage = async (message) => {
+        if (message.type !== 'dualCaptions.caption.translate') return { ok: true };
+        requests += 1;
+        return { ok: true, data: { items: [{ text: displayed, start: 0, end: displayed.length,
+          dictionary: 'Привет, мир!', isSentenceTranslation: true,
+          glossary: [chinese ? { pinyin: 'nǐ hǎo', translation: 'привет' } : { text: 'Hello', translation: 'привет' }],
+        }] } };
+      };
+      vm.runInContext(harness.runtimeSource, harness.context);
+      vm.runInContext(harness.contentSource, harness.context);
+      const listener = [...harness.onMessage.listeners][0];
+      listener({ type: 'dualCaptions.content.fullState', settings: { secondTrackId: 'external:mine', inlineTranslations },
+        externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2,
+          text: chinese ? `\u2063ni hao shi jie\n\u2064${source}` : source }] }],
+      }, {}, () => {});
+      for (let index = 0; index < 15; index += 1) await Promise.resolve();
+      const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+      const button = overlay.children.find((child) => child.className === 'dual-captions-copy');
+      assert.ok(button, 'The caption must have a copy control');
+      button.dispatch('click', { stopPropagation() {} });
+      const menu = overlay.children.find((child) => child.className === 'dual-captions-copy-menu');
+      assert.ok(menu);
+      const choices = menu.children.filter((child) => child.tagName === 'BUTTON');
+      assert.deepEqual(choices.map((child) => child.textContent), chinese ? ['Оригинал', 'Перевод', 'Пиньинь'] : ['Оригинал', 'Перевод']);
+      for (const choice of choices) {
+        assert.equal(Boolean(choice.disabled), false);
+        choice.dispatch('click', { stopPropagation() {} });
+        for (let index = 0; index < 8; index += 1) await Promise.resolve();
+      }
+      assert.deepEqual(copied, chinese ? [source, 'Привет, мир!', displayed] : [source, 'Привет, мир!']);
+      assert.equal(requests, 1);
+      harness.document.dispatch('keydown', { key: 'Escape', preventDefault() {}, stopPropagation() {} });
+      assert.equal(menu.isConnected, false);
+      assert.equal(button.attributes['aria-expanded'], 'false');
+      assert.equal(button.focused, true);
+    }
+  }
+});
+
+test('caption copy disables missing translation and pinyin and dismisses stale controls', async () => {
+  const harness = await makeHarness();
+  let finishCopy;
+  harness.context.navigator = { clipboard: { writeText: () => new Promise((resolve) => { finishCopy = resolve; }) } };
+  harness.context.chrome.runtime.sendMessage = (message) => message.type === 'dualCaptions.caption.translate'
+    ? new Promise(() => {}) : Promise.resolve({ ok: true });
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  listener({ type: 'dualCaptions.content.fullState', settings: { secondTrackId: 'external:mine' },
+    externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: '你好' }] }],
+  }, {}, () => {});
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  const button = overlay.children.find((child) => child.className === 'dual-captions-copy');
+  const open = () => {
+    button.dispatch('click', { stopPropagation() {} });
+    return overlay.children.find((child) => child.className === 'dual-captions-copy-menu');
+  };
+  const menu = open();
+  assert.equal(menu.children[0].disabled, false);
+  assert.equal(menu.children[1].disabled, true);
+  assert.equal(menu.children[2].disabled, true);
+  menu.children[0].dispatch('click', { stopPropagation() {} });
+  harness.document.videos[0].currentTime = 3;
+  harness.document.videos[0].dispatch('timeupdate');
+  assert.equal(menu.isConnected, false);
+  assert.equal(button.style.display, 'none');
+  harness.document.videos[0].currentTime = 1.5;
+  harness.document.videos[0].dispatch('timeupdate');
+  const freshMenu = open();
+  finishCopy();
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+  assert.equal(freshMenu.children.at(-1).textContent, 'Скопировать');
+  harness.document.dispatch('pointerdown', { target: harness.document.documentElement });
+  assert.equal(freshMenu.isConnected, false);
+  const resetMenu = open();
+  listener({ type: 'dualCaptions.content.reset' }, {}, () => {});
+  assert.equal(resetMenu.isConnected, false);
+  assert.equal(overlay.style.display, 'none');
+});
+
+test('caption copy falls back on restricted players and reports failures without leaving a field or changing focus', async () => {
+  for (const mode of ['unavailable', 'denied', 'failure']) {
+    const harness = await makeHarness();
+    if (mode !== 'unavailable') harness.context.navigator = { clipboard: { async writeText() { throw new Error('Blocked'); } } };
+    harness.context.chrome.runtime.sendMessage = async (message) => message.type === 'dualCaptions.caption.translate'
+      ? { ok: false, error: 'No key' } : { ok: true };
+    const copied = [];
+    harness.document.execCommand = (command) => {
+      assert.equal(command, 'copy');
+      const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+      const input = overlay.children.find((child) => child.tagName === 'TEXTAREA');
+      assert.equal(input.selected, true);
+      if (mode === 'failure') return false;
+      copied.push(input.value);
+      return true;
+    };
+    vm.runInContext(harness.runtimeSource, harness.context);
+    vm.runInContext(harness.contentSource, harness.context);
+    [...harness.onMessage.listeners][0]({ type: 'dualCaptions.content.fullState', settings: { secondTrackId: 'external:mine' },
+      externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: 'Original\nline.' }] }],
+    }, {}, () => {});
+    for (let index = 0; index < 12; index += 1) await Promise.resolve();
+    const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+    overlay.children.find((child) => child.className === 'dual-captions-copy').dispatch('click', { stopPropagation() {} });
+    const menu = overlay.children.find((child) => child.className === 'dual-captions-copy-menu');
+    const original = menu.children[0];
+    harness.document.activeElement = original;
+    original.dispatch('click', { stopPropagation() {} });
+    for (let index = 0; index < 12; index += 1) await Promise.resolve();
+    assert.deepEqual(copied, mode === 'failure' ? [] : ['Original\nline.']);
+    assert.equal(overlay.children.some((child) => child.tagName === 'TEXTAREA'), false);
+    assert.equal(original.focused, true);
+    assert.equal(original.disabled, false);
+    assert.equal(menu.children.at(-1).textContent, mode === 'failure' ? 'Не удалось скопировать. Повторите.' : 'Скопировано');
+  }
+});
 
 test('inline translations toggle reuses cached glossary for English and pinyin', async () => {
   for (const chinese of [false, true]) {
@@ -183,7 +313,7 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
 
     if (chinese) assert.equal(caption.children[1].textContent, '你好，世界');
     cells.children[0].dispatch('click', { stopPropagation() {} });
-    assert.equal(overlay.children.length, 4);
+    assert.equal(overlay.children.length, 5);
     listener({ type: 'dualCaptions.content.settings', settings: { ...settings, inlineTranslations: false } }, {}, () => {});
     assert.notEqual(caption.children[0].className, 'dual-captions-inline');
     assert.equal(requests, 1);
@@ -478,7 +608,7 @@ test('production content message renders only the selected original track safely
 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
   assert.ok(overlay);
-  assert.equal(overlay.children.length, 3);
+  assert.equal(overlay.children.length, 4);
   assert.equal(overlay.children[0].children.map((child) => child.textContent).join(''), 'Imported');
   assert.equal(overlay.children[0].style.bottom, '36px');
   assert.equal(overlay.children[0].style.left, '400px');
@@ -621,7 +751,7 @@ test('production shows only the full English translation above the original with
   assert.equal(overlay.children.at(-1).children.length, 2, 'close and full translation only');
 
   phrase.dispatch('click', { stopPropagation() {} });
-  assert.equal(overlay.children.length, 3);
+  assert.equal(overlay.children.length, 4);
 });
 
 test('English inline fallback still displays the full translation above the original', async () => {

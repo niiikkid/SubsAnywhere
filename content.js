@@ -53,6 +53,9 @@
       sentenceSpeakButton: null,
       sentenceSpeechText: '',
       sentenceSpeechLanguage: '',
+      copyButton: null,
+      copyMenu: null,
+      copyTexts: null,
       tooltip: null,
       tooltipItem: null,
       tooltipAnchor: null,
@@ -113,6 +116,7 @@
       state.second.addEventListener('scroll', () => {
         dismissTooltip();
         dismissMeaningPreview();
+        dismissCopyMenu();
       });
       const dragHandle = document.createElement('button');
       dragHandle.type = 'button';
@@ -128,6 +132,7 @@
         applyCaptionPosition();
         positionDragHandle();
         positionSentenceSpeakButton();
+        positionCopyControls();
       };
       const finishDrag = (event) => {
         if (!state.drag || event.pointerId !== state.drag.pointerId) return;
@@ -148,6 +153,7 @@
         const caption = state.second.getBoundingClientRect();
         if (!root.width || !root.height) return;
         dismissTooltip();
+        dismissCopyMenu();
         state.drag = {
           pointerId: event.pointerId,
           pointerX: event.clientX,
@@ -178,8 +184,132 @@
       });
       root.append(sentenceSpeak);
       state.sentenceSpeakButton = sentenceSpeak;
+      const copyButton = document.createElement('button');
+      copyButton.type = 'button';
+      copyButton.className = 'dual-captions-copy';
+      copyButton.title = 'Скопировать субтитры';
+      copyButton.setAttribute('aria-label', 'Скопировать субтитры');
+      copyButton.setAttribute('aria-haspopup', 'dialog');
+      copyButton.setAttribute('aria-controls', 'dual-captions-copy-menu');
+      copyButton.setAttribute('aria-expanded', 'false');
+      copyButton.style.cssText = 'all:initial;box-sizing:border-box;position:absolute;z-index:2;display:none;width:24px;height:24px;place-items:center;border:1px solid rgba(215,224,245,.2);border-radius:6px;background:rgba(14,17,26,.7);color:#e4e9f5;opacity:.42;cursor:pointer;pointer-events:auto;transition:opacity .15s,background .15s;';
+      const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      icon.setAttribute('viewBox', '0 0 20 20');
+      icon.setAttribute('aria-hidden', 'true');
+      icon.style.cssText = 'width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;';
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M7 6V3h10v10h-3M3 7h10v10H3Z');
+      icon.append(path);
+      copyButton.append(icon);
+      copyButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (state.copyMenu) dismissCopyMenu();
+        else showCopyMenu();
+      });
+      for (const [type, active] of [['mouseenter', true], ['mouseleave', false], ['focus', true], ['blur', false]]) {
+        copyButton.addEventListener(type, () => emphasizeCopyButton(active));
+      }
+      root.append(copyButton);
+      state.copyButton = copyButton;
       document.documentElement.append(root);
       state.root = root;
+    }
+
+    function emphasizeCopyButton(active = false) {
+      if (state.copyButton) state.copyButton.style.opacity = active || state.copyMenu ? '1' : '.42';
+    }
+
+    function dismissCopyMenu(focus = false) {
+      state.copyMenu?.remove();
+      state.copyMenu = null;
+      state.copyButton?.setAttribute('aria-expanded', 'false');
+      emphasizeCopyButton();
+      if (focus) state.copyButton?.focus({ preventScroll: true });
+    }
+
+    async function writeCaptionClipboard(text) {
+      if (globalThis.navigator?.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return;
+        } catch { /* HTTP players and restrictive iframe policies need the user-gesture fallback. */ }
+      }
+      const focused = document.activeElement;
+      const selection = document.getSelection?.();
+      const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index).cloneRange()) : [];
+      const input = document.createElement('textarea');
+      input.value = text;
+      input.readOnly = true;
+      input.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;padding:0;border:0;opacity:0;pointer-events:none;';
+      // Keep the temporary field in the fullscreen-visible overlay, not the page body.
+      state.root.append(input);
+      try {
+        input.focus({ preventScroll: true });
+        input.select();
+        if (!document.execCommand?.('copy')) throw new Error('Копирование недоступно');
+      } finally {
+        input.remove();
+        if (focused?.isConnected) focused.focus({ preventScroll: true });
+        if (selection && ranges.length) {
+          selection.removeAllRanges();
+          for (const range of ranges) selection.addRange(range);
+        }
+      }
+    }
+
+    function showCopyMenu() {
+      if (!state.active || destroyed || !state.copyTexts?.original) return;
+      dismissTooltip();
+      dismissMeaningPreview();
+      const texts = state.copyTexts;
+      const menu = document.createElement('div');
+      menu.id = 'dual-captions-copy-menu';
+      menu.className = 'dual-captions-copy-menu';
+      menu.setAttribute('role', 'dialog');
+      menu.setAttribute('aria-label', 'Скопировать субтитры');
+      menu.style.cssText = 'all:initial;box-sizing:border-box;position:absolute;z-index:4;display:grid;gap:3px;padding:6px;border:1px solid rgba(177,196,231,.25);border-radius:9px;background:rgba(17,21,30,.98);box-shadow:0 6px 20px #0006;pointer-events:auto;overflow:auto;overscroll-behavior:contain;';
+      const feedback = document.createElement('div');
+      feedback.setAttribute('role', 'status');
+      feedback.style.cssText = 'padding:4px 7px;color:#99a5bc;font:11px/1.3 Arial,sans-serif;white-space:normal;';
+      feedback.textContent = 'Скопировать';
+      const choices = [['original', 'Оригинал'], ['translation', 'Перевод'], ...(texts.chinese ? [['pinyin', 'Пиньинь']] : [])];
+      for (const [key, label] of choices) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = label;
+        button.disabled = !texts[key];
+        button.title = button.disabled ? `${label} ещё не готов` : `Скопировать: ${label.toLowerCase()}`;
+        button.style.cssText = `all:initial;box-sizing:border-box;display:block;width:100%;padding:7px 8px;border:1px solid transparent;border-radius:5px;color:#e4e9f5;background:transparent;font:12px/1.3 Arial,sans-serif;text-align:left;cursor:${button.disabled ? 'default' : 'pointer'};opacity:${button.disabled ? '.35' : '1'};`;
+        for (const [type, active] of [['mouseenter', true], ['mouseleave', false], ['focus', true], ['blur', false]]) {
+          button.addEventListener(type, () => {
+            button.style.background = active && !button.disabled ? 'rgba(160,183,238,.12)' : 'transparent';
+            button.style.borderColor = active && !button.disabled ? 'rgba(160,183,238,.25)' : 'transparent';
+          });
+        }
+        button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (button.disabled || state.copyMenu !== menu) return;
+          button.disabled = true;
+          void writeCaptionClipboard(texts[key]).then(() => {
+            if (state.copyMenu === menu) feedback.textContent = 'Скопировано';
+          }).catch(() => {
+            if (state.copyMenu === menu) feedback.textContent = 'Не удалось скопировать. Повторите.';
+          }).finally(() => { button.disabled = false; });
+        });
+        menu.append(button);
+      }
+      menu.append(feedback);
+      menu.addEventListener('keydown', (event) => {
+        // Do not let player shortcuts handle keys used inside the copy dialog.
+        event.stopPropagation();
+        if (event.key === 'Escape') { event.preventDefault(); dismissCopyMenu(true); }
+      });
+      state.root.append(menu);
+      state.copyMenu = menu;
+      state.copyButton.setAttribute('aria-expanded', 'true');
+      emphasizeCopyButton(true);
+      positionCopyControls();
+      menu.children[0]?.focus({ preventScroll: true });
     }
 
     function dismissTooltip() {
@@ -259,6 +389,7 @@
     }
 
     function showTooltip(item, anchor) {
+      dismissCopyMenu();
       if (state.tooltipItem === item && state.tooltipAnchor === anchor) {
         dismissTooltip();
         return;
@@ -689,6 +820,13 @@
       state.captionLayoutKey = '';
       state.sentenceSpeechText = '';
       state.sentenceSpeechLanguage = '';
+      dismissCopyMenu();
+      state.copyTexts = {
+        original: descriptor.sourceText,
+        translation: items?.find((item) => item?.isSentenceTranslation && typeof item.dictionary === 'string')?.dictionary.trim() || '',
+        pinyin: descriptor.language === 'zh' && (translatedPinyin || !descriptor.generatedPinyin) ? descriptor.displayText : '',
+        chinese: descriptor.language === 'zh',
+      };
       if (state.sentenceSpeakButton) state.sentenceSpeakButton.style.display = 'none';
       dismissMeaningPreview();
       dismissTooltip();
@@ -795,6 +933,7 @@
       applyCaptionPosition();
       positionDragHandle();
       positionSentenceSpeakButton();
+      positionCopyControls();
       positionMeaningPreview();
       positionTooltip();
     }
@@ -864,6 +1003,27 @@
       const top = Math.max(0, Math.min(root.height - 30, caption.top - root.top));
       button.style.left = `${left}px`;
       button.style.top = `${top}px`;
+    }
+
+    function positionCopyControls() {
+      if (!state.root || !state.copyButton) return;
+      const visible = state.second?.style.display !== 'none' && Boolean(state.copyTexts?.original);
+      state.copyButton.style.display = visible ? 'grid' : 'none';
+      if (!visible) return;
+      const root = state.root.getBoundingClientRect();
+      const caption = state.second.getBoundingClientRect();
+      const left = Math.max(0, Math.min(root.width - 24, caption.right - root.left - 7));
+      const top = Math.max(0, Math.min(root.height - 24, caption.top - root.top + 28));
+      state.copyButton.style.left = `${left}px`;
+      state.copyButton.style.top = `${top}px`;
+      if (!state.copyMenu) return;
+      const menu = state.copyMenu;
+      menu.style.width = `${Math.max(0, Math.min(176, root.width - 16))}px`;
+      menu.style.maxHeight = `${Math.max(0, root.height - 16)}px`;
+      const box = menu.getBoundingClientRect();
+      const above = caption.top - root.top - box.height - 8;
+      menu.style.left = `${Math.max(8, Math.min(root.width - box.width - 8, left + 24 - box.width))}px`;
+      menu.style.top = `${Math.max(8, Math.min(root.height - box.height - 8, above >= 8 ? above : caption.bottom - root.top + 8))}px`;
     }
 
     function subtitleBackgroundStyle() {
@@ -976,6 +1136,8 @@
         state.active = false;
         state.renderedCaptionKey = '';
         state.renderedCaptionItems = null;
+        state.copyTexts = null;
+        dismissCopyMenu();
         if (state.second) state.second.textContent = '';
         dismissTooltip();
         if (state.root) state.root.style.display = 'none';
@@ -1002,6 +1164,16 @@
     cleanup.push(() => observer.disconnect());
 
     for (const [target, type, listener, options] of [
+      [document, 'pointerdown', (event) => {
+        if (state.copyMenu && !state.copyMenu.contains(event.target) && !state.copyButton.contains(event.target)) dismissCopyMenu();
+      }, true],
+      [document, 'keydown', (event) => {
+        if (state.copyMenu && event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          dismissCopyMenu(true);
+        }
+      }],
       [window, 'resize', positionOverlay],
       [window, 'scroll', positionOverlay, true],
       [document, 'fullscreenchange', positionOverlay],
@@ -1022,6 +1194,7 @@
         manager.destroy();
         for (const dispose of cleanup.splice(0).reverse()) dispose();
         dismissTooltip();
+        dismissCopyMenu();
         state.root?.remove();
       },
     };
