@@ -31,12 +31,15 @@ function makeDocument() {
   const ids = [
     'controls', 'status', 'player', 'originalTrack',
     'fontSize', 'subtitleColor', 'subtitleBackground', 'subtitleBackgroundColor', 'subtitleBackgroundOpacity', 'subtitleBackgroundOpacityValue', 'fontSizeValue', 'externalList',
-    'syncBox', 'syncTrack', 'offsetSeconds', 'timeScalePercent', 'activate', 'restartSearch', 'subtitleFile',
+    'syncBox', 'syncTrackName', 'offsetSeconds', 'timeScalePercent', 'activate', 'restartSearch', 'subtitleFile',
+    'videoConnection', 'videoTitle', 'changeVideo', 'videoOptions', 'playerChoice',
+    'captionTitle', 'captionSource', 'captionState', 'changeSubtitles', 'subtitleOptions', 'showTiming', 'externalFiles',
+    'youtubeActions', 'chooseYoutubeLanguage', 'generationOptions', 'generationLanguage', 'generationHint',
     'aiProvider', 'aiKey', 'aiKeyLabel', 'aiModel', 'aiModelHint', 'loadAiModels', 'clearAiKey', 'saveAiSettings', 'aiKeyState', 'speechVoice', 'speechRate', 'speechPreview',
     'youtubeSubtitles', 'youtubeSubtitleStatus', 'createYoutubeSubtitles', 'cancelYoutubeSubtitles',
     'youtubeProgressBox', 'youtubeProgress', 'youtubeProgressValue', 'youtubeProgressDetail', 'youtubeLanguage',
     'playerTab', 'appearanceTab', 'settingsTab', 'playerPanel', 'appearancePanel', 'settingsPanel',
-    'aiSettingsTab', 'voiceSettingsTab', 'subtitleSettingsTab', 'aiSettingsPanel', 'voiceSettingsPanel', 'subtitleSettingsPanel',
+    'aiSettingsTab', 'voiceSettingsTab', 'aiSettingsPanel', 'voiceSettingsPanel',
     'subtitlePreview', 'inlineTranslations', 'saveStatus', 'retrySave', 'retryYoutubeSubtitles', 'retrySettings', 'pageScope',
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement()]));
@@ -96,12 +99,119 @@ async function bootPopup(overrides = {}, tab = { id: 77, url: 'https://video.exa
   return { elements: document.elements, document, messages, handlers };
 }
 
+test('video workspace separates saved subtitles from connection and edits only the active track timing', async () => {
+  const first = { id: 'first', name: 'First file', cues: [{ start: 0, end: 1, text: 'one' }], offsetSeconds: 1 };
+  const active = { id: 'active', name: 'Active file', cues: [{ start: 0, end: 1, text: 'two' }], offsetSeconds: 4 };
+  const { elements, messages, document } = await bootPopup({
+    'dualCaptions.state.get': () => ({ state: { settings: { secondTrackId: 'external:active' }, externalTracks: [first, active] } }),
+    'dualCaptions.track.timing': () => ({ state: {} }),
+  });
+  assert.equal(elements.videoConnection.textContent, 'Видео не подключено');
+  assert.equal(elements.captionTitle.textContent, 'Active file');
+  assert.equal(elements.captionSource.textContent, 'Из файла SRT');
+  assert.match(elements.captionState.textContent, /сохранены.*подключите/i);
+  assert.equal(elements.subtitleOptions.hidden, true);
+  assert.equal(elements.syncBox.hidden, true);
+  const before = messages.length;
+  elements.changeSubtitles.listeners.get('click')();
+  assert.equal(elements.subtitleOptions.hidden, false);
+  assert.equal(messages.length, before, 'opening choices must not start discovery or write settings');
+  elements.showTiming.listeners.get('click')();
+  assert.equal(elements.syncBox.hidden, false);
+  assert.equal(elements.syncTrackName.textContent, 'Active file');
+  assert.equal(elements.offsetSeconds.value, 4);
+  document.querySelectorAll('[data-shift]').find((button) => button.dataset.shift === '1').listeners.get('click')();
+  assert.equal(messages.at(-1).id, 'active');
+  assert.equal(messages.at(-1).offsetSeconds, 5);
+  await tick();
+});
+
+test('activation asks which video to use instead of connecting an arbitrary embed', async () => {
+  const videos = [
+    { frameId: 1, key: 'one', title: 'First', tracks: [] },
+    { frameId: 2, key: 'two', title: 'Second', tracks: [] },
+  ];
+  const { elements, messages } = await bootPopup({
+    'dualCaptions.player.discover': () => ({ players: videos }),
+    'dualCaptions.player.select': (message) => ({ delivered: true, state: { settings: {
+      selectedPlayerKey: message.playerKey, selectedPlayerFrameId: message.frameId,
+    } } }),
+  });
+  elements.activate.listeners.get('click')();
+  await tick();
+  assert.equal(messages.some((message) => message.type === 'dualCaptions.player.select'), false);
+  assert.equal(elements.videoOptions.hidden, false);
+  assert.equal(elements.player.value, '');
+  elements.player.value = '2';
+  elements.player.listeners.get('change')();
+  await tick();
+  assert.equal(messages.find((message) => message.type === 'dualCaptions.player.select').playerKey, 'two');
+  assert.equal(elements.videoTitle.textContent, 'Second');
+  assert.equal(elements.activate.hidden, true);
+});
+
+test('one native caption connects in one action while a missing saved video is never replaced', async () => {
+  const video = { frameId: 2, key: 'video', title: 'Episode', tracks: [{ id: 'native-en', label: 'English', language: 'en' }] };
+  for (const savedKey of ['', 'temporarily-missing']) {
+    const { elements, messages } = await bootPopup({
+      'dualCaptions.state.get': () => ({ state: { settings: { selectedPlayerKey: savedKey } } }),
+      'dualCaptions.player.discover': () => ({ players: [video] }),
+      'dualCaptions.player.select': () => ({ delivered: true, state: { settings: { selectedPlayerKey: 'video', selectedPlayerFrameId: 2 } } }),
+    });
+    elements.activate.listeners.get('click')();
+    await tick();
+    if (savedKey) {
+      assert.equal(messages.some((message) => message.type === 'dualCaptions.player.select' || message.type === 'dualCaptions.state.patch'), false);
+      assert.match(elements.status.textContent, /Ранее выбранное видео/);
+    } else {
+      assert.equal(messages.find((message) => message.type === 'dualCaptions.state.patch').patch.secondTrackId, 'native-en');
+      assert.equal(elements.captionSource.textContent, 'С сайта');
+      assert.equal(elements.captionState.textContent, 'Готовы к показу на видео.');
+      assert.equal(elements.subtitleOptions.hidden, true);
+    }
+  }
+});
+
+test('failed delivery keeps the saved caption but never reports a connected video', async () => {
+  const video = { frameId: 2, key: 'video', tracks: [] };
+  const track = { id: 'saved', name: 'Saved', cues: [{ start: 0, end: 1, text: 'saved' }] };
+  const settings = { selectedPlayerKey: 'video', selectedPlayerFrameId: 2, secondTrackId: 'external:saved' };
+  const { elements } = await bootPopup({
+    'dualCaptions.state.get': () => ({ state: { settings, externalTracks: [track] } }),
+    'dualCaptions.player.discover': () => ({ players: [video] }),
+    'dualCaptions.player.select': () => ({ delivered: false, state: { settings, externalTracks: [track] } }),
+  });
+  elements.activate.listeners.get('click')();
+  await tick();
+  assert.equal(elements.videoConnection.textContent, 'Видео не подключено');
+  assert.equal(elements.activate.hidden, false);
+  assert.equal(elements.originalTrack.value, 'external:saved');
+  assert.match(elements.captionState.textContent, /сохранены.*подключите/i);
+  assert.match(elements.status.textContent, /не ответило/);
+});
+
+test('recognition progress remains visible with choices closed and does not disable the active caption', async () => {
+  const track = { id: 'saved', name: 'Saved', cues: [{ start: 0, end: 1, text: 'hello' }] };
+  const { elements, messages, document } = await bootPopup({
+    'dualCaptions.state.get': () => ({ state: { settings: { secondTrackId: 'external:saved' }, externalTracks: [track] } }),
+    'dualCaptions.localSubtitle.status': () => ({ status: 'running', stage: 'recognizing', progress: 25 }),
+  }, { id: 88, url: 'https://www.youtube.com/watch?v=rwnyaH6cTDE' });
+  assert.equal(elements.subtitleOptions.hidden, true);
+  assert.equal(elements.youtubeSubtitles.hidden, false);
+  assert.equal(elements.youtubeProgressBox.hidden, false);
+  assert.equal(elements.originalTrack.value, 'external:saved');
+  assert.equal(elements.originalTrack.disabled, false);
+  assert.equal(elements.youtubeLanguage.disabled, true);
+  assert.equal(messages.some((message) => message.type === 'dualCaptions.localSubtitle.generate'), false);
+  document.defaultView.listeners.get('pagehide')();
+});
+
 test('settings categories switch independently without resetting drafts or writing settings', async () => {
   const { elements, messages } = await bootPopup();
   elements.settingsTab.listeners.get('click')();
   messages.length = 0;
   elements.aiKey.value = 'unsaved-draft';
-  const names = ['aiSettings', 'voiceSettings', 'subtitleSettings'];
+  const names = ['aiSettings', 'voiceSettings'];
   for (const name of names) {
     elements[`${name}Tab`].listeners.get('click')();
     for (const other of names) {
@@ -114,12 +224,12 @@ test('settings categories switch independently without resetting drafts or writi
   }
   elements.appearanceTab.listeners.get('click')();
   elements.settingsTab.listeners.get('click')();
-  assert.equal(elements.subtitleSettingsPanel.hidden, false);
+  assert.equal(elements.voiceSettingsPanel.hidden, false);
   for (const [from, key, target] of [
-    ['subtitleSettings', 'ArrowRight', 'aiSettings'],
-    ['aiSettings', 'ArrowLeft', 'subtitleSettings'],
-    ['subtitleSettings', 'Home', 'aiSettings'],
-    ['aiSettings', 'End', 'subtitleSettings'],
+    ['voiceSettings', 'ArrowRight', 'aiSettings'],
+    ['aiSettings', 'ArrowLeft', 'voiceSettings'],
+    ['voiceSettings', 'Home', 'aiSettings'],
+    ['aiSettings', 'End', 'voiceSettings'],
   ]) {
     let prevented = false;
     elements[`${from}Tab`].listeners.get('keydown')({ key, preventDefault() { prevented = true; } });
@@ -145,7 +255,7 @@ test('inline translations toggle hydrates, previews and saves immediately', asyn
 
 test('manual generation forwards the selected speech language and imports its label', async () => {
   for (const language of ['en', 'zh', '']) {
-    const expected = language || 'zh';
+    const expected = language || 'en';
     const { elements, messages } = await bootPopup({
       'dualCaptions.state.get': () => ({ state: { settings: { youtubeLanguage: language } } }),
       'dualCaptions.localSubtitle.status': () => ({ status: 'missing' }),
@@ -155,7 +265,16 @@ test('manual generation forwards the selected speech language and imports its la
       'dualCaptions.track.upsertLocal': (m) => ({ state: { settings: { youtubeLanguage: language }, externalTracks: [m.track] } }),
     }, { id: 77, url: 'https://www.youtube.com/watch?v=0Zaxca2sUGs' });
     await tick();
-    assert.match(elements.youtubeSubtitleStatus.textContent, /Выберите язык речи/);
+    assert.match(elements.youtubeSubtitleStatus.textContent, /Готовых субтитров.*нет/);
+    if (!language) {
+      elements.createYoutubeSubtitles.listeners.get('click')();
+      await tick();
+      assert.equal(messages.some((message) => message.type === 'dualCaptions.localSubtitle.generate'), false);
+      assert.match(elements.generationHint.textContent, /Выберите язык речи/);
+      assert.equal(elements.generationOptions.open, true);
+      elements.generationLanguage.value = expected;
+      elements.generationLanguage.listeners.get('change')();
+    }
     elements.createYoutubeSubtitles.listeners.get('click')();
     await tick();
     await tick();
@@ -266,7 +385,7 @@ test('production popup startup performs read-only hydration and never overwrites
   assert.equal(document.elements.controls.hidden, false);
   assert.equal(document.elements.fontSize.value, 29);
   assert.equal(messages.find((message) => message.type === 'dualCaptions.player.get').cachedOnly, true);
-  assert.equal(document.elements.status.textContent, 'Нажмите «Подключить к плееру» на странице с видео.');
+  assert.equal(document.elements.status.textContent, 'Нажмите «Включить субтитры» на странице с видео.');
 });
 
 test('rapid appearance input is sent before popup teardown and survives late hydration', async () => {
@@ -413,7 +532,7 @@ test('restart search repeats player discovery and restores the selected player',
         if (message.type === 'dualCaptions.player.get') return { ok: true, data: { players: [player] } };
         if (message.type === 'dualCaptions.ai.get') return { ok: true, data: { hasApiKey: false } };
         if (message.type === 'dualCaptions.player.discover') return { ok: true, data: { players: [player] } };
-        if (message.type === 'dualCaptions.player.select') return { ok: true, data: { state: {} } };
+        if (message.type === 'dualCaptions.player.select') return { ok: true, data: { state: { settings: { selectedPlayerKey: player.key, selectedPlayerFrameId: player.frameId } }, delivered: true } };
         throw new Error(`Unexpected message: ${message.type}`);
       },
     },
@@ -432,14 +551,15 @@ test('restart search repeats player discovery and restores the selected player',
     'dualCaptions.player.discover',
     'dualCaptions.player.select',
   ]);
-  assert.equal(document.elements.status.textContent, 'Поиск субтитров перезапущен. Найдено плееров: 1.');
+  assert.equal(document.elements.status.textContent, '');
+  assert.equal(document.elements.videoConnection.textContent, 'Видео подключено');
 });
 
 test('rapid timing adjustments are handed off immediately and keep their final optimistic value', async () => {
   const track = { id: 'manual', name: 'Manual', cues: [{ start: 0, end: 1, text: 'hello' }], offsetSeconds: 0, timeScale: 1 };
   const saving = deferred();
   const { elements, document, messages } = await bootPopup({
-    'dualCaptions.state.get': () => ({ state: { externalTracks: [track] } }),
+    'dualCaptions.state.get': () => ({ state: { settings: { secondTrackId: 'external:manual' }, externalTracks: [track] } }),
     'dualCaptions.track.timing': () => saving.promise,
   });
   const button = document.querySelectorAll('[data-shift]').find((item) => item.dataset.shift === '1');
@@ -664,6 +784,7 @@ test('a lost generation response requires status recovery instead of enabling du
     'dualCaptions.localSubtitle.existing': () => ({ status: 'missing' }),
     'dualCaptions.localSubtitle.generate': () => { throw new Error('timeout'); },
   }, { id: 88, url: 'https://www.youtube.com/watch?v=rwnyaH6cTDE' });
+  elements.generationLanguage.value = 'zh';
   elements.createYoutubeSubtitles.listeners.get('click')();
   await tick();
   assert.equal(elements.createYoutubeSubtitles.disabled, true);
@@ -716,6 +837,7 @@ test('explicit generation replaces an earlier manual selection in storage and th
   }, { id: 88, url: 'https://www.youtube.com/watch?v=rwnyaH6cTDE' });
   elements.originalTrack.value = 'native:old';
   elements.originalTrack.listeners.get('change')();
+  elements.generationLanguage.value = 'zh';
   elements.createYoutubeSubtitles.listeners.get('click')();
   await tick();
   assert.equal(elements.originalTrack.value, 'external:youtube-rwnyaH6cTDE-generated');
@@ -795,8 +917,10 @@ test('YouTube startup downloads ready Chinese subtitles without starting recogni
   await import(`../popup.js?youtube-existing-test=${Date.now()}`);
   await new Promise((resolve) => setTimeout(resolve, 20));
 
-  assert.equal(document.elements.youtubeSubtitles.hidden, false);
-  assert.match(document.elements.youtubeSubtitleStatus.textContent, /подключены/i);
+  assert.equal(document.elements.youtubeSubtitles.hidden, true);
+  assert.match(document.elements.youtubeSubtitleStatus.textContent, /сохранены/i);
+  assert.equal(document.elements.videoConnection.textContent, 'Видео не подключено');
+  assert.match(document.elements.captionState.textContent, /сохранены.*подключите/i);
   assert.equal(messages.some((message) => message.type === 'dualCaptions.localSubtitle.generate'), false);
   assert.deepEqual(messages.filter((message) => message.type.startsWith('dualCaptions.localSubtitle')).map((message) => message.type), [
     'dualCaptions.localSubtitle.status',
@@ -874,6 +998,7 @@ test('YouTube recognition starts only after the create button is clicked', async
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(messages.some((message) => message.type === 'dualCaptions.localSubtitle.generate'), false);
 
+  document.elements.generationLanguage.value = 'zh';
   document.elements.createYoutubeSubtitles.listeners.get('click')();
   await new Promise((resolve) => setTimeout(resolve, 20));
 

@@ -46,8 +46,27 @@ button:disabled, input:disabled, select:disabled { opacity: .55; cursor: not-all
 .primary { width: 100%; border: 1px solid #8ba7ff; padding: 9px; background: linear-gradient(135deg, #7898ff, #7865e8); box-shadow: 0 7px 18px rgba(85, 102, 230, .24); color: white; font-weight: 800; }
 .primary:hover { border-color: #b1c1ff; background: linear-gradient(135deg, #87a5ff, #8773f4); }
 .restart-search { width: 100%; margin-top: 7px; color: #c9d5f6; }
-.youtube-card { margin-top: 10px; }
-.youtube-card button { width: 100%; margin-top: 9px; border-color: #697da8; background: #25304a; }
+.video-card .section-heading { align-items: center; }
+.video-card .primary { margin-top: 10px; box-shadow: none; }
+.video-title { margin: 7px 0 0; color: #bac5d9; font-size: 12px; overflow-wrap: anywhere; }
+.caption-title { margin: 10px 0 2px; font-size: 16px; font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; }
+.caption-source { margin: 0; color: #96a5be; font-size: 11px; }
+.workspace-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 12px; }
+.workspace-actions button { font-size: 11px; }
+.text-button { border-color: transparent; padding: 5px 6px; background: transparent; color: #b8c8ef; font-size: 11px; }
+.text-button:hover { border-color: #3b4c69; background: #222b3d; }
+.workspace-options { margin-top: 12px; padding-top: 10px; border-top: 1px solid #30394a; }
+.workspace-options > label:first-child { margin-top: 0; }
+.workspace-details { margin-top: 12px; }
+.workspace-details summary { padding: 5px 0; color: #b8c8ef; cursor: pointer; font-size: 12px; }
+.workspace-details summary:focus-visible { outline: 2px solid #89a6ff; outline-offset: 3px; border-radius: 3px; }
+.youtube-actions { margin-top: 12px; padding-top: 2px; border-top: 1px solid #30394a; }
+.youtube-activity { margin-top: 12px; padding: 9px 10px; border: 1px solid #30394a; border-radius: 8px; background: #141923; }
+.youtube-activity .hint:first-child { margin-top: 0; }
+.youtube-activity button, #createYoutubeSubtitles { width: 100%; margin-top: 9px; }
+.external-list { max-height: 150px; overflow: auto; scrollbar-color: #4f5c76 transparent; scrollbar-width: thin; }
+.hint:empty { display: none; }
+#status.error { color: #ffb2bb; }
 #youtubeSubtitleStatus.error { color: #ffb2bb; }
 .youtube-progress { margin-top: 8px; }
 .progress-row { display: flex; align-items: center; gap: 8px; }
@@ -87,7 +106,7 @@ optgroup { font-weight: 700; }
 .button-row button { flex: 1; font-size: 12px; }
 .settings-save { margin-top: 9px; }
 .danger-text { color: #ffb5c0; }
-.settings-tabs { display: grid; grid-template-columns: .8fr 1fr 1.35fr; gap: 4px; margin: 0 0 10px; padding: 4px; border: 1px solid #2d3544; border-radius: 11px; background: #141821; }
+.settings-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 0 0 10px; padding: 4px; border: 1px solid #2d3544; border-radius: 11px; background: #141821; }
 .compact-settings .settings-tabs button { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 36px; padding: 7px 5px; border-color: transparent; border-radius: 7px; background: transparent; color: #9faabd; font-size: 12px; white-space: nowrap; }
 .settings-tabs svg { flex-shrink: 0; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .compact-settings .settings-tabs button:hover { border-color: #35435c; background: #202838; color: #e4eaff; }

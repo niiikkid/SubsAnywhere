@@ -7,7 +7,7 @@ import {
   loadPopupSnapshot,
 } from './popup-model.js';
 import { MESSAGE } from './protocol.js';
-import { buildTrackOptions, normalizeState, patchSettings, updateExternalTrackTiming } from './state-core.js';
+import { buildTrackOptions, isBuiltInCacheTrack, normalizeState, patchSettings, updateExternalTrackTiming } from './state-core.js';
 
 const $ = (id) => document.getElementById(id);
 const embeddedPanel = new URLSearchParams(globalThis.location?.search || '').get('embedded') === '1'
@@ -34,7 +34,16 @@ let speechVoices = [];
 let speechRevision = 0;
 let youtubeLoaded = false;
 let selectedFrameId;
-let syncTrackId = '';
+let videoOptionsOpen = false;
+let subtitleOptionsOpen = false;
+let timingOpen = false;
+let connectionBusy = false;
+let playerDeliveryFailed = false;
+let pageHydrated = false;
+let discoveryRevision = 0;
+let youtubePhase = 'loading';
+let generationRunning = false;
+let generationLanguageEdited = false;
 let aiConfig = {
   activeProvider: 'deepseek',
   providers: {
@@ -149,6 +158,7 @@ function saveRequest(key, type, payload, apply = () => {}) {
 
 function setStatus(text, error = false) {
   status.textContent = text;
+  status.hidden = !text;
   status.classList.toggle('error', error);
   if (error) {
     $('saveStatus').textContent = text;
@@ -205,10 +215,12 @@ function drawPreview() {
     ? `rgba(${rgb.join(', ')}, ${settings.subtitleBackgroundOpacity / 100})` : 'transparent';
 }
 
-function setYoutubeStatus(text, error = false) {
+function setYoutubeStatus(text, error = false, phase = 'ready') {
   const element = $('youtubeSubtitleStatus');
   element.textContent = text;
   element.classList.toggle('error', error);
+  youtubePhase = error ? 'error' : phase;
+  drawWorkspace();
 }
 
 function youtubeFailure(error, canGenerate = false, epoch = youtubeEpoch) {
@@ -222,13 +234,15 @@ function youtubeFailure(error, canGenerate = false, epoch = youtubeEpoch) {
 
 function drawYoutubeProgress(payload) {
   const progress = formatGenerationProgress(payload);
+  generationRunning = progress.visible;
   $('youtubeProgressBox').hidden = !progress.visible;
   $('cancelYoutubeSubtitles').hidden = !progress.visible;
   if (!progress.visible) $('cancelYoutubeSubtitles').disabled = false;
   $('youtubeProgress').value = progress.value;
   $('youtubeProgressValue').value = `${progress.value}%`;
   $('youtubeProgressDetail').textContent = progress.detail;
-  if (progress.visible) setYoutubeStatus(progress.label);
+  if (progress.visible) setYoutubeStatus(progress.label, false, 'working');
+  else drawWorkspace();
 }
 
 function currentPlayer() {
@@ -236,7 +250,73 @@ function currentPlayer() {
 }
 
 function selectedExternalTrack() {
-  return state.externalTracks.find((track) => track.id === syncTrackId) ?? state.externalTracks[0] ?? null;
+  return state.externalTracks.find((track) => `external:${track.id}` === state.settings.secondTrackId) ?? null;
+}
+
+function connectedPlayer() {
+  if (playerDeliveryFailed) return null;
+  return players.find((player) => player.key === state.settings.selectedPlayerKey
+    && (state.settings.selectedPlayerFrameId < 0 || player.frameId === state.settings.selectedPlayerFrameId)) ?? null;
+}
+
+function subtitleOrigin(track) {
+  if (isBuiltInCacheTrack(track)) return 'Сохранены с сайта';
+  if (track?.sourceType === 'local-server') return track.id.endsWith('-generated') ? 'Созданы из речи' : 'Получены с YouTube';
+  return track ? 'Из файла SRT' : 'С сайта';
+}
+
+function trackChoices() {
+  return buildTrackOptions(
+    (connectedPlayer() ?? (players.length === 1 ? currentPlayer() : null))?.tracks ?? [],
+    state.externalTracks.filter((track) => !isBuiltInCacheTrack(track)),
+    state.settings.secondTrackId,
+    state.settings.secondTrackFallbackId,
+  );
+}
+
+function drawWorkspace() {
+  const player = connectedPlayer();
+  const selectedId = state.settings.secondTrackId;
+  const external = selectedExternalTrack();
+  const selected = trackChoices().find((item) => item.id === selectedId);
+  const cached = !external && selected?.unavailable && state.settings.secondTrackCacheSource
+    === `${state.settings.selectedPlayerKey}\u0000${selectedId}`
+    ? state.externalTracks.find((track) => track.id === state.settings.secondTrackCacheId && isBuiltInCacheTrack(track)) : null;
+  const available = selectedId && ((selected && !selected.unavailable) || cached);
+  const title = external?.name ?? cached?.name ?? (selectedId ? selected?.label : 'Субтитры не выбраны');
+  $('videoConnection').textContent = connectionBusy ? 'Подключение…' : player ? 'Видео подключено' : 'Видео не подключено';
+  $('videoTitle').textContent = player?.title || player?.sourceName || '';
+  $('videoTitle').hidden = !player;
+  $('activate').hidden = Boolean(player) && !connectionBusy;
+  $('activate').disabled = !connectable || !pageHydrated || connectionBusy;
+  $('changeVideo').hidden = !players.length;
+  $('changeVideo').setAttribute('aria-expanded', videoOptionsOpen);
+  $('videoOptions').hidden = !videoOptionsOpen;
+  $('playerChoice').hidden = !players.length;
+  $('player').disabled = !players.length || connectionBusy;
+  $('restartSearch').disabled = !connectable || !pageHydrated || connectionBusy;
+  $('captionTitle').textContent = title || 'Ранее выбранные субтитры';
+  $('captionSource').textContent = selectedId && available ? subtitleOrigin(external ?? cached) : '';
+  $('captionSource').hidden = !$('captionSource').textContent;
+  $('captionState').textContent = selectedId
+    ? !available ? 'Выбранная дорожка сейчас недоступна. Выбор сохранён.'
+      : player ? 'Готовы к показу на видео.' : 'Субтитры сохранены. Подключите видео для просмотра.'
+    : Object.hasOwn(editedSettings, 'secondTrackId') ? 'Субтитры выключены.'
+      : player && !player.tracks.length && !youtubeId ? 'У видео нет доступных субтитров. Добавьте файл SRT.'
+        : 'Выберите дорожку или добавьте файл SRT.';
+  $('changeSubtitles').disabled = !pageKey;
+  $('changeSubtitles').textContent = subtitleOptionsOpen ? 'Закрыть выбор' : 'Другие субтитры';
+  $('changeSubtitles').setAttribute('aria-expanded', subtitleOptionsOpen);
+  $('subtitleOptions').hidden = !subtitleOptionsOpen;
+  $('showTiming').hidden = !external;
+  $('showTiming').textContent = timingOpen ? 'Закрыть настройку времени' : 'Настроить время';
+  $('showTiming').setAttribute('aria-expanded', Boolean(external && timingOpen));
+  $('youtubeActions').hidden = !youtubeId;
+  $('youtubeSubtitles').hidden = !youtubeId || Boolean(!subtitleOptionsOpen && selectedId
+    && !['loading', 'working', 'error', 'language'].includes(youtubePhase));
+  $('chooseYoutubeLanguage').hidden = youtubePhase !== 'language';
+  $('youtubeLanguage').disabled = !pageKey || generationRunning;
+  $('generationLanguage').disabled = !pageKey || generationRunning;
 }
 
 function option(parent, value, label) {
@@ -273,32 +353,30 @@ function resetAiCatalog() {
 
 function drawPlayers() {
   const select = $('player');
-  const selected = currentPlayer();
+  const selected = connectedPlayer() ?? currentPlayer();
   selectedFrameId = selected?.frameId;
   select.replaceChildren();
-  players.forEach((player, index) => option(select, player.frameId, `Плеер ${index + 1}: ${player.title || 'video'}`));
-  if (selected) select.value = String(selected.frameId);
+  option(select, '', 'Выберите видео');
+  players.forEach((player, index) => option(select, player.frameId, player.title || player.sourceName || `Видео ${index + 1}`));
+  select.value = connectedPlayer() ? String(selected.frameId) : '';
 }
 
-function drawTrackSelect(select, selectedId, selectedFallbackId) {
-  const options = buildTrackOptions(
-    currentPlayer()?.tracks ?? [],
-    state.externalTracks,
-    selectedId,
-    selectedFallbackId,
-  );
+function drawTrackSelect(select, selectedId) {
+  const options = trackChoices();
   const groups = new Map();
   select.replaceChildren();
   for (const item of options) {
     let parent = select;
-    if (item.group) {
-      if (!groups.has(item.group)) {
+    const external = state.externalTracks.find((track) => `external:${track.id}` === item.id);
+    const groupName = item.unavailable ? item.group : item.group ? subtitleOrigin(external) : '';
+    if (groupName) {
+      if (!groups.has(groupName)) {
         const group = document.createElement('optgroup');
-        group.label = item.group;
-        groups.set(item.group, group);
+        group.label = groupName;
+        groups.set(groupName, group);
         select.append(group);
       }
-      parent = groups.get(item.group);
+      parent = groups.get(groupName);
     }
     const element = option(parent, item.id, item.label);
     if (item.unavailable) element.dataset.unavailable = 'true';
@@ -309,7 +387,9 @@ function drawTrackSelect(select, selectedId, selectedFallbackId) {
 function drawExternalList() {
   const list = $('externalList');
   list.replaceChildren();
-  for (const track of state.externalTracks) {
+  const tracks = state.externalTracks.filter((track) => !isBuiltInCacheTrack(track));
+  $('externalFiles').hidden = !tracks.length;
+  for (const track of tracks) {
     const row = document.createElement('div');
     row.className = 'external-item';
     const text = document.createElement('div');
@@ -331,18 +411,11 @@ function drawExternalList() {
 
 function drawSync() {
   const box = $('syncBox');
-  box.hidden = state.externalTracks.length === 0;
-  if (!state.externalTracks.length) {
-    syncTrackId = '';
-    return;
-  }
-  const select = $('syncTrack');
-  if (!state.externalTracks.some((track) => track.id === syncTrackId)) syncTrackId = state.externalTracks[0].id;
-  select.replaceChildren();
-  for (const track of state.externalTracks) option(select, track.id, track.name);
-  select.value = syncTrackId;
-  $('offsetSeconds').value = selectedExternalTrack()?.offsetSeconds ?? 0;
-  $('timeScalePercent').value = Math.round((selectedExternalTrack()?.timeScale ?? 1) * 100_000) / 1000;
+  const track = selectedExternalTrack();
+  box.hidden = !track || !timingOpen;
+  $('syncTrackName').textContent = track?.name ?? '';
+  $('offsetSeconds').value = track?.offsetSeconds ?? 0;
+  $('timeScalePercent').value = Math.round((track?.timeScale ?? 1) * 100_000) / 1000;
 }
 
 function drawSettings() {
@@ -353,9 +426,9 @@ function drawSettings() {
   $('speechVoice').value = speechVoices.some((voice) => voice.voiceName === speechVoiceName) ? speechVoiceName : '';
   $('speechRate').value = String(speechRate);
   $('youtubeLanguage').value = settings.youtubeLanguage;
-  $('youtubeLanguage').disabled = !pageKey;
+  if (!generationLanguageEdited) $('generationLanguage').value = settings.youtubeLanguage || selectedExternalTrack()?.language || '';
   for (const id of ['fontSize', 'inlineTranslations', 'subtitleColor', 'subtitleBackground', 'originalTrack', 'subtitleFile']) $(id).disabled = !pageKey;
-  drawTrackSelect($('originalTrack'), settings.secondTrackId, settings.secondTrackFallbackId);
+  drawTrackSelect($('originalTrack'), settings.secondTrackId);
   $('fontSize').value = settings.fontSize;
   $('inlineTranslations').checked = settings.inlineTranslations;
   $('subtitleColor').value = settings.subtitleColor;
@@ -393,13 +466,12 @@ function drawSettings() {
           ? `Ключ ${providerLabel()} сохранён. Загрузите модели и выберите одну.`
           : `Ключ ${providerLabel()} не сохранён.`;
   drawPreview();
+  drawWorkspace();
 }
 
 function render() {
   controls.hidden = false;
-  $('restartSearch').hidden = players.length === 0;
   drawPlayers();
-  $('player').disabled = players.length === 0;
   drawSettings();
   drawExternalList();
   drawSync();
@@ -407,6 +479,7 @@ function render() {
 
 async function selectPlayer(player) {
   if (!player) return;
+  const revision = selectionRevision;
   selectedFrameId = player.frameId;
   const data = await request(MESSAGE.PLAYER_SELECT, {
     tabId,
@@ -415,6 +488,17 @@ async function selectPlayer(player) {
     playerKey: player.key,
   });
   adoptState(data.state);
+  playerDeliveryFailed = data.delivered === false;
+  videoOptionsOpen = false;
+  render();
+  if (playerDeliveryFailed) throw new Error('Видео не ответило. Нажмите «Включить субтитры» ещё раз. Выбор сохранён.');
+  if (!youtubeId && !state.settings.secondTrackId && revision === selectionRevision
+    && !Object.hasOwn(editedSettings, 'secondTrackId') && player.tracks?.length === 1) {
+    await persistSetting('secondTrackId', player.tracks[0].id);
+  }
+  if (!state.settings.secondTrackId) subtitleOptionsOpen = true;
+  if (playerDeliveryFailed) return;
+  setStatus('');
   render();
 }
 
@@ -431,7 +515,14 @@ function updateLocalSetting(key, value) {
 function persistSetting(key, value) {
   if (!pageKey) return Promise.resolve();
   const normalized = updateLocalSetting(key, value);
-  return saveRequest(`setting:${key}`, MESSAGE.STATE_PATCH, { tabId, pageKey, patch: { [key]: normalized } })
+  if (key === 'secondTrackId') { drawWorkspace(); drawSync(); }
+  return saveRequest(`setting:${key}`, MESSAGE.STATE_PATCH, { tabId, pageKey, patch: { [key]: normalized } }, (data) => {
+    if (key === 'secondTrackId' && data.delivered === false && connectedPlayer()) {
+      playerDeliveryFailed = true;
+      setStatus('Не удалось передать субтитры на видео. Подключитесь снова; выбор сохранён.', true);
+      drawWorkspace();
+    }
+  })
     .catch((error) => setStatus(`Не удалось сохранить настройку: ${error.message}`, true));
 }
 
@@ -441,9 +532,11 @@ function previewSetting(key, value) {
 
 async function importFile(file) {
   if (!file || !pageKey) return;
+  const revision = selectionRevision;
   if (file.size > 5 * 1024 * 1024) throw new Error('Файл слишком большой. Максимум — 5 МБ.');
   const text = decodeSubtitleBuffer(await file.arrayBuffer());
   const cues = parseSrt(text);
+  if (popupClosed) return;
   if (!cues.length) throw new Error('Не удалось найти строки SRT. Проверьте формат файла.');
   const track = {
     id: crypto.randomUUID(),
@@ -454,10 +547,10 @@ async function importFile(file) {
     timeScale: 1,
   };
   const data = await request(MESSAGE.TRACK_ADD, { tabId, pageKey, track });
+  if (popupClosed) return;
   adoptState(data.state);
-  syncTrackId = track.id;
   render();
-  if (!state.settings.secondTrackId) await persistSetting('secondTrackId', `external:${track.id}`);
+  if (revision === selectionRevision) await persistSetting('secondTrackId', `external:${track.id}`);
   render();
   setStatus(`Добавлен файл «${track.name}»: ${cues.length} строк.`);
   $('subtitleFile').value = '';
@@ -478,7 +571,6 @@ async function installLocalSubtitle(payload, selectTrack = false, selectionAtSta
   const stored = await request(MESSAGE.TRACK_UPSERT_LOCAL, { tabId, pageKey, track });
   if (popupClosed || epoch !== youtubeEpoch) return false;
   adoptState(stored.state);
-  syncTrackId = track.id;
   if (shouldSelect && revision === selectionRevision) {
     updateLocalSetting('secondTrackId', `external:${track.id}`);
     const selected = await request(MESSAGE.STATE_PATCH, {
@@ -529,14 +621,14 @@ async function pollExistingSubtitle(epoch, generatedReady = false, selectionAtSt
   const result = await request(MESSAGE.LOCAL_SUBTITLE_EXISTING, { videoId: youtubeId, language: state.settings.youtubeLanguage });
   if (popupClosed || epoch !== youtubeEpoch) return;
   if (result.status === 'running') {
-    setYoutubeStatus('Скачиваю готовую дорожку YouTube… Можно продолжать настройку внешнего вида.');
+    setYoutubeStatus('Получаю готовые субтитры YouTube…', false, 'loading');
     youtubePollTimer = setTimeout(() => pollExistingSubtitle(epoch, generatedReady, selectionAtStart, generatedError).catch((error) => youtubeFailure(error, true, epoch)), 1500);
     return;
   }
   if (result.status === 'error') throw new Error(result.error || 'Не удалось скачать дорожку YouTube');
   if (result.language_required) {
     if (generatedError) return youtubeFailure(generatedError, true, epoch);
-    setYoutubeStatus('YouTube не указал язык оригинала. Выберите английский или китайский выше.');
+    setYoutubeStatus('YouTube не указал язык оригинала. Уточните язык речи.', false, 'language');
     return;
   }
   const existingReady = await installLocalSubtitle(result, selectionAtStart !== null, selectionAtStart);
@@ -546,13 +638,11 @@ async function pollExistingSubtitle(epoch, generatedReady = false, selectionAtSt
       ? 'Созданные субтитры готовы. Готовая дорожка YouTube также сохранена.'
       : 'Созданные субтитры готовы. Готовой дорожки YouTube нет.');
   } else if (existingReady) {
-    setYoutubeStatus(players.length
-      ? 'Субтитры на языке оригинала скачаны и подключены.'
-      : 'Субтитры на языке оригинала сохранены. Подключите плеер для просмотра.');
+    setYoutubeStatus('Готовые субтитры YouTube сохранены. Выбранная дорожка указана выше.');
   } else if (generatedError) {
     youtubeFailure(generatedError, true, epoch);
   } else {
-    setYoutubeStatus('Не найдена подходящая английская или китайская дорожка оригинала. Выберите язык речи и создайте субтитры локально; в режиме «Авто» создание использует китайский.');
+    setYoutubeStatus('Готовых субтитров на языке оригинала нет. Добавьте файл SRT или создайте субтитры из речи.', false, 'missing');
   }
 }
 
@@ -562,8 +652,7 @@ async function loadYoutubeSubtitles() {
   const epoch = ++youtubeEpoch;
   $('createYoutubeSubtitles').disabled = true;
   $('retryYoutubeSubtitles').hidden = true;
-  $('youtubeSubtitles').hidden = false;
-  setYoutubeStatus('Проверяю локальный сервер…');
+  setYoutubeStatus('Проверяю доступные субтитры YouTube…', false, 'loading');
   let generationSettled = false;
   try {
     const generated = await request(MESSAGE.LOCAL_SUBTITLE_STATUS, { videoId: youtubeId });
@@ -597,6 +686,16 @@ async function loadYoutubeSubtitles() {
 
 async function createYoutubeSubtitles() {
   if (!youtubeId || popupClosed || $('createYoutubeSubtitles').disabled) return;
+  const language = $('generationLanguage').value;
+  if (!['en', 'zh'].includes(language)) {
+    subtitleOptionsOpen = true;
+    $('generationOptions').open = true;
+    $('generationHint').textContent = 'Выберите язык речи перед созданием субтитров.';
+    $('generationLanguage').focus();
+    drawWorkspace();
+    return;
+  }
+  $('generationHint').textContent = '';
   clearTimeout(youtubePollTimer);
   const epoch = ++youtubeEpoch;
   const button = $('createYoutubeSubtitles');
@@ -608,14 +707,14 @@ async function createYoutubeSubtitles() {
   // Wait for the server to admit the job before offering to cancel it.
   $('cancelYoutubeSubtitles').hidden = true;
   try {
-    const result = await request(MESSAGE.LOCAL_SUBTITLE_GENERATE, { videoId: youtubeId, language: state.settings.youtubeLanguage || 'zh' });
+    const result = await request(MESSAGE.LOCAL_SUBTITLE_GENERATE, { videoId: youtubeId, language });
     if (popupClosed || epoch !== youtubeEpoch) return;
     if (result.status === 'ready') {
       drawYoutubeProgress(result);
       await installLocalSubtitle(result, true);
       if (popupClosed || epoch !== youtubeEpoch) return;
       selectGeneratedWhenReady = false;
-      setYoutubeStatus('Созданные субтитры сохранены. Выберите дорожку и подключите плеер для просмотра.');
+      setYoutubeStatus('Созданные субтитры сохранены. Выбранная дорожка указана выше.');
       button.disabled = false;
       button.textContent = 'Создать заново';
       return;
@@ -660,7 +759,7 @@ async function deleteTrack(id) {
   if (state.settings.secondTrackId === `external:${id}`) updateLocalSetting('secondTrackId', '');
   editedTiming.delete(id);
   adoptState(data.state);
-  if (syncTrackId === id) syncTrackId = '';
+
   render();
 }
 
@@ -680,27 +779,35 @@ async function setTiming(trackId, { offsetSeconds, timeScale }) {
 }
 
 async function activate(restart = false) {
-  if (!connectable) return;
-  $('activate').disabled = true;
-  $('restartSearch').disabled = true;
-  setStatus(restart ? 'Перезапускаю поиск субтитров…' : 'Подключаюсь к странице и плееру…');
+  if (!connectable || !pageHydrated || connectionBusy) return;
+  discoveryRevision += 1;
+  connectionBusy = true;
+  drawWorkspace();
+  setStatus(restart ? 'Ищу видео и доступные субтитры…' : 'Подключаю видео…');
   try {
     const granted = await chrome.permissions.request({ origins: ['<all_urls>'] });
-    if (!granted) throw new Error('Без доступа к iframe расширение не сможет увидеть плеер.');
+    if (!granted) throw new Error('Доступ не разрешён. Для подключения видео разрешите доступ к странице.');
     const data = await request(MESSAGE.PLAYER_DISCOVER, { tabId, pageKey });
     players = data.players ?? [];
     if (!players.length) {
       render();
-      throw new Error('Плеер не найден. Запустите видео и попробуйте ещё раз.');
+      throw new Error('Видео не найдено. Запустите его на странице и попробуйте ещё раз.');
     }
     render();
-    await selectPlayer(currentPlayer());
-    setStatus(restart
-      ? `Поиск субтитров перезапущен. Найдено плееров: ${players.length}.`
-      : `Подключено. Найдено плееров: ${players.length}.`);
+    const saved = players.find((player) => player.key === state.settings.selectedPlayerKey
+      && player.frameId === state.settings.selectedPlayerFrameId)
+      ?? players.find((player) => player.key === state.settings.selectedPlayerKey);
+    const player = saved ?? (!state.settings.selectedPlayerKey && players.length === 1 ? players[0] : null);
+    if (player) await selectPlayer(player);
+    else {
+      videoOptionsOpen = true;
+      setStatus(state.settings.selectedPlayerKey
+        ? 'Ранее выбранное видео пока не найдено. Подождите или выберите другое.'
+        : 'На странице несколько видео. Выберите нужное.');
+    }
   } finally {
-    $('activate').disabled = false;
-    $('restartSearch').disabled = false;
+    connectionBusy = false;
+    render();
   }
 }
 
@@ -826,6 +933,7 @@ async function previewSpeech() {
 async function hydratePage(aiPromise) {
   if (!pageKey) return;
   const revision = ++hydrationRevision;
+  const discoveryAtStart = discoveryRevision;
   return loadPopupSnapshot(request, tabId, pageKey, {
     aiPromise,
     connectable,
@@ -833,6 +941,8 @@ async function hydratePage(aiPromise) {
       if (revision !== hydrationRevision) return;
       hydrationErrors.delete('onState');
       adoptState(snapshot.state);
+      pageHydrated = true;
+      if (connectedPlayer() && !connectionBusy) setStatus('');
       render();
       drawSaveFeedback();
       controls.dataset.hydrated = 'true';
@@ -842,13 +952,12 @@ async function hydratePage(aiPromise) {
       }
     },
     onPlayers(snapshot) {
-      if (revision !== hydrationRevision) return;
+      if (revision !== hydrationRevision || discoveryAtStart !== discoveryRevision) return;
       hydrationErrors.delete('onPlayers');
       players = snapshot.players;
       render();
       if (!connectable) setStatus('На служебных страницах подключение недоступно. Внешний вид и перевод можно настроить без плеера.');
-      else if (!players.length) setStatus('Нажмите «Подключить к плееру» на странице с видео.');
-      else setStatus(`Найдено в памяти: ${players.length}. Если плеер сменился, повторите поиск.`);
+      else setStatus(connectedPlayer() ? '' : 'Нажмите «Включить субтитры» на странице с видео.');
     },
     onError(name, error) {
       if (revision !== hydrationRevision) return;
@@ -874,16 +983,14 @@ async function init() {
   if (!Number.isInteger(tab?.id)) throw new Error('Не удалось определить активную вкладку.');
   tabId = tab.id;
   connectable = /^https?:\/\//i.test(tab.url || '') && !/^https:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore)(\/|$)/i.test(tab.url || '');
-  $('activate').disabled = !connectable;
   youtubeId = youtubeVideoId(tab.url || '');
-  $('youtubeSubtitles').hidden = !youtubeId;
   pageKey = canonicalPageKey(tab.url || `https://local.invalid/tab/${tab.id}`);
   drawSettings();
   await Promise.all([hydratePage(aiPromise), speechPromise]);
 }
 
 setupTabs(['player', 'appearance', 'settings']);
-setupTabs(['aiSettings', 'voiceSettings', 'subtitleSettings']);
+setupTabs(['aiSettings', 'voiceSettings']);
 setupEmbeddedPanel();
 document.defaultView?.addEventListener('pagehide', () => {
   popupClosed = true;
@@ -896,6 +1003,18 @@ $('retrySave').addEventListener('click', () => {
 $('retrySettings').addEventListener('click', () => { void Promise.all([hydratePage(loadAiSettings()), loadSpeechSettings()]); });
 $('activate').addEventListener('click', () => activate().catch((error) => setStatus(error.message, true)));
 $('restartSearch').addEventListener('click', () => activate(true).catch((error) => setStatus(error.message, true)));
+$('changeVideo').addEventListener('click', () => { videoOptionsOpen = !videoOptionsOpen; drawWorkspace(); });
+$('changeSubtitles').addEventListener('click', () => { subtitleOptionsOpen = !subtitleOptionsOpen; drawWorkspace(); });
+$('showTiming').addEventListener('click', () => { timingOpen = !timingOpen; drawWorkspace(); drawSync(); });
+$('chooseYoutubeLanguage').addEventListener('click', () => {
+  subtitleOptionsOpen = true;
+  drawWorkspace();
+  $('youtubeLanguage').focus();
+});
+$('generationLanguage').addEventListener('change', () => {
+  generationLanguageEdited = true;
+  $('generationHint').textContent = '';
+});
 $('aiProvider').addEventListener('change', () => {
   aiProvider = $('aiProvider').value === 'openai' ? 'openai' : 'deepseek';
   aiCatalogRevision += 1;
@@ -923,14 +1042,21 @@ $('youtubeLanguage').addEventListener('change', () => {
   const selectionAtStart = selectionRevision;
   void persistSetting('youtubeLanguage', $('youtubeLanguage').value).then(() => {
     if (!popupClosed && epoch === youtubeEpoch) {
-      setYoutubeStatus('Ищу дорожку выбранного языка…');
+      setYoutubeStatus('Ищу дорожку выбранного языка…', false, 'loading');
       return pollExistingSubtitle(epoch, false, selectionAtStart);
     }
   }).catch((error) => setYoutubeStatus(error.message, true));
 });
 $('player').addEventListener('change', () => {
+  if (!$('player').value || connectionBusy) return;
+  discoveryRevision += 1;
   const player = players.find((item) => item.frameId === Number($('player').value));
-  selectPlayer(player).catch((error) => setStatus(error.message, true));
+  connectionBusy = true;
+  drawWorkspace();
+  void selectPlayer(player).catch((error) => setStatus(error.message, true)).finally(() => {
+    connectionBusy = false;
+    render();
+  });
 });
 $('originalTrack').addEventListener('change', () => persistSetting('secondTrackId', $('originalTrack').value));
 $('fontSize').addEventListener('input', () => previewSetting('fontSize', Number($('fontSize').value)));
@@ -945,11 +1071,7 @@ $('subtitleBackgroundColor').addEventListener('input', () => previewSetting('sub
 
 $('subtitleBackgroundOpacity').addEventListener('input', () => previewSetting('subtitleBackgroundOpacity', Number($('subtitleBackgroundOpacity').value)));
 
-$('syncTrack').addEventListener('change', () => {
-  syncTrackId = $('syncTrack').value;
-  $('offsetSeconds').value = selectedExternalTrack()?.offsetSeconds ?? 0;
-  $('timeScalePercent').value = Math.round((selectedExternalTrack()?.timeScale ?? 1) * 100_000) / 1000;
-});
+
 $('offsetSeconds').addEventListener('change', () => {
   const trackId = selectedExternalTrack()?.id;
   const value = Number($('offsetSeconds').value);

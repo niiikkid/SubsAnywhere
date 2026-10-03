@@ -160,6 +160,21 @@ try {
   })()`);
   assert.equal(overlay.count, 1, 'Reinjection must not duplicate overlays');
   assert.equal(overlay.text, 'Hello from a local video.');
+  const workspacePopup = await openPopup();
+  await workspacePopup.until(`document.getElementById('videoConnection').textContent === 'Видео подключено'`);
+  assert.equal(await workspacePopup.evaluate(`document.getElementById('activate').hidden`), true);
+  assert.equal(await workspacePopup.evaluate(`document.getElementById('subtitleOptions').hidden`), true);
+  assert.equal(await workspacePopup.evaluate(`document.getElementById('captionSource').textContent`), 'С сайта');
+  assert.equal(await workspacePopup.evaluate(`document.getElementById('youtubeActions').hidden`), true);
+  await workspacePopup.evaluate(`document.getElementById('changeSubtitles').click()`);
+  assert.equal(await workspacePopup.evaluate(`document.getElementById('originalTrack').getBoundingClientRect().width > 0`), true);
+  assert.equal(await workspacePopup.evaluate(`document.getElementById('subtitleFile').getBoundingClientRect().width > 0`), true);
+  await workspacePopup.evaluate(`document.getElementById('changeSubtitles').click()`);
+  assert.equal(await workspacePopup.evaluate(`document.getElementById('subtitleOptions').hidden`), true);
+  assert.equal(await workspacePopup.evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
+  const { data: workspaceScreenshot } = await cdp('Page.captureScreenshot', { format: 'png' }, workspacePopup.sessionId);
+  await writeFile(join(artifacts, 'video-workspace-smoke.png'), Buffer.from(workspaceScreenshot, 'base64'));
+  await cdp('Target.closeTarget', { targetId: workspacePopup.targetId });
   const clickInPlayerFrame = async (selector) => {
     const point = await inspectVideo(`(() => {
       const frame = document.querySelector('iframe');

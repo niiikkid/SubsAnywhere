@@ -2,16 +2,25 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
-test('popup exposes one original track and explicit local YouTube subtitle controls', async () => {
+test('video workspace unifies caption choice, import and explicit recognition', async () => {
   const html = await fs.readFile(new URL('../popup.html', import.meta.url), 'utf8');
 
   assert.match(html, /id="originalTrack"/);
-  assert.match(html, /id="restartSearch"[^>]*>Перезапустить поиск субтитров</);
+  assert.match(html, /id="playerTab"[^>]*>Видео</);
+  assert.match(html, /id="activate"[^>]*>Включить субтитры</);
+  assert.match(html, /id="restartSearch"[^>]*>Найти видео заново</);
+  assert.match(html, /id="changeSubtitles"[^>]*aria-expanded="false"/);
+  assert.match(html, /id="subtitleOptions"[^>]*hidden/);
   assert.match(html, /id="youtubeSubtitles"/);
-  assert.match(html, /id="createYoutubeSubtitles"[^>]*>Создать свои субтитры</);
+  assert.match(html, /id="createYoutubeSubtitles"[^>]*>Начать создание</);
   assert.match(html, /id="youtubeSubtitleStatus"/);
   assert.doesNotMatch(html, /Запускается только вручную: сервер скачает аудио/);
-  assert.match(html, /для создания — китайский/);
+  assert.match(html, /id="generationLanguage"/);
+  assert.doesNotMatch(html, /для создания — китайский|<h2>Источник<|id="syncTrack"|id="subtitleSettingsTab"/);
+  for (const id of ['subtitleFile', 'originalTrack', 'generationLanguage', 'syncBox']) {
+    assert.equal(html.split(`id="${id}"`).length, 2, `${id} must appear exactly once`);
+    assert.ok(html.indexOf(`id="${id}"`) < html.indexOf('id="appearancePanel"'), `${id} belongs to the video workspace`);
+  }
   assert.doesNotMatch(html, /id="firstTrack"|id="secondTrack"/);
 });
 

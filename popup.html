@@ -10,7 +10,7 @@
   <main>
     <header class="app-header">
       <nav class="section-tabs" role="tablist" aria-label="Разделы расширения">
-        <button id="playerTab" type="button" role="tab" aria-controls="playerPanel" aria-selected="true">Player</button>
+        <button id="playerTab" type="button" role="tab" aria-controls="playerPanel" aria-selected="true">Видео</button>
         <button id="appearanceTab" type="button" role="tab" aria-controls="appearancePanel" aria-selected="false" tabindex="-1">Внешний вид</button>
         <button id="settingsTab" type="button" role="tab" aria-controls="settingsPanel" aria-selected="false" tabindex="-1">Настройки</button>
       </nav>
@@ -30,49 +30,104 @@
     </div>
     <section id="controls">
     <section id="playerPanel" role="tabpanel" aria-labelledby="playerTab">
-    <p id="status" class="status" role="status" aria-live="polite">Нажмите «Подключить к плееру» на странице с видео.</p>
-
-    <button id="activate" class="primary">Подключить к плееру</button>
-    <button id="restartSearch" type="button" class="restart-search" hidden>Перезапустить поиск субтитров</button>
-
-    <section id="youtubeSubtitles" class="control-card youtube-card" hidden>
-      <div class="section-heading">
-        <h2>Субтитры YouTube</h2>
-        <span>локальный сервер</span>
-      </div>
-      <p id="youtubeSubtitleStatus" class="hint" role="status" aria-live="polite">Ищу английские или китайские субтитры на языке оригинала…</p>
-      <label>Язык субтитров
-        <select id="youtubeLanguage">
-          <option value="">Авто для YouTube; для создания — китайский</option>
-          <option value="en">Английский</option>
-          <option value="zh">Китайский с пиньинем</option>
-        </select>
-      </label>
-      <div id="youtubeProgressBox" class="youtube-progress" hidden>
-        <div class="progress-row">
-          <progress id="youtubeProgress" max="100" value="0" aria-label="Создание субтитров"></progress>
-          <output id="youtubeProgressValue">0%</output>
-        </div>
-        <p id="youtubeProgressDetail" class="hint">0%</p>
-      </div>
-      <button id="createYoutubeSubtitles" type="button">Создать свои субтитры</button>
-      <button id="cancelYoutubeSubtitles" type="button" hidden>Остановить создание</button>
-      <button id="retryYoutubeSubtitles" type="button" hidden>Проверить сервер и продолжить</button>
-
-    </section>
-
-      <section class="control-card player-card">
+      <section class="control-card video-card">
         <div class="section-heading">
-          <h2>Источник</h2>
-          <span>видео и дорожка</span>
+          <h2 id="videoConnection">Видео не подключено</h2>
+          <button id="changeVideo" type="button" class="text-button" aria-controls="videoOptions" aria-expanded="false" hidden>Изменить</button>
         </div>
-        <label>Плеер
-          <select id="player"></select>
-        </label>
+        <p id="videoTitle" class="video-title" hidden></p>
+        <p id="status" class="hint" role="status" aria-live="polite">Нажмите «Включить субтитры» на странице с видео.</p>
+        <button id="activate" type="button" class="primary">Включить субтитры</button>
+        <div id="videoOptions" class="workspace-options" hidden>
+          <label id="playerChoice">Видео на странице
+            <select id="player"></select>
+          </label>
+          <button id="restartSearch" type="button" class="restart-search">Найти видео заново</button>
+        </div>
+      </section>
 
-        <label>Оригинальные субтитры
-          <select id="originalTrack"></select>
-        </label>
+      <section class="control-card captions-card">
+        <h2>Субтитры</h2>
+        <p id="captionTitle" class="caption-title">Субтитры не выбраны</p>
+        <p id="captionSource" class="caption-source" hidden></p>
+        <p id="captionState" class="hint" role="status" aria-live="polite"></p>
+        <div class="workspace-actions">
+          <button id="changeSubtitles" type="button" aria-controls="subtitleOptions" aria-expanded="false">Другие субтитры</button>
+          <button id="showTiming" type="button" class="text-button" aria-controls="syncBox" aria-expanded="false" hidden>Настроить время</button>
+        </div>
+
+        <section id="youtubeSubtitles" class="youtube-activity" hidden>
+          <p id="youtubeSubtitleStatus" class="hint" role="status" aria-live="polite"></p>
+          <div id="youtubeProgressBox" class="youtube-progress" hidden>
+            <div class="progress-row">
+              <progress id="youtubeProgress" max="100" value="0" aria-label="Создание субтитров"></progress>
+              <output id="youtubeProgressValue">0%</output>
+            </div>
+            <p id="youtubeProgressDetail" class="hint">0%</p>
+          </div>
+          <button id="chooseYoutubeLanguage" type="button" hidden>Уточнить язык</button>
+          <button id="cancelYoutubeSubtitles" type="button" hidden>Остановить создание</button>
+          <button id="retryYoutubeSubtitles" type="button" hidden>Повторить проверку</button>
+        </section>
+
+        <div id="subtitleOptions" class="workspace-options" hidden>
+          <label>Показывать
+            <select id="originalTrack"></select>
+          </label>
+          <label class="file-button">Добавить файл SRT
+            <input id="subtitleFile" type="file" accept=".srt,application/x-subrip,text/plain">
+          </label>
+
+          <section id="youtubeActions" class="youtube-actions" hidden>
+            <label>Язык готовых субтитров YouTube
+              <select id="youtubeLanguage">
+                <option value="">Авто - язык оригинала</option>
+                <option value="en">Английский</option>
+                <option value="zh">Китайский с пиньинем</option>
+              </select>
+            </label>
+            <details id="generationOptions" class="workspace-details">
+              <summary>Создать из речи</summary>
+              <p class="hint">Локальное распознавание аудио YouTube. Занимает время; текущие субтитры остаются доступны.</p>
+              <label>Язык речи
+                <select id="generationLanguage">
+                  <option value="">Выберите язык</option>
+                  <option value="en">Английский</option>
+                  <option value="zh">Китайский</option>
+                </select>
+              </label>
+              <p id="generationHint" class="hint" role="status" aria-live="polite"></p>
+              <button id="createYoutubeSubtitles" type="button">Начать создание</button>
+            </details>
+          </section>
+
+          <details id="externalFiles" class="workspace-details" hidden>
+            <summary>Сохранённые дорожки</summary>
+            <div id="externalList" class="external-list"></div>
+          </details>
+        </div>
+
+        <section id="syncBox" class="workspace-options sync-box" hidden>
+          <h2>Настройка времени</h2>
+          <p id="syncTrackName" class="hint"></p>
+          <div class="two-columns">
+            <label>Смещение, сек.
+              <input id="offsetSeconds" type="number" min="-3600" max="3600" step="0.1" value="0" title="Минус - показать раньше, плюс - позже">
+            </label>
+            <label>Скорость, %
+              <input id="timeScalePercent" type="number" min="90" max="110" step="0.001" value="100">
+            </label>
+          </div>
+          <div class="sync-buttons" aria-label="Изменить смещение">
+            <button type="button" data-shift="-5">−5</button>
+            <button type="button" data-shift="-1">−1</button>
+            <button type="button" data-shift="-0.1">−0,1</button>
+            <button type="button" data-shift="0.1">+0,1</button>
+            <button type="button" data-shift="1">+1</button>
+            <button type="button" data-shift="5">+5</button>
+          </div>
+          <p class="hint">Минус - показать раньше, плюс - позже. Скорость исправляет нарастающее расхождение.</p>
+        </section>
       </section>
 
     </section>
@@ -117,10 +172,7 @@
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 8h3l4-4v12l-4-4H3Zm10-1a4 4 0 0 1 0 6m2-9a8 8 0 0 1 0 12"/></svg>
             <span>Голос</span>
           </button>
-          <button id="subtitleSettingsTab" type="button" role="tab" aria-controls="subtitleSettingsPanel" aria-selected="false" tabindex="-1">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="4" width="16" height="12" rx="3"/><path d="M5 9h4m3 0h3M5 12h10"/></svg>
-            <span>Субтитры</span>
-          </button>
+
         </nav>
 
         <section id="voiceSettingsPanel" role="tabpanel" aria-labelledby="voiceSettingsTab" hidden>
@@ -177,44 +229,7 @@
           </section>
         </section>
 
-        <section id="subtitleSettingsPanel" role="tabpanel" aria-labelledby="subtitleSettingsTab" hidden>
-          <section class="control-card import-box">
-            <div class="section-heading">
-              <h2>Свой SRT</h2>
-              <label class="file-button">Добавить SRT
-                <input id="subtitleFile" type="file" accept=".srt,application/x-subrip,text/plain">
-              </label>
-            </div>
-            <p class="hint">Добавьте файл SRT, затем выберите дорожку в разделе Player.</p>
-            <div id="externalList" class="external-list"></div>
-          </section>
 
-          <section id="syncBox" class="control-card sync-box" hidden>
-            <div class="section-heading">
-              <h2>Синхронизация</h2>
-            </div>
-            <label>Файл
-              <select id="syncTrack"></select>
-            </label>
-            <div class="two-columns">
-              <label>Смещение, сек.
-                <input id="offsetSeconds" type="number" min="-3600" max="3600" step="0.1" value="0" title="Минус - показать раньше, плюс - позже">
-              </label>
-              <label>Скорость, %
-                <input id="timeScalePercent" type="number" min="90" max="110" step="0.001" value="100">
-              </label>
-            </div>
-            <div class="sync-buttons" aria-label="Изменить смещение">
-              <button type="button" data-shift="-5">−5</button>
-              <button type="button" data-shift="-1">−1</button>
-              <button type="button" data-shift="-0.1">−0,1</button>
-              <button type="button" data-shift="0.1">+0,1</button>
-              <button type="button" data-shift="1">+1</button>
-              <button type="button" data-shift="5">+5</button>
-            </div>
-            <p class="hint">Минус - показать раньше, плюс - позже. Скорость исправляет нарастающее расхождение.</p>
-          </section>
-        </section>
       </section>
     </section>
   </main>
