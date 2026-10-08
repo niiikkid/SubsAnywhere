@@ -621,29 +621,36 @@
         return runtime.upcomingCueTexts(external.cues, sourceTime, { seconds: 30 / scale, limit: 6 });
       }
       const track = builtInTrackResolver.find(video.textTracks, id, fallbackId);
-      const nativeTexts = runtime.upcomingCueTexts(track?.cues, video.currentTime, { seconds: 30, limit: 6 });
-      if (nativeTexts.length) return nativeTexts;
-      const cached = cachedBuiltInTrack(id);
+      // A present native track owns its gaps, including an unloaded cue list.
+      if (track) return runtime.upcomingCueTexts(track.cues, video.currentTime, { seconds: 30, limit: 6 });
+      const cached = cachedBuiltInTrack(id, video);
       return runtime.upcomingCueTexts(cached?.cues, video.currentTime, { seconds: 30, limit: 6 });
     }
 
-    function cachedBuiltInTrack(id) {
+    function cachedBuiltInTrack(id, video) {
       const selectionKey = `${state.settings.selectedPlayerKey}\u0000${id}`;
+      const mediaSource = video.currentSrc || video.src || '';
       if (state.settings.secondTrackCacheSource === selectionKey) {
         const persisted = state.externalTracks.find((track) => (
           track.id === state.settings.secondTrackCacheId && track.sourceType === 'builtin-cache'
         ));
-        if (persisted) return persisted;
+        // Legacy snapshots cannot prove which episode they belong to.
+        if (mediaSource && persisted?.mediaSource === mediaSource) return persisted;
       }
-      return localBuiltInTracks.get(selectionKey) ?? null;
+      const local = localBuiltInTracks.get(selectionKey);
+      return local?.video === video && local.track.mediaSource === mediaSource ? local.track : null;
     }
 
     function cacheSelectedBuiltInTrack(id, fallbackId, video) {
       if (!state.active || destroyed || video !== manager.current().video || id !== state.settings.secondTrackId) return;
       const generation = lifecycle;
       const selectionKey = `${state.settings.selectedPlayerKey}\u0000${id}`;
-      if (!id || id.startsWith('external:') || cachedBuiltInSelections.has(selectionKey) || cachingBuiltInSelections.has(selectionKey)) return;
-      if (state.settings.secondTrackCacheSource === selectionKey && state.settings.secondTrackCacheId) return;
+      const mediaSource = video.currentSrc || video.src || '';
+      const cacheKey = `${selectionKey}\u0000${mediaSource}`;
+      if (!id || id.startsWith('external:') || cachedBuiltInSelections.has(cacheKey) || cachingBuiltInSelections.has(cacheKey)) return;
+      if (state.settings.secondTrackCacheSource === selectionKey && state.settings.secondTrackCacheId
+        && state.externalTracks.some((track) => track.id === state.settings.secondTrackCacheId
+          && track.sourceType === 'builtin-cache' && mediaSource && track.mediaSource === mediaSource)) return;
       const track = builtInTrackResolver.find(video.textTracks, id, fallbackId);
       const cueCount = Number(track?.cues?.length);
       if (!Number.isInteger(cueCount) || !cueCount || cueCount > 5_000) return;
@@ -664,34 +671,35 @@
         cues.push(normalized);
       }
       if (!cues.length || !globalThis.crypto?.randomUUID) return;
-      cachingBuiltInSelections.add(selectionKey);
+      cachingBuiltInSelections.add(cacheKey);
       const snapshotId = `builtin-cache-${globalThis.crypto.randomUUID()}`;
       const snapshot = {
         id: snapshotId,
         sourceType: 'builtin-cache',
+        mediaSource,
         name: 'Сохранённые встроенные субтитры',
         cues,
         offsetSeconds: 0,
         timeScale: 1,
       };
-      localBuiltInTracks.set(selectionKey, snapshot);
+      localBuiltInTracks.set(selectionKey, { video, track: snapshot });
       sendMessage({
         type: MESSAGE.TRACK_CACHE_BUILTIN,
         sourceKey: selectionKey,
         track: snapshot,
       }).then((response) => {
         if (generation !== lifecycle) return;
-        if (response?.ok === true) cachedBuiltInSelections.add(selectionKey);
+        if (response?.ok === true) cachedBuiltInSelections.add(cacheKey);
         else throw new Error('Built-in subtitle cache was rejected');
       }).catch(() => {
         if (generation !== lifecycle || destroyed) return;
-        const retries = (state.builtInCacheRetries?.get(selectionKey) ?? 0) + 1;
+        const retries = (state.builtInCacheRetries?.get(cacheKey) ?? 0) + 1;
         state.builtInCacheRetries ??= new Map();
-        state.builtInCacheRetries.set(selectionKey, retries);
+        state.builtInCacheRetries.set(cacheKey, retries);
         if (retries < 3) setTimeout(() => {
-          if (generation === lifecycle) cacheSelectedBuiltInTrack(id, fallbackId, video);
+          if (generation === lifecycle && (video.currentSrc || video.src || '') === mediaSource) cacheSelectedBuiltInTrack(id, fallbackId, video);
         }, 1_000);
-      }).finally(() => cachingBuiltInSelections.delete(selectionKey));
+      }).finally(() => cachingBuiltInSelections.delete(cacheKey));
     }
 
     function renderInlineCaption(target, text, items, descriptor) {
@@ -901,9 +909,8 @@
           : '';
       }
       const native = builtInTrackResolver.find(video.textTracks, id, fallbackId);
-      const nativeText = runtime.activeCueText(native);
-      if (nativeText) return nativeText;
-      const cached = cachedBuiltInTrack(id);
+      if (native) return runtime.activeCueText(native);
+      const cached = cachedBuiltInTrack(id, video);
       return cached ? runtime.cueTextAt(cached.cues, video.currentTime, cached.offsetSeconds, cached.timeScale) : '';
     }
 
@@ -1092,6 +1099,8 @@
       const previous = manager.current().video;
       const result = manager.discover(document.querySelectorAll('video'));
       if (result?.video !== previous) {
+        localBuiltInTracks.clear();
+        cachedBuiltInSelections.clear();
         if (previous) restoreModes(previous);
         resizeObserver?.disconnect();
         if (result?.video) resizeObserver?.observe(result.video);

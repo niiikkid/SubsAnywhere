@@ -991,6 +991,53 @@ test('production saves selected built-in subtitle cues before an audio switch ca
   assert.equal(snapshot.track.cues[1].start, 3);
 });
 
+test('production keeps native subtitle gaps empty instead of filling them from another episode', async () => {
+  const harness = await makeHarness();
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  const video = harness.document.videos[0];
+  video.currentSrc = 'https://media.example/episode-3.mp4';
+  video.textTracks[0].activeCues = [];
+  video.textTracks[0].cues = [];
+  listener({ type: 'dualCaptions.content.fullState', settings: {
+    secondTrackId: 'track-0', secondTrackCacheId: 'old', secondTrackCacheSource: '\u0000track-0',
+  }, externalTracks: [{ id: 'old', sourceType: 'builtin-cache',
+    mediaSource: 'https://media.example/episode-2.mp4',
+    cues: [{ start: 1, end: 2, text: 'Wrong episode' }] }],
+  }, {}, () => {});
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  assert.equal(overlay.children[0].style.display, 'none');
+  assert.equal(harness.reports.some((message) => message.type === 'dualCaptions.caption.translate'), false);
+});
+
+test('production does not reuse a local subtitle snapshot after the same video changes episodes', async () => {
+  const harness = await makeHarness();
+  const video = harness.document.videos[0];
+  video.currentSrc = 'https://media.example/episode-2.mp4';
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const listener = [...harness.onMessage.listeners][0];
+  listener({ type: 'dualCaptions.content.fullState', settings: { secondTrackId: 'track-0' }, externalTracks: [] }, {}, () => {});
+  await Promise.resolve();
+  video.currentSrc = 'https://media.example/episode-3.mp4';
+  video.textTracks[0] = undefined;
+  video.textTracks.length = 0;
+  video.textTracks[Symbol.iterator] = function* noTracks() {};
+  video.dispatch('emptied');
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  assert.equal(overlay.children[0].style.display, 'none');
+  video.textTracks[0] = Object.assign(new FakeTarget(), { kind: 'subtitles', label: 'English', language: 'en',
+    activeCues: [{ text: 'New episode' }], cues: [{ startTime: 1, endTime: 2, text: 'New episode' }] });
+  video.textTracks.length = 1;
+  video.textTracks[Symbol.iterator] = function* tracks() { yield this[0]; };
+  video.textTracks.dispatch('addtrack', { track: video.textTracks[0] });
+  const snapshots = harness.reports.filter((message) => message.type === 'dualCaptions.track.cacheBuiltin');
+  assert.equal(snapshots.length, 2);
+  assert.equal(snapshots[1].track.cues[0].text, 'New episode');
+  assert.equal(snapshots[1].track.mediaSource, video.currentSrc);
+});
+
 test('production uses the saved fallback only after the native track disappears', async () => {
   const harness = await makeHarness();
   vm.runInContext(harness.runtimeSource, harness.context);
@@ -1001,7 +1048,8 @@ test('production uses the saved fallback only after the native track disappears'
     secondTrackCacheId: 'builtin-cache-fixture-cache-uuid',
     secondTrackCacheSource: '\u0000track-0',
   };
-  const cached = [{ id: 'builtin-cache-fixture-cache-uuid', sourceType: 'builtin-cache', name: 'Saved', offsetSeconds: 0, timeScale: 1, cues: [{ start: 1, end: 2, text: 'Saved fallback' }] }];
+  harness.document.videos[0].currentSrc = 'https://media.example/episode-3.mp4';
+  const cached = [{ id: 'builtin-cache-fixture-cache-uuid', sourceType: 'builtin-cache', mediaSource: harness.document.videos[0].currentSrc, name: 'Saved', offsetSeconds: 0, timeScale: 1, cues: [{ start: 1, end: 2, text: 'Saved fallback' }] }];
 
   listener({ type: 'dualCaptions.content.fullState', settings, externalTracks: cached }, {}, () => {});
   let overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
