@@ -495,6 +495,41 @@ test('Chinese numeric pinyin still rejects missing syllables and changed or misp
   }
 });
 
+test('Chinese numeric translation survives invalid model pinyin when subtitle pronunciation is complete', async () => {
+  const caption = '一共是用了125块钱125块钱125125块钱';
+  const supplied = 'yī gòng shì yòng le125kuài qián125kuài qián125125kuài qián';
+  const expected = 'yī gòng shì yòng le 125 kuài qián 125 kuài qián 125125 kuài qián';
+  for (const pinyin of [
+    'yī gòng shì yòng le yī bǎi èr shí wǔ kuài qián',
+    'yī gòng shì yòng le 125 kuài qián',
+    '',
+    undefined,
+  ]) {
+    let requests = 0;
+    const client = new DeepSeekClient(async () => {
+      requests += 1;
+      return Response.json({ choices: [{ message: { content: JSON.stringify({
+        pinyin, translation: 'Всего потратили 125 юаней, 125 юаней, 125125 юаней.',
+        glossary: [{ text: '一共', pinyin: 'yī gòng', translation: 'всего' }],
+      }) } }] });
+    }, { get: async () => ({ provider: 'deepseek', apiKey: 'offline', model: 'deepseek-chat' }) });
+    const result = await client.translateChineseCaption(caption, supplied);
+    assert.equal(result.pinyin, expected);
+    assert.equal(result.context, 'Всего потратили 125 юаней, 125 юаней, 125125 юаней.');
+    assert.equal(result.glossary[0].text, '一共');
+    assert.equal(requests, 1);
+  }
+});
+
+test('invalid model pinyin cannot fall back to incomplete or changed subtitle numbers', async () => {
+  for (const supplied of ['shì 619 lù.', 'shì 610.', '610 shì lù.', '']) {
+    const client = new DeepSeekClient(async () => Response.json({ choices: [{ message: { content: JSON.stringify({
+      pinyin: 'shì liù yī líng lù.', translation: 'Это маршрут 610.', glossary: [],
+    }) } }] }), { get: async () => ({ provider: 'deepseek', apiKey: 'offline', model: 'deepseek-chat' }) });
+    await assert.rejects(client.translateChineseCaption('是610路。', supplied), /пиньинь/i);
+  }
+});
+
 test('Chinese numeric glossary follows normalized number boundaries, including legacy replies', async () => {
   for (const generated of [true, false]) {
     const client = new DeepSeekClient(async () => Response.json({ choices: [{ message: { content: JSON.stringify({

@@ -499,12 +499,24 @@ export class AIClient {
       : '';
     if (!translation) throw new Error('ИИ не вернул перевод китайской строки');
     // Old responses may lack pinyin while the subtitle already carries it.
-    // A model-supplied pinyin is always validated from Han and overrides it.
-    const resolvedPinyin = typeof result?.pinyin === 'string'
-      ? generatedPinyin(caption, result.pinyin)
-      : (pronunciation
+    // Prefer validated model pronunciation, but do not discard a translation
+    // when the subtitle already supplies a complete, source-aligned fallback.
+    let resolvedPinyin;
+    if (typeof result?.pinyin === 'string') {
+      try {
+        resolvedPinyin = generatedPinyin(caption, result.pinyin);
+      } catch (error) {
+        try {
+          resolvedPinyin = generatedPinyin(caption, pronunciation);
+        } catch {
+          throw error;
+        }
+      }
+    } else {
+      resolvedPinyin = pronunciation
         ? (/\p{Nd}/u.test(caption) ? separatePinyinNumbers(pronunciation) : pronunciation)
-        : generatedPinyin(caption, result?.pinyin));
+        : generatedPinyin(caption, result?.pinyin);
+    }
     const glossary = normalizeChineseGlossary(caption, resolvedPinyin, result?.glossary);
     return {
       ...(!pronunciation || pronunciation !== resolvedPinyin ? { pinyin: resolvedPinyin } : {}),
