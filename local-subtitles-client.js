@@ -50,7 +50,7 @@ export function localSubtitleTrack(videoId, source, cues, language = '') {
     : cues.some((cue) => /\p{Script=Han}/u.test(cue.text)) ? 'zh' : 'en';
   const label = safeLanguage === 'zh' ? 'Китайские с пиньинем' : 'Английские';
   return {
-    id: `youtube-${safeId}-${safeSource}`,
+    id: `youtube-${safeId}-${safeSource}-${safeLanguage}`,
     name: `${label} — ${safeSource === 'generated' ? 'распознаны локально' : 'YouTube'}`,
     language: safeLanguage,
     cues,

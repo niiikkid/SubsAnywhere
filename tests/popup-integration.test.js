@@ -36,7 +36,7 @@ function makeDocument() {
     'captionTitle', 'captionSource', 'captionState', 'changeSubtitles', 'subtitleOptions', 'showTiming', 'externalFiles',
     'youtubeActions', 'chooseYoutubeLanguage', 'generationOptions', 'generationLanguage', 'generationHint',
     'aiProvider', 'aiKey', 'aiKeyLabel', 'aiModel', 'aiModelHint', 'loadAiModels', 'clearAiKey', 'saveAiSettings', 'aiKeyState', 'speechVoice', 'speechRate', 'speechPreview',
-    'youtubeSubtitles', 'youtubeSubtitleStatus', 'createYoutubeSubtitles', 'cancelYoutubeSubtitles',
+    'youtubeSubtitles', 'youtubeSubtitleStatus', 'downloadYoutubeSubtitles', 'createYoutubeSubtitles', 'cancelYoutubeSubtitles',
     'youtubeProgressBox', 'youtubeProgress', 'youtubeProgressValue', 'youtubeProgressDetail', 'youtubeLanguage',
     'playerTab', 'appearanceTab', 'settingsTab', 'playerPanel', 'appearancePanel', 'settingsPanel',
     'aiSettingsTab', 'voiceSettingsTab', 'aiSettingsPanel', 'voiceSettingsPanel',
@@ -265,7 +265,9 @@ test('manual generation forwards the selected speech language and imports its la
       'dualCaptions.track.upsertLocal': (m) => ({ state: { settings: { youtubeLanguage: language }, externalTracks: [m.track] } }),
     }, { id: 77, url: 'https://www.youtube.com/watch?v=0Zaxca2sUGs' });
     await tick();
-    assert.match(elements.youtubeSubtitleStatus.textContent, /Готовых субтитров.*нет/);
+    assert.equal(messages.some((m) => m.type === 'dualCaptions.localSubtitle.existing'), false);
+    assert.equal(elements.youtubeSubtitleStatus.textContent, language
+      ? 'Выберите язык и нажмите «Скачать».' : 'Выберите язык субтитров.');
     if (!language) {
       elements.createYoutubeSubtitles.listeners.get('click')();
       await tick();
@@ -285,7 +287,7 @@ test('manual generation forwards the selected speech language and imports its la
   }
 });
 
-test('YouTube language choice persists and is forwarded when loading captions', async () => {
+test('YouTube language choice persists without downloading until an explicit click', async () => {
   const { elements, messages } = await bootPopup({
     'dualCaptions.state.get': () => ({ state: { settings: { youtubeLanguage: 'zh' } } }),
     'dualCaptions.localSubtitle.status': () => ({ status: 'missing' }),
@@ -293,16 +295,23 @@ test('YouTube language choice persists and is forwarded when loading captions', 
   }, { id: 77, url: 'https://www.youtube.com/watch?v=0Zaxca2sUGs' });
   await tick();
   assert.equal(elements.youtubeLanguage.value, 'zh');
-  assert.equal(messages.find((m) => m.type === 'dualCaptions.localSubtitle.existing').language, 'zh');
+  assert.equal(messages.some((m) => m.type === 'dualCaptions.localSubtitle.existing'), false);
+  assert.equal(elements.downloadYoutubeSubtitles.disabled, false);
   elements.youtubeLanguage.value = 'en';
   elements.youtubeLanguage.listeners.get('change')();
   await tick();
   await tick();
   assert.ok(messages.some((m) => m.type === 'dualCaptions.state.patch' && m.patch.youtubeLanguage === 'en'));
+  assert.equal(messages.some((m) => m.type === 'dualCaptions.localSubtitle.existing'), false);
+  elements.downloadYoutubeSubtitles.listeners.get('click')();
+  await tick();
   assert.equal(messages.filter((m) => m.type === 'dualCaptions.localSubtitle.existing').at(-1).language, 'en');
+  assert.equal(elements.youtubeSubtitleStatus.textContent, 'Выберите язык субтитров.');
+  assert.equal(elements.chooseYoutubeLanguage.hidden, false);
+  assert.equal(elements.subtitleOptions.hidden, false);
 });
 
-test('choosing a YouTube language selects its track instead of reloading generated Chinese captions', async () => {
+test('explicit download selects the chosen language instead of generated Chinese captions', async () => {
   const { elements, messages } = await bootPopup({
     'dualCaptions.state.get': () => ({ state: { settings: { secondTrackId: 'external:generated-old' } } }),
     'dualCaptions.localSubtitle.status': () => ({ status: 'missing' }),
@@ -317,9 +326,13 @@ test('choosing a YouTube language selects its track instead of reloading generat
   elements.youtubeLanguage.listeners.get('change')();
   await tick();
   await tick();
+  assert.equal(messages.some((m) => m.type === 'dualCaptions.localSubtitle.existing'), false);
   assert.equal(messages.some((m) => m.type === 'dualCaptions.localSubtitle.status'), false);
+  elements.downloadYoutubeSubtitles.listeners.get('click')();
+  await tick();
+  await tick();
   assert.ok(messages.some((m) => m.type === 'dualCaptions.state.patch'
-    && m.patch.secondTrackId === 'external:youtube-1evO3Nekrr8-youtube'));
+    && m.patch.secondTrackId === 'external:youtube-1evO3Nekrr8-youtube-en'));
   assert.equal(messages.find((m) => m.type === 'dualCaptions.track.upsertLocal').track.language, 'en');
 });
 
@@ -707,14 +720,21 @@ test('running YouTube downloads poll their own endpoint without blocking appeara
     'dualCaptions.track.upsertLocal': (message) => ({ state: { settings: { fontSize: 22 }, externalTracks: [message.track] } }),
   }, { id: 88, url: 'https://www.youtube.com/watch?v=rwnyaH6cTDE' });
   assert.doesNotMatch(elements.youtubeSubtitleStatus.textContent, /субтитров нет/i);
+  assert.equal(downloads, 0);
+  elements.youtubeLanguage.value = 'zh';
+  elements.youtubeLanguage.listeners.get('change')();
+  await tick();
+  assert.equal(downloads, 0);
+  elements.downloadYoutubeSubtitles.listeners.get('click')();
+  await tick();
   elements.appearanceTab.listeners.get('click')();
   elements.fontSize.value = 40;
   elements.fontSize.listeners.get('input')();
   await new Promise((resolve) => setTimeout(resolve, 1600));
   assert.equal(downloads, 2);
-  assert.equal(messages.filter((message) => message.type === 'dualCaptions.localSubtitle.status').length, 1);
+  assert.equal(messages.filter((message) => message.type === 'dualCaptions.localSubtitle.status').length, 2);
   assert.equal(elements.fontSize.value, 40);
-  assert.match(elements.youtubeSubtitleStatus.textContent, /сохранены/i);
+  assert.equal(elements.youtubeSubtitleStatus.textContent, 'Субтитры скачаны.');
   assert.equal(elements.appearancePanel.hidden, false);
   document.defaultView.listeners.get('pagehide')();
 });
@@ -728,12 +748,14 @@ test('interrupted generation is an error and server retry resumes status without
   assert.match(elements.youtubeSubtitleStatus.textContent, /interrupted/);
   assert.equal(elements.retryYoutubeSubtitles.hidden, false);
   assert.equal(elements.createYoutubeSubtitles.disabled, false);
+  assert.equal(messages.some((message) => message.type === 'dualCaptions.localSubtitle.existing'), false);
   available = true;
   elements.retryYoutubeSubtitles.listeners.get('click')();
   await tick();
-  assert.equal(elements.youtubeSubtitleStatus.classList.values.has('error'), false);
+  assert.equal(elements.youtubeSubtitleStatus.textContent, 'Субтитров на выбранном языке нет.');
   assert.equal(elements.retryYoutubeSubtitles.hidden, true);
   assert.equal(messages.filter((message) => message.type === 'dualCaptions.localSubtitle.status').length, 2);
+  assert.equal(messages.filter((message) => message.type === 'dualCaptions.localSubtitle.existing').length, 1);
   assert.equal(messages.some((message) => message.type === 'dualCaptions.localSubtitle.generate'), false);
 });
 
@@ -771,8 +793,13 @@ test('a stale generation failure cannot hide a ready YouTube subtitle track', as
     }),
   }, { id: 88, url: 'https://www.youtube.com/watch?v=8ocWUGARCB0&list=RD8ocWUGARCB0&start_radio=1' });
 
+  assert.equal(existingRequests, 0);
+  assert.equal(elements.youtubeSubtitleStatus.textContent,
+    'Local command failed; check dependencies, cookies and video availability.');
+  elements.retryYoutubeSubtitles.listeners.get('click')();
+  await tick();
   assert.equal(existingRequests, 1);
-  assert.match(elements.youtubeSubtitleStatus.textContent, /субтитры.*сохранены|субтитры.*подключены/i);
+  assert.equal(elements.youtubeSubtitleStatus.textContent, 'Субтитры скачаны.');
   assert.equal(elements.youtubeSubtitleStatus.classList.values.has('error'), false);
   assert.equal(elements.retryYoutubeSubtitles.hidden, true);
   assert.equal(messages.filter((message) => message.type === 'dualCaptions.track.upsertLocal').length, 1);
@@ -795,10 +822,14 @@ test('a lost generation response requires status recovery instead of enabling du
 test('late local import preserves a newer manual selection and appearance', async () => {
   const storing = deferred();
   const { elements, messages } = await bootPopup({
+    'dualCaptions.state.get': () => ({ state: { settings: { youtubeLanguage: 'zh' } } }),
     'dualCaptions.localSubtitle.status': () => ({ status: 'missing' }),
     'dualCaptions.localSubtitle.existing': () => ({ status: 'ready', source: 'youtube', srt: '1\n00:00:00,000 --> 00:00:01,000\n你好\n' }),
     'dualCaptions.track.upsertLocal': () => storing.promise,
   }, { id: 88, url: 'https://www.youtube.com/watch?v=rwnyaH6cTDE' });
+  assert.equal(messages.some((message) => message.track), false);
+  elements.downloadYoutubeSubtitles.listeners.get('click')();
+  await tick();
   elements.originalTrack.value = 'native:manual';
   elements.originalTrack.listeners.get('change')();
   elements.fontSize.value = 39;
@@ -809,17 +840,21 @@ test('late local import preserves a newer manual selection and appearance', asyn
   assert.deepEqual(messages.filter((message) => message.patch?.secondTrackId).map((message) => message.patch.secondTrackId), ['native:manual']);
   assert.equal(elements.originalTrack.value, 'native:manual');
   assert.equal(elements.fontSize.value, 39);
-  assert.match(elements.youtubeSubtitleStatus.textContent, /сохранены/);
+  assert.equal(elements.youtubeSubtitleStatus.textContent, 'Субтитры скачаны.');
   assert.doesNotMatch(elements.youtubeSubtitleStatus.textContent, /подключены/);
 });
 
 test('popup teardown does not schedule selection from an unfinished local import', async () => {
   const stored = deferred();
-  const { document, messages } = await bootPopup({
+  const { elements, document, messages } = await bootPopup({
+    'dualCaptions.state.get': () => ({ state: { settings: { youtubeLanguage: 'zh' } } }),
     'dualCaptions.localSubtitle.status': () => ({ status: 'missing' }),
     'dualCaptions.localSubtitle.existing': () => ({ status: 'ready', source: 'youtube', srt: '1\n00:00:00,000 --> 00:00:01,000\n你好\n' }),
     'dualCaptions.track.upsertLocal': () => stored.promise,
   }, { id: 88, url: 'https://www.youtube.com/watch?v=rwnyaH6cTDE' });
+  assert.equal(messages.some((message) => message.track), false);
+  elements.downloadYoutubeSubtitles.listeners.get('click')();
+  await tick();
   document.defaultView.listeners.get('pagehide')();
   const track = messages.find((message) => message.track).track;
   stored.resolve({ state: { externalTracks: [track] } });
@@ -840,7 +875,7 @@ test('explicit generation replaces an earlier manual selection in storage and th
   elements.generationLanguage.value = 'zh';
   elements.createYoutubeSubtitles.listeners.get('click')();
   await tick();
-  assert.equal(elements.originalTrack.value, 'external:youtube-rwnyaH6cTDE-generated');
+  assert.equal(elements.originalTrack.value, 'external:youtube-rwnyaH6cTDE-generated-zh');
 });
 
 test('generated readiness never claims a missing YouTube track was saved', async () => {
@@ -850,11 +885,11 @@ test('generated readiness never claims a missing YouTube track was saved', async
     'dualCaptions.localSubtitle.existing': () => ({ status: 'missing' }),
     'dualCaptions.track.upsertLocal': () => ({ state: { externalTracks: [track] } }),
   }, { id: 88, url: 'https://www.youtube.com/watch?v=rwnyaH6cTDE' });
-  assert.match(elements.youtubeSubtitleStatus.textContent, /Созданные субтитры/);
+  assert.equal(elements.youtubeSubtitleStatus.textContent, 'Выберите язык субтитров.');
   assert.doesNotMatch(elements.youtubeSubtitleStatus.textContent, /также сохранена/);
 });
 
-test('YouTube startup downloads ready Chinese subtitles without starting recognition', async () => {
+test('YouTube downloads ready Chinese subtitles only after the download button is clicked', async () => {
   const document = makeDocument();
   const messages = [];
   const player = {
@@ -864,7 +899,7 @@ test('YouTube startup downloads ready Chinese subtitles without starting recogni
     tracks: [],
   };
   const localTrack = {
-    id: 'youtube-rwnyaH6cTDE-youtube',
+    id: 'youtube-rwnyaH6cTDE-youtube-zh',
     name: 'Китайские с пиньинем — YouTube',
     language: 'zh',
     sourceType: 'local-server',
@@ -878,7 +913,7 @@ test('YouTube startup downloads ready Chinese subtitles without starting recogni
     runtime: {
       async sendMessage(message) {
         messages.push(structuredClone(message));
-        if (message.type === 'dualCaptions.state.get') return { ok: true, data: { state: {} } };
+        if (message.type === 'dualCaptions.state.get') return { ok: true, data: { state: { settings: { youtubeLanguage: 'zh' } } } };
         if (message.type === 'dualCaptions.player.get') return { ok: true, data: { players: [player] } };
         if (message.type === 'dualCaptions.ai.get') return { ok: true, data: { hasApiKey: false } };
         if (message.type === 'dualCaptions.localSubtitle.status') return { ok: true, data: { status: 'missing' } };
@@ -897,7 +932,7 @@ test('YouTube startup downloads ready Chinese subtitles without starting recogni
           return { ok: true, data: { state: { settings: {}, externalTracks: [localTrack] } } };
         }
         if (message.type === 'dualCaptions.state.patch') {
-          assert.deepEqual(message.patch, { secondTrackId: 'external:youtube-rwnyaH6cTDE-youtube' });
+          assert.deepEqual(message.patch, { secondTrackId: 'external:youtube-rwnyaH6cTDE-youtube-zh' });
           return {
             ok: true,
             data: {
@@ -917,12 +952,19 @@ test('YouTube startup downloads ready Chinese subtitles without starting recogni
   await import(`../popup.js?youtube-existing-test=${Date.now()}`);
   await new Promise((resolve) => setTimeout(resolve, 20));
 
+  assert.equal(messages.some((message) => message.type === 'dualCaptions.localSubtitle.existing'), false);
+  assert.equal(document.elements.downloadYoutubeSubtitles.disabled, false);
+  assert.equal(document.elements.youtubeSubtitleStatus.textContent, 'Выберите язык и нажмите «Скачать».');
+  document.elements.downloadYoutubeSubtitles.listeners.get('click')();
+  await tick();
+
   assert.equal(document.elements.youtubeSubtitles.hidden, true);
-  assert.match(document.elements.youtubeSubtitleStatus.textContent, /сохранены/i);
+  assert.equal(document.elements.youtubeSubtitleStatus.textContent, 'Субтитры скачаны.');
   assert.equal(document.elements.videoConnection.textContent, 'Видео не подключено');
   assert.match(document.elements.captionState.textContent, /сохранены.*подключите/i);
   assert.equal(messages.some((message) => message.type === 'dualCaptions.localSubtitle.generate'), false);
   assert.deepEqual(messages.filter((message) => message.type.startsWith('dualCaptions.localSubtitle')).map((message) => message.type), [
+    'dualCaptions.localSubtitle.status',
     'dualCaptions.localSubtitle.status',
     'dualCaptions.localSubtitle.existing',
   ]);
@@ -932,7 +974,7 @@ test('YouTube recognition starts only after the create button is clicked', async
   const document = makeDocument();
   const messages = [];
   const track = {
-    id: 'youtube-rwnyaH6cTDE-generated',
+    id: 'youtube-rwnyaH6cTDE-generated-zh',
     name: 'Китайские с пиньинем — распознаны локально',
     language: 'zh',
     sourceType: 'local-server',
@@ -1005,7 +1047,7 @@ test('YouTube recognition starts only after the create button is clicked', async
   assert.equal(messages.filter((message) => message.type === 'dualCaptions.localSubtitle.generate').length, 1);
   assert.equal(
     messages.find((message) => message.type === 'dualCaptions.state.patch')?.patch.secondTrackId,
-    'external:youtube-rwnyaH6cTDE-generated',
+    'external:youtube-rwnyaH6cTDE-generated-zh',
   );
   assert.match(document.elements.youtubeSubtitleStatus.textContent, /сохранены/i);
   assert.equal(document.elements.createYoutubeSubtitles.textContent, 'Создать заново');

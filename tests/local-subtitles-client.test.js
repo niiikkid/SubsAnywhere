@@ -48,7 +48,7 @@ test('localSubtitleTrack keeps a stable ID and a readable Chinese name', () => {
   ]);
 
   assert.deepEqual(track, {
-    id: 'youtube-rwnyaH6cTDE-generated',
+    id: 'youtube-rwnyaH6cTDE-generated-zh',
     name: 'Китайские с пиньинем — распознаны локально',
     language: 'zh',
     cues: [{ start: 1, end: 2, text: '你好' }],
@@ -63,11 +63,24 @@ test('localSubtitleTrack uses the original language and readable names', () => {
   const track = localSubtitleTrack('1evO3Nekrr8', 'youtube', cues, 'en');
   assert.equal(track.language, 'en');
   assert.equal(track.name, 'Английские — YouTube');
-  assert.equal(track.id, 'youtube-1evO3Nekrr8-youtube');
+  assert.equal(track.id, 'youtube-1evO3Nekrr8-youtube-en');
   assert.deepEqual(track.cues, cues);
   assert.equal(localSubtitleTrack('1evO3Nekrr8', 'youtube', cues).language, 'en');
   assert.equal(localSubtitleTrack('0Zaxca2sUGs', 'youtube', [{ start: 0, end: 1, text: '你好' }], 'zh').name,
     'Китайские с пиньинем — YouTube');
+});
+
+test('localSubtitleTrack keeps English and Chinese tracks for the same video and source distinct', () => {
+  for (const source of ['youtube', 'generated']) {
+    const english = localSubtitleTrack('1evO3Nekrr8', source, [{ start: 0, end: 1, text: 'Hello' }], 'en');
+    const chinese = localSubtitleTrack('1evO3Nekrr8', source, [{ start: 0, end: 1, text: '你好' }], 'zh');
+    const saved = new Map([english, chinese].map((track) => [track.id, track]));
+    assert.equal(saved.size, 2);
+    assert.equal(saved.get(`youtube-1evO3Nekrr8-${source}-en`), english);
+    assert.equal(saved.get(`youtube-1evO3Nekrr8-${source}-zh`), chinese);
+    assert.equal(localSubtitleTrack('1evO3Nekrr8', source, english.cues).id, english.id);
+    assert.equal(localSubtitleTrack('1evO3Nekrr8', source, chinese.cues).id, chinese.id);
+  }
 });
 
 test('LocalSubtitleClient sends only validated video ids to the fixed local server', async () => {

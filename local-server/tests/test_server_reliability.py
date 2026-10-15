@@ -14,6 +14,7 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import server
+from provider_fixtures import FakeProvider
 from caption_fixtures import metadata_response, missing_captions, mark_cache
 
 VIDEO = "rwnyaH6cTDE"
@@ -25,18 +26,18 @@ class ReliabilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             pending = []
             service = server.SubtitleService(pathlib.Path(directory), start_background=pending.append,
-                                             run_command=mock.Mock(side_effect=RuntimeError("failure")))
-            service.generate(VIDEO)
+                                             run_command=mock.Mock(side_effect=RuntimeError("failure")), provider=FakeProvider())
+            service.generate(VIDEO, language="zh")
             with mock.patch.object(pathlib.Path, "glob", side_effect=OSError("secret path")):
                 pending.pop()()
             self.assertEqual(service.active_jobs, set())
-            self.assertEqual(service.generate("abcdefghijk")["status"], "running")
+            self.assertEqual(service.generate("abcdefghijk", language="zh")["status"], "running")
 
     def test_managed_download_stops_when_working_files_exceed_limit(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             target = root / "oversized.part"
-            service = server.SubtitleService(root)
+            service = server.SubtitleService(root, provider=FakeProvider())
             script = "import pathlib,sys,time; pathlib.Path(sys.argv[-1]).write_bytes(b'x'*256); time.sleep(30)"
             with mock.patch.object(server, "MAX_AUDIO_BYTES", 64):
                 with self.assertRaises(server.ServiceError) as caught:
@@ -65,11 +66,11 @@ class ReliabilityTests(unittest.TestCase):
                 for flag in ("--srt", "--text", "--markdown"):
                     pathlib.Path(command[command.index(flag) + 1]).write_text(new_srt)
                 return subprocess.CompletedProcess(command, 0, "", "")
-            service = server.SubtitleService(root, run_command=run, pinyinize=enrich, start_background=lambda f: f())
+            service = server.SubtitleService(root, run_command=run, pinyinize=enrich, start_background=lambda f: f(), provider=FakeProvider())
             locks = {}
             service._subtitle_lock = lambda path: locks.setdefault(str(path), threading.Lock())
             reader = threading.Thread(target=lambda: service.generated(VIDEO))
-            writer = threading.Thread(target=lambda: service.generate(VIDEO))
+            writer = threading.Thread(target=lambda: service.generate(VIDEO, language="zh"))
             reader.start()
             try:
                 self.assertTrue(entered.wait(2))
@@ -94,8 +95,8 @@ class ReliabilityTests(unittest.TestCase):
                 for flag in ("--srt", "--text", "--markdown"):
                     pathlib.Path(command[command.index(flag) + 1]).write_text("not valid subtitles")
                 return subprocess.CompletedProcess(command, 0, "", "")
-            service = server.SubtitleService(root, run_command=run, start_background=lambda f: f(), pinyinize=lambda text: text)
-            self.assertEqual(service.generate(VIDEO)["error_code"], "invalid_output")
+            service = server.SubtitleService(root, run_command=run, start_background=lambda f: f(), pinyinize=lambda text: text, provider=FakeProvider())
+            self.assertEqual(service.generate(VIDEO, language="zh")["error_code"], "invalid_output")
             self.assertEqual(paths.generated_srt.read_text(), VALID_SRT)
 
     def test_atomic_write_failure_removes_its_temporary_file(self):
@@ -108,61 +109,21 @@ class ReliabilityTests(unittest.TestCase):
             self.assertEqual(path.read_text(), VALID_SRT)
             self.assertEqual(list(path.parent.iterdir()), [path])
 
-    def test_failed_caption_command_cannot_publish_partial_subtitles(self):
-        with tempfile.TemporaryDirectory() as directory:
-            def fail(command, **kwargs):
-                discovery = metadata_response(command)
-                if discovery is not None:
-                    return discovery
-                target = pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", "zh-Hans.srt"))
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text("partial subtitle")
-                return subprocess.CompletedProcess(command, 1, "", "secret token=abcd")
-            service = server.SubtitleService(pathlib.Path(directory), run_command=fail, pinyinize=lambda text: text)
-            with self.assertRaises(server.ServiceError) as caught:
-                service.existing(VIDEO)
-            self.assertEqual(caught.exception.code, "command_failed")
-            self.assertFalse(server.output_paths(service.output_root, VIDEO).youtube_srt.exists())
 
     def test_terminal_status_cache_is_bounded_and_evicted_status_remains_durable(self):
         with tempfile.TemporaryDirectory() as directory:
             service = server.SubtitleService(pathlib.Path(directory), start_background=lambda f: f(),
-                                             run_command=mock.Mock(side_effect=RuntimeError("fail")))
+                                             run_command=mock.Mock(side_effect=RuntimeError("fail")), provider=FakeProvider())
             for index in range(140):
-                service.generate(f"{index:011d}")
+                service.generate(f"{index:011d}", language="zh")
             self.assertLessEqual(len(service.jobs), 128)
             self.assertEqual(service.generated("00000000000")["status"], "error")
 
-    def test_read_only_cookie_mount_is_copied_privately_and_never_modified(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = pathlib.Path(directory)
-            cookie = root / "fixture-cookies.txt"
-            cookie.write_text("# Netscape HTTP Cookie File\n")
-            cookie.chmod(0o400)
-            marker = root / "used-path.txt"
-            script = ("import pathlib,sys; p=pathlib.Path(sys.argv[-1]); "
-                      "pathlib.Path(sys.argv[1]).write_text(str(p)); p.write_text('updated')")
-            service = server.SubtitleService(root)
-            result = service.run_command([sys.executable, "-c", script, str(marker), "--cookies", str(cookie)], timeout=2)
-            self.assertEqual(result.returncode, 0)
-            self.assertEqual(cookie.read_text(), "# Netscape HTTP Cookie File\n")
-            used = pathlib.Path(marker.read_text())
-            self.assertNotEqual(used, cookie)
-            self.assertFalse(used.exists())
 
-    def test_instant_existing_job_ready_response_contains_srt(self):
-        with tempfile.TemporaryDirectory() as directory:
-            service = server.SubtitleService(pathlib.Path(directory), start_background=lambda f: f(), pinyinize=lambda text: text,
-                                             run_command=mock.Mock(side_effect=AssertionError("unexpected cache miss")))
-            paths = server.output_paths(service.output_root, VIDEO)
-            paths.directory.mkdir(parents=True)
-            paths.youtube_srt.write_text("captions")
-            mark_cache(paths.youtube_srt)
-            self.assertEqual(service.existing_job(VIDEO)["srt"], "captions")
 
     def test_oversized_srt_is_rejected_before_read_or_conversion(self):
         with tempfile.TemporaryDirectory() as directory:
-            service = server.SubtitleService(pathlib.Path(directory), pinyinize=mock.Mock())
+            service = server.SubtitleService(pathlib.Path(directory), pinyinize=mock.Mock(), provider=FakeProvider())
             path = server.output_paths(service.output_root, VIDEO).generated_srt
             path.parent.mkdir(parents=True)
             with path.open("wb") as output:
@@ -181,31 +142,16 @@ class ReliabilityTests(unittest.TestCase):
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(b"partial")
                 return subprocess.CompletedProcess(command, 1, "", "secret")
-            service = server.SubtitleService(root, run_command=fail, start_background=lambda f: f())
-            self.assertEqual(service.generate(VIDEO)["status"], "error")
+            service = server.SubtitleService(root, run_command=fail, start_background=lambda f: f(), provider=FakeProvider())
+            self.assertEqual(service.generate(VIDEO, language="zh")["status"], "error")
             self.assertFalse(server.output_paths(root, VIDEO).audio.exists())
             self.assertFalse(server.output_paths(root, VIDEO).lossless_audio.exists())
 
-    def test_existing_async_polls_deduplicate_and_do_not_block_generation(self):
-        with tempfile.TemporaryDirectory() as directory:
-            pending = []
-            run = mock.Mock(side_effect=missing_captions)
-            service = server.SubtitleService(pathlib.Path(directory), run_command=run, start_background=pending.append)
-            self.assertEqual(service.existing_job(VIDEO)["status"], "running")
-            self.assertEqual(service.existing_job(VIDEO)["status"], "running")
-            self.assertEqual(len(pending), 1)
-            with self.assertRaises(server.ServiceError):
-                service.existing_job("abcdefghijk")
-            self.assertEqual(service.generate("abcdefghijk")["status"], "running")
-            pending.pop(0)()
-            self.assertEqual(service.existing_job(VIDEO)["status"], "missing")
-            self.assertEqual(service.existing_job(VIDEO)["status"], "missing")
-            self.assertEqual(run.call_count, 1)
 
     def test_failed_status_write_and_cleanup_cannot_leave_a_running_job(self):
         with tempfile.TemporaryDirectory() as directory:
             service = server.SubtitleService(pathlib.Path(directory),
-                run_command=mock.Mock(side_effect=RuntimeError("secret")), start_background=lambda f: f())
+                run_command=mock.Mock(side_effect=RuntimeError("secret")), start_background=lambda f: f(), provider=FakeProvider())
             write = service._write_text_atomically
             count = 0
             def disk_full(path, text):
@@ -215,7 +161,7 @@ class ReliabilityTests(unittest.TestCase):
                     raise OSError("disk full /private/key")
                 write(path, text)
             with mock.patch.object(service, "_write_text_atomically", side_effect=disk_full):
-                result = service.generate(VIDEO)
+                result = service.generate(VIDEO, language="zh")
             self.assertEqual(result["status"], "error")
             self.assertEqual(result["error_code"], "storage_error")
             self.assertEqual(service.active_jobs, set())
@@ -223,8 +169,8 @@ class ReliabilityTests(unittest.TestCase):
 
     def test_progress_file_cannot_override_status_source_or_inject_details(self):
         with tempfile.TemporaryDirectory() as directory:
-            service = server.SubtitleService(pathlib.Path(directory), start_background=lambda f: None)
-            service.generate(VIDEO)
+            service = server.SubtitleService(pathlib.Path(directory), start_background=lambda f: None, provider=FakeProvider())
+            service.generate(VIDEO, language="zh")
             path = server.progress_path(server.output_paths(service.output_root, VIDEO))
             path.write_text(json.dumps({"status": "ready", "source": "secret", "srt": "secret",
                 "error": "/private/key", "stage": "secret", "progress": 10000, "eta_seconds": -1}))
@@ -247,7 +193,7 @@ class ReliabilityTests(unittest.TestCase):
                     pathlib.Path(command[command.index(flag) + 1]).write_text(VALID_SRT)
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-            service = server.SubtitleService(root, run_command=run, pinyinize=lambda text: text, max_jobs=1)
+            service = server.SubtitleService(root, run_command=run, pinyinize=lambda text: text, max_jobs=1, provider=FakeProvider())
             remove = service._remove_work_file
 
             def pause_cleanup(path):
@@ -259,7 +205,7 @@ class ReliabilityTests(unittest.TestCase):
 
             with mock.patch.object(service, "_remove_work_file", side_effect=pause_cleanup):
                 try:
-                    service.generate(VIDEO)
+                    service.generate(VIDEO, language="zh")
                     self.assertTrue(published.wait(2), "worker did not reach published cleanup")
                     ready = service.generated(VIDEO)
                     self.assertEqual(ready["status"], "ready")
@@ -274,7 +220,7 @@ class ReliabilityTests(unittest.TestCase):
                     self.assertEqual(json.loads(server.job_path(paths).read_text()),
                                      {"status": "ready", "source": "generated", "language": "zh",
                                       "sha256": hashlib.sha256(VALID_SRT.encode()).hexdigest()})
-                    self.assertEqual(server.SubtitleService(root, pinyinize=lambda text: text).generated(VIDEO), ready)
+                    self.assertEqual(server.SubtitleService(root, pinyinize=lambda text: text, provider=FakeProvider()).generated(VIDEO), ready)
                     with service.lock:
                         self.assertIn(VIDEO, service.active_jobs)
                         self.assertFalse(service.cancel_events[VIDEO].is_set())
@@ -293,7 +239,7 @@ class ReliabilityTests(unittest.TestCase):
             self.assertTrue(service.slots.acquire(blocking=False))
             service.slots.release()
             self.assertEqual(paths.generated_srt.read_text(), VALID_SRT)
-            self.assertEqual(server.SubtitleService(root, pinyinize=lambda text: text).generated(VIDEO), ready)
+            self.assertEqual(server.SubtitleService(root, pinyinize=lambda text: text, provider=FakeProvider()).generated(VIDEO), ready)
 
     def test_close_preserves_published_ready_job_before_worker_cleanup(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -309,7 +255,7 @@ class ReliabilityTests(unittest.TestCase):
                     pathlib.Path(command[command.index(flag) + 1]).write_text(VALID_SRT)
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-            service = server.SubtitleService(root, run_command=run, pinyinize=lambda text: text, max_jobs=1)
+            service = server.SubtitleService(root, run_command=run, pinyinize=lambda text: text, max_jobs=1, provider=FakeProvider())
             remove = service._remove_work_file
 
             def pause_cleanup(path):
@@ -327,7 +273,7 @@ class ReliabilityTests(unittest.TestCase):
 
             with mock.patch.object(service, "_remove_work_file", side_effect=pause_cleanup):
                 try:
-                    service.generate(VIDEO)
+                    service.generate(VIDEO, language="zh")
                     self.assertTrue(published.wait(2), "worker did not reach published cleanup")
                     ready = service.generated(VIDEO)
                     self.assertEqual(ready["status"], "ready")
@@ -354,7 +300,7 @@ class ReliabilityTests(unittest.TestCase):
                             self.assertEqual(json.loads(server.job_path(paths).read_text()),
                                              {"status": "ready", "source": "generated", "language": "zh",
                                               "sha256": hashlib.sha256(VALID_SRT.encode()).hexdigest()})
-                            self.assertEqual(server.SubtitleService(root, pinyinize=lambda text: text).generated(VIDEO), ready)
+                            self.assertEqual(server.SubtitleService(root, pinyinize=lambda text: text, provider=FakeProvider()).generated(VIDEO), ready)
                             with service.lock:
                                 self.assertIn(VIDEO, service.active_jobs)
                                 self.assertFalse(service.cancel_events[VIDEO].is_set())
@@ -375,7 +321,7 @@ class ReliabilityTests(unittest.TestCase):
             self.assertTrue(service.slots.acquire(blocking=False))
             service.slots.release()
             self.assertEqual(paths.generated_srt.read_text(), VALID_SRT)
-            self.assertEqual(server.SubtitleService(root, pinyinize=lambda text: text).generated(VIDEO), ready)
+            self.assertEqual(server.SubtitleService(root, pinyinize=lambda text: text, provider=FakeProvider()).generated(VIDEO), ready)
 
     def test_cancel_stops_real_child_process_and_keeps_previous_srt(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -386,10 +332,10 @@ class ReliabilityTests(unittest.TestCase):
             paths.generated_srt.write_text("previous subtitle")
             worker_script = root / "slow-transcriber.py"
             worker_script.write_text("import time\ntime.sleep(30)\n")
-            service = server.SubtitleService(root, asr_python=sys.executable, cookies_from_browser="")
+            service = server.SubtitleService(root, asr_python=sys.executable, provider=FakeProvider())
             service.transcriber = worker_script
             self.addCleanup(service.close)
-            self.assertEqual(service.generate(VIDEO)["status"], "running")
+            self.assertEqual(service.generate(VIDEO, language="zh")["status"], "running")
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline:
                 with service.process_lock:
@@ -403,13 +349,13 @@ class ReliabilityTests(unittest.TestCase):
             service.close()
             self.assertTrue(all(process.poll() is not None for process in processes))
             self.assertEqual(paths.generated_srt.read_text(), "previous subtitle")
-            self.assertEqual(server.SubtitleService(root).generated(VIDEO)["error_code"], "cancelled")
+            self.assertEqual(server.SubtitleService(root, provider=FakeProvider()).generated(VIDEO)["error_code"], "cancelled")
             with self.assertRaises(server.ServiceError):
-                service.generate("abcdefghijk")
+                service.generate("abcdefghijk", language="zh")
 
     def test_managed_command_timeout_reaps_child_without_capturing_output(self):
         with tempfile.TemporaryDirectory() as directory:
-            service = server.SubtitleService(pathlib.Path(directory))
+            service = server.SubtitleService(pathlib.Path(directory), provider=FakeProvider())
             self.addCleanup(service.close)
             with self.assertRaises(server.ServiceError) as caught:
                 service.run_command([sys.executable, "-c", "import time; print('secret'*10000); time.sleep(30)"], timeout=0.1)
@@ -418,99 +364,34 @@ class ReliabilityTests(unittest.TestCase):
 
     def test_health_is_live_without_optional_asr_and_never_leaks_paths(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"SUBSANYWHERE_MODELS_DIR": directory}):
-            service = server.SubtitleService(pathlib.Path(directory), asr_python="/secret/missing-python")
+            service = server.SubtitleService(pathlib.Path(directory), asr_python="/secret/missing-python", provider=FakeProvider())
             health = service.health()
             self.assertEqual(health["ok"], True)
             self.assertEqual((health["service"], health["api_version"]), ("subsanywhere", 1))
             self.assertFalse(health["capabilities"]["asr"])
-            for check in ("yt_dlp", "ffmpeg", "pinyin", "asr_python", "asr_dependencies", "models"):
+            for check in ("video_api", "ffmpeg", "pinyin", "asr_python", "asr_dependencies", "models"):
                 self.assertIsInstance(health["checks"][check], bool)
             self.assertNotIn("/secret", json.dumps(health))
             self.assertNotIn(directory, json.dumps(health))
 
-    def test_docker_environment_configures_commands_without_host_browser_cookies(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {
-            "SUBSANYWHERE_HOST": "0.0.0.0", "SUBSANYWHERE_PORT": "43000",
-            "SUBSANYWHERE_OUTPUT_DIR": directory, "SUBSANYWHERE_MAX_JOBS": "2",
-            "SUBSANYWHERE_ASR_PYTHON": sys.executable, "SUBSANYWHERE_COOKIES_BROWSER": "",
-            "SUBSANYWHERE_YTDLP_JS_RUNTIME": "node",
-        }):
-            cookie = pathlib.Path(directory) / "cookies.txt"
-            cookie.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
-            os.environ["SUBSANYWHERE_COOKIES_FILE"] = str(cookie)
-            args = server.parse_args([])
-            self.assertEqual((args.host, args.port, args.output_dir), ("0.0.0.0", 43000, pathlib.Path(directory)))
-            run = mock.Mock(side_effect=missing_captions)
-            service = server.SubtitleService(args.output_dir, run_command=run)
-            self.assertEqual(service.asr_python, sys.executable)
-            self.assertEqual(service.max_jobs, 2)
-            self.assertEqual(service.existing(VIDEO)["status"], "missing")
-            command = run.call_args.args[0]
-            self.assertNotIn("--cookies-from-browser", command)
-            self.assertEqual(command[command.index("--cookies") + 1], str(cookie))
-            self.assertEqual(command[command.index("--js-runtimes") + 1], "node")
 
-    def test_missing_optional_cookie_file_does_not_break_public_youtube_commands(self):
-        with tempfile.TemporaryDirectory() as directory:
-            missing = pathlib.Path(directory) / "cookies" / "youtube.txt"
-            service = server.SubtitleService(pathlib.Path(directory), cookies_from_browser="",
-                                             cookies_file=str(missing))
-            command = service._youtube_command()
-        self.assertNotIn("--cookies", command)
-        self.assertNotIn("--cookies-from-browser", command)
 
-    def test_existing_requests_share_one_download_and_caption_job_limit(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = pathlib.Path(directory)
-            entered, release = threading.Event(), threading.Event()
-            calls, results, errors = [], [], []
-
-            def run(command, **kwargs):
-                discovery = metadata_response(command)
-                if discovery is not None:
-                    return discovery
-                calls.append(command)
-                entered.set()
-                self.assertTrue(release.wait(2))
-                pathlib.Path(command[command.index("-o") + 1].replace("%(ext)s", "zh-Hans.srt")).write_text(VALID_SRT)
-                return subprocess.CompletedProcess(command, 0, "", "")
-
-            service = server.SubtitleService(root, run_command=run, pinyinize=lambda text: text)
-            def existing():
-                try:
-                    results.append(service.existing(VIDEO))
-                except Exception as error:
-                    errors.append(error)
-            first, second = threading.Thread(target=existing), threading.Thread(target=existing)
-            first.start()
-            try:
-                self.assertTrue(entered.wait(2))
-                second.start()
-                with self.assertRaises(server.ServiceError):
-                    service.existing("abcdefghijk")
-            finally:
-                release.set()
-                first.join(2)
-                second.join(2)
-            self.assertEqual(errors, [])
-            self.assertEqual(len(calls), 1)
-            self.assertEqual(len(results), 2)
 
     def test_generation_limit_deduplicates_and_releases_after_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             pending = []
             service = server.SubtitleService(pathlib.Path(directory), max_jobs=1,
                                              start_background=pending.append,
-                                             run_command=mock.Mock(side_effect=RuntimeError("fail")))
-            self.assertEqual(service.generate(VIDEO)["status"], "running")
-            self.assertEqual(service.generate(VIDEO)["status"], "running")
+                                             run_command=mock.Mock(side_effect=RuntimeError("fail")), provider=FakeProvider())
+            self.assertEqual(service.generate(VIDEO, language="zh")["status"], "running")
+            self.assertEqual(service.generate(VIDEO, language="zh")["status"], "running")
             self.assertEqual(len(pending), 1)
             with self.assertRaises(server.ServiceError) as caught:
-                service.generate("abcdefghijk")
+                service.generate("abcdefghijk", language="zh")
             self.assertEqual(caught.exception.code, "busy")
             self.assertEqual(service.generated("abcdefghijk")["status"], "missing")
             pending.pop()()
-            self.assertEqual(service.generate("abcdefghijk")["status"], "running")
+            self.assertEqual(service.generate("abcdefghijk", language="zh")["status"], "running")
 
     def test_worker_failures_are_terminal_redacted_and_preserve_the_old_srt(self):
         failures = [
@@ -527,28 +408,28 @@ class ReliabilityTests(unittest.TestCase):
                 paths.generated_srt.write_text("previous subtitle")
                 run = mock.Mock(**({"side_effect": failure} if isinstance(failure, Exception)
                                    else {"return_value": failure}))
-                service = server.SubtitleService(root, run_command=run, start_background=lambda f: f())
-                result = service.generate(VIDEO)
+                service = server.SubtitleService(root, run_command=run, start_background=lambda f: f(), provider=FakeProvider())
+                result = service.generate(VIDEO, language="zh")
                 self.assertEqual(result["status"], "error")
                 self.assertEqual(result["error_code"], code)
                 self.assertNotIn("secret", json.dumps(result))
                 self.assertNotIn("abcd", json.dumps(result))
                 self.assertEqual(paths.generated_srt.read_text(), "previous subtitle")
-                self.assertEqual(server.SubtitleService(root).generated(VIDEO), result)
+                self.assertEqual(server.SubtitleService(root, provider=FakeProvider()).generated(VIDEO), result)
 
     def test_start_failure_is_terminal_and_retryable_without_leaking_details(self):
         with tempfile.TemporaryDirectory() as directory:
             service = server.SubtitleService(
                 pathlib.Path(directory),
                 start_background=mock.Mock(side_effect=RuntimeError("secret /private/key token=abcd")),
-            )
-            result = service.generate(VIDEO)
+             provider=FakeProvider())
+            result = service.generate(VIDEO, language="zh")
             self.assertEqual(result["status"], "error")
             self.assertEqual(result["error_code"], "start_failed")
             self.assertNotIn("secret", json.dumps(result))
-            self.assertEqual(server.SubtitleService(pathlib.Path(directory)).generated(VIDEO), result)
+            self.assertEqual(server.SubtitleService(pathlib.Path(directory), provider=FakeProvider()).generated(VIDEO), result)
             service.start_background = lambda target: None
-            self.assertEqual(service.generate(VIDEO)["status"], "running")
+            self.assertEqual(service.generate(VIDEO, language="zh")["status"], "running")
 
     def test_restart_recovers_interrupted_job_and_preserves_previous_subtitle(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -556,15 +437,15 @@ class ReliabilityTests(unittest.TestCase):
             paths = server.output_paths(root, VIDEO)
             paths.directory.mkdir(parents=True)
             paths.generated_srt.write_text("previous subtitle", encoding="utf-8")
-            service = server.SubtitleService(root, start_background=lambda target: None)
-            self.assertEqual(service.generate(VIDEO)["status"], "running")
+            service = server.SubtitleService(root, start_background=lambda target: None, provider=FakeProvider())
+            self.assertEqual(service.generate(VIDEO, language="zh")["status"], "running")
 
-            restarted = server.SubtitleService(root)
+            restarted = server.SubtitleService(root, provider=FakeProvider())
             result = restarted.generated(VIDEO)
             self.assertEqual(result["status"], "error")
             self.assertEqual(result["error_code"], "interrupted")
             self.assertEqual(paths.generated_srt.read_text(), "previous subtitle")
-            self.assertEqual(server.SubtitleService(root).generated(VIDEO), result)
+            self.assertEqual(server.SubtitleService(root, provider=FakeProvider()).generated(VIDEO), result)
 
 
 if __name__ == "__main__":

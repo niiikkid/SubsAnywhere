@@ -65,9 +65,9 @@
             </div>
             <p id="youtubeProgressDetail" class="hint">0%</p>
           </div>
-          <button id="chooseYoutubeLanguage" type="button" hidden>Уточнить язык</button>
-          <button id="cancelYoutubeSubtitles" type="button" hidden>Остановить создание</button>
-          <button id="retryYoutubeSubtitles" type="button" hidden>Повторить проверку</button>
+          <button id="chooseYoutubeLanguage" type="button" hidden>Выбрать язык</button>
+          <button id="cancelYoutubeSubtitles" type="button" hidden>Остановить</button>
+          <button id="retryYoutubeSubtitles" type="button" hidden>Повторить</button>
         </section>
 
         <div id="subtitleOptions" class="workspace-options" hidden>
@@ -79,16 +79,19 @@
           </label>
 
           <section id="youtubeActions" class="youtube-actions" hidden>
-            <label>Язык готовых субтитров YouTube
-              <select id="youtubeLanguage">
-                <option value="">Авто - язык оригинала</option>
-                <option value="en">Английский</option>
-                <option value="zh">Китайский с пиньинем</option>
-              </select>
-            </label>
+            <div class="youtube-download-row">
+              <label>Язык субтитров
+                <select id="youtubeLanguage">
+                  <option value="">Выберите язык</option>
+                  <option value="en">Английский</option>
+                  <option value="zh">Китайский</option>
+                </select>
+              </label>
+              <button id="downloadYoutubeSubtitles" type="button">Скачать</button>
+            </div>
             <details id="generationOptions" class="workspace-details">
               <summary>Создать из речи</summary>
-              <p class="hint">Локальное распознавание аудио YouTube. Занимает время; текущие субтитры остаются доступны.</p>
+
               <label>Язык речи
                 <select id="generationLanguage">
                   <option value="">Выберите язык</option>

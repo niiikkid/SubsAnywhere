@@ -12,6 +12,11 @@ test('video workspace unifies caption choice, import and explicit recognition', 
   assert.match(html, /id="changeSubtitles"[^>]*aria-expanded="false"/);
   assert.match(html, /id="subtitleOptions"[^>]*hidden/);
   assert.match(html, /id="youtubeSubtitles"/);
+  assert.match(html, /id="downloadYoutubeSubtitles"[^>]*>Скачать</);
+  const languageSelect = html.match(/<select id="youtubeLanguage">([\s\S]*?)<\/select>/)?.[1];
+  assert.ok(languageSelect);
+  assert.match(languageSelect, /<option value="">Выберите язык<\/option>/);
+  assert.doesNotMatch(languageSelect, /Авто|value="auto"/);
   assert.match(html, /id="createYoutubeSubtitles"[^>]*>Начать создание</);
   assert.match(html, /id="youtubeSubtitleStatus"/);
   assert.doesNotMatch(html, /Запускается только вручную: сервер скачает аудио/);

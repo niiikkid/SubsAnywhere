@@ -27,6 +27,7 @@ from urllib.parse import parse_qs, urlparse
 
 from pinyin import bilingual_srt, contains_han
 from asr_models import nano_model_available, select_engine
+from video_download_api import VideoDownloadAPI, ProviderError, MESSAGES as PROVIDER_MESSAGES
 
 VIDEO_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
 EXTENSION_ORIGIN_PATTERN = re.compile(r"chrome-extension://[a-p]{32}\Z")
@@ -40,7 +41,7 @@ ERROR_MESSAGES = {
     "start_failed": "Could not start generation; retry.",
     "timeout": "Local command timed out; retry or use a shorter video.",
     "dependency_missing": "Required local executable is unavailable; check service health.",
-    "command_failed": "Local command failed; check dependencies, cookies and video availability.",
+    "command_failed": "Local recognition command failed; check service health.",
     "generation_failed": "Subtitle generation failed; previous subtitles were preserved.",
     "storage_error": "Subtitle storage is unavailable or full.",
     "busy": "Local service is busy; retry shortly.",
@@ -49,6 +50,7 @@ ERROR_MESSAGES = {
     "too_large": "Subtitle or media file exceeds the service size limit.",
     "resource_limit": "Recognition exceeded the memory limit; choose a smaller model or increase the limit. Previous subtitles were preserved.",
 }
+ERROR_MESSAGES.update(PROVIDER_MESSAGES)
 
 
 class ServiceError(RuntimeError):
@@ -58,7 +60,7 @@ class ServiceError(RuntimeError):
 
 
 def error_payload(error: BaseException, source: str = "generated") -> dict:
-    if isinstance(error, ServiceError):
+    if isinstance(error, (ServiceError, ProviderError)):
         code = error.code
     elif isinstance(error, subprocess.TimeoutExpired):
         code = "timeout"
@@ -123,54 +125,6 @@ def validate_caption_language(language: str) -> str:
     return language
 
 
-def caption_language(value) -> str | None:
-    if not isinstance(value, str):
-        return None
-    base = value.lower().replace("_", "-").split("-")[0]
-    return base if base in {"en", "zh"} else None
-
-
-def select_original_captions(metadata: dict, language: str = "") -> tuple[str | None, list]:
-    """Prefer manual tracks, then original ASR; never infer speech from titles.
-
-    Unlabelled multilingual HLS captions are not evidence of original language.
-    Unknown/unsupported/ambiguous originals deliberately return no selection.
-    """
-    override = validate_caption_language(language)
-    tracks = []
-    for source in ("subtitles", "automatic_captions"):
-        mapping = metadata.get(source)
-        if not isinstance(mapping, dict):
-            continue
-        for code, formats in sorted(mapping.items(), key=lambda pair: (not pair[0].endswith("-orig"), pair[0])):
-            if "-t-" in code.lower() or not isinstance(formats, list):
-                continue
-            original = [item for item in formats if isinstance(item, dict)
-                        and isinstance(item.get("url"), str)
-                        and "tlang" not in parse_qs(urlparse(item["url"]).query, keep_blank_values=True)]
-            if original:
-                tracks.append((source, code, original))
-
-    declared = next((value for value in (override, metadata.get("language"), metadata.get("audio_language"))
-                     if isinstance(value, str) and value and value.lower() != "und"), None)
-    if not declared:
-        audio = [item for item in (metadata.get("formats") or []) if isinstance(item, dict)
-                 and isinstance(item.get("language"), str) and item["language"]
-                 and item["language"].lower() != "und" and item.get("acodec") != "none"]
-        originals = [item for item in audio if "original" in str(item.get("format_note", "")).lower()]
-        evidence = {item["language"].split("-")[0].lower() for item in (originals or audio)}
-        if len(evidence) == 1:
-            declared = next(iter(evidence))
-    if not declared:
-        auto = [code for source, code, _ in tracks if source == "automatic_captions"]
-        originals = [code for code in auto if code.endswith("-orig")]
-        evidence = {code.split("-")[0].lower() for code in (originals or auto)}
-        if len(evidence) == 1:
-            declared = next(iter(evidence))
-    selected_language = caption_language(declared)
-    return selected_language, [item for item in tracks if selected_language and caption_language(item[1]) == selected_language]
-
-
 def progress_path(paths: OutputPaths) -> Path:
     return paths.directory / f".{paths.generated_srt.stem}.progress.json"
 
@@ -184,22 +138,15 @@ class SubtitleService:
         self,
         output_root: Path,
         run_command=None,
-        yt_dlp: str = "yt-dlp",
-        cookies_from_browser: str | None = None,
         asr_python: str | None = None,
         start_background=None,
         pinyinize=None,
         max_jobs: int | None = None,
-        cookies_file: str | None = None,
+        provider=None,
     ) -> None:
         self.output_root = Path(output_root).expanduser().resolve()
         self.run_command = run_command or self._run_managed
-        self.yt_dlp = yt_dlp
-        self.cookies_from_browser = (os.environ.get("SUBSANYWHERE_COOKIES_BROWSER", "chrome")
-                                     if cookies_from_browser is None else cookies_from_browser)
-        self.cookies_file = (os.environ.get("SUBSANYWHERE_COOKIES_FILE", "")
-                             if cookies_file is None else cookies_file)
-        self.js_runtime = os.environ.get("SUBSANYWHERE_YTDLP_JS_RUNTIME", "")
+        self.provider = provider if provider is not None else VideoDownloadAPI(self.output_root)
         self.asr_python = asr_python or os.environ.get("SUBSANYWHERE_ASR_PYTHON") or str(
             Path.home() / ".hermes/venvs/video-url-to-subtitles/bin/python"
         )
@@ -219,6 +166,7 @@ class SubtitleService:
         self.caption_slots = threading.BoundedSemaphore(1)
         self.caption_jobs = OrderedDict()
         self.caption_active = set()
+        self.caption_cancel_events = {}
         self.active_jobs = set()
         self.cancel_events = {}
         self.closing = threading.Event()
@@ -251,7 +199,6 @@ class SubtitleService:
                 models_root = Path(os.environ.get("SUBSANYWHERE_MODELS_DIR", str(
                     Path.home() / ".cache/modelscope/hub/models/iic"))).expanduser()
                 checks = {
-                    "yt_dlp": bool(shutil.which(self.yt_dlp)),
                     "ffmpeg": bool(shutil.which("ffmpeg")),
                     "pinyin": importlib.util.find_spec("pypinyin") is not None or
                               (sys.platform == "darwin" and bool(shutil.which("swift"))),
@@ -266,31 +213,18 @@ class SubtitleService:
             checks = dict(self.health_cached)
         model_setting = os.environ.get("SUBSANYWHERE_ASR_MODEL", "auto")
         models = {language: select_engine(model_setting, language) for language in ("en", "zh")}
-        base_ready = all(checks.values())
+        checks.pop("yt_dlp", None)
+        checks["video_api"] = bool(self.provider.configured)
+        base_ready = all(checks[key] for key in ("ffmpeg", "pinyin", "asr_python", "asr_dependencies", "models", "video_api"))
         checks["nano_model"] = nano_model_available()
         languages = [language for language, model in models.items()
                      if base_ready and (model != "nano" or checks["nano_model"])]
         return {"ok": True, "service": "subsanywhere", "api_version": 1,
                 "checks": checks, "recognition_models": models, "capabilities": {
-                    "existing": all(checks[key] for key in ("yt_dlp", "ffmpeg", "pinyin")),
+                    "existing": all(checks[key] for key in ("video_api", "pinyin")),
+                    "video_api_configured": checks["video_api"],
                     "asr": bool(languages), "asr_languages": languages,
                 }, "limits": {"max_jobs": self.max_jobs}}
-
-    def _youtube_command(self) -> list[str]:
-        command = [self.yt_dlp, "--ignore-config", "--no-progress", "--no-continue",
-                   "--max-filesize", str(MAX_AUDIO_BYTES), "--socket-timeout", "15",
-                   "--retries", "2", "--fragment-retries", "2"]
-        # The persistent Docker volume is mounted on every start. It is empty
-        # before the first explicit import, so only pass a real cookie file.
-        # This lets ordinary restarts retain imported cookies without making
-        # public videos fail on a fresh install.
-        if self.cookies_file and Path(self.cookies_file).expanduser().is_file():
-            command.extend(["--cookies", self.cookies_file])
-        elif self.cookies_from_browser:
-            command.extend(["--cookies-from-browser", self.cookies_from_browser])
-        if self.js_runtime:
-            command.extend(["--js-runtimes", self.js_runtime])
-        return command
 
     def _save_job(self, video_id: str, job: dict) -> None:
         path = job_path(output_paths(self.output_root, video_id))
@@ -339,16 +273,28 @@ class SubtitleService:
             return dict(self.jobs[video_id])
         return job
 
+    @staticmethod
+    def _language_required(source="youtube") -> dict:
+        return {"status": "missing", "source": source, "language_required": True,
+                "available_languages": ["en", "zh"]}
+
+    def _caption_cache(self, paths, language):
+        localized = paths.youtube_srt.with_name(paths.youtube_srt.stem + "-" + language + ".srt")
+        return localized, (self._cached_youtube_payload(localized, language)
+                           or self._cached_youtube_payload(paths.youtube_srt, language))
+
     def existing(self, video_id: str, language: str = "") -> dict:
         safe_id = validate_video_id(video_id)
         language = validate_caption_language(language)
         self._check_cancelled()
+        if not language:
+            return self._language_required()
         paths = output_paths(self.output_root, safe_id)
-        download_lock = self.download_locks[hash(safe_id) % len(self.download_locks)]
+        download_lock = self.download_locks[hash((safe_id, language)) % len(self.download_locks)]
         if not download_lock.acquire(timeout=10):
             raise ServiceError("busy")
         try:
-            cached = self._cached_youtube_payload(paths.youtube_srt, language)
+            _, cached = self._caption_cache(paths, language)
             if cached:
                 return cached
             if not self.caption_slots.acquire(blocking=False):
@@ -361,18 +307,23 @@ class SubtitleService:
             download_lock.release()
 
     def existing_job(self, video_id: str, language: str = "") -> dict:
-        """Nonblocking HTTP facade; MV3 fetches cannot wait for yt-dlp."""
+        """Nonblocking facade; provider IDs survive timeout and restart."""
         safe_id = validate_video_id(video_id)
         language = validate_caption_language(language)
+        if not language:
+            return self._language_required()
         key = (safe_id, language)
         paths = output_paths(self.output_root, safe_id)
         with self.lock:
             self._check_cancelled()
+            _, ready = self._caption_cache(paths, language)
+            if ready:
+                return ready
             cached = self.caption_jobs.get(key)
             if cached:
                 updated, payload = cached
                 if payload["status"] == "ready":
-                    ready = self._cached_youtube_payload(paths.youtube_srt, language)
+                    _, ready = self._caption_cache(paths, language)
                     if ready:
                         return ready
                 cooldown = 10 if payload["status"] == "error" else 60
@@ -381,6 +332,7 @@ class SubtitleService:
             if self.caption_active:
                 raise ServiceError("busy")
             self.caption_active.add(safe_id)
+            self.caption_cancel_events[safe_id] = threading.Event()
             payload = {"status": "running", "source": "youtube", "stage": "downloading"}
             self.caption_jobs[key] = (time.monotonic(), payload)
             self.caption_jobs.move_to_end(key)
@@ -391,14 +343,16 @@ class SubtitleService:
         except Exception:
             with self.lock:
                 self.caption_active.discard(safe_id)
+                self.caption_cancel_events.pop(safe_id, None)
                 self.caption_jobs[key] = (time.monotonic(), error_payload(ServiceError("start_failed"), "youtube"))
         with self.lock:
             result = dict(self.caption_jobs[key][1])
         if result["status"] == "ready":
-            return self._cached_youtube_payload(paths.youtube_srt, language) or error_payload(ServiceError("invalid_output"), "youtube")
+            return self._caption_cache(paths, language)[1] or error_payload(ServiceError("invalid_output"), "youtube")
         return result
 
     def _existing_worker(self, video_id: str, language: str = ""):
+        self.local.cancel_event = self.caption_cancel_events[video_id]
         try:
             result = self.existing(video_id, language)
             result = {key: value for key, value in result.items() if key != "srt"}
@@ -407,83 +361,38 @@ class SubtitleService:
         with self.lock:
             self.caption_jobs[(video_id, language)] = (time.monotonic(), result)
             self.caption_active.discard(video_id)
+            self.caption_cancel_events.pop(video_id, None)
+        self.local.cancel_event = None
 
     def _download_existing(self, safe_id: str, paths: OutputPaths, requested_language: str = "") -> dict:
+        if requested_language not in ("en", "zh"):
+            return self._language_required()
+        language = requested_language
         paths.directory.mkdir(parents=True, exist_ok=True)
+        destination, _ = self._caption_cache(paths, language)
         with tempfile.TemporaryDirectory(prefix=".captions-", dir=paths.directory) as directory:
-            work = Path(directory)
-            template = work / "metadata.%(ext)s"
-            result = self.run_command(
-                self._youtube_command() + ["--skip-download", "--no-playlist", "--write-info-json",
-                    "-o", str(template), f"https://www.youtube.com/watch?v={safe_id}"],
-                capture_output=True, text=True, timeout=180, check=False,
-            )
-            self._require_success(result)
+            candidate = Path(directory) / "subtitles.srt"
+            self.provider.acquire(safe_id, language, "subtitles", candidate,
+                                  cancel=self._check_cancelled, limit=MAX_SUBTITLE_BYTES)
+            contents = self._clean_srt(self._read_subtitle(candidate))
+            self._validate_srt(contents)
+            if language == "zh":
+                contents = self._pinyinize_srt(candidate, contents)
+            else:
+                self._write_text_atomically(candidate, contents)
             self._check_cancelled()
-            try:
-                metadata = json.loads(self._read_subtitle(work / "metadata.info.json"))
-                if not isinstance(metadata, dict):
-                    raise ValueError("Invalid metadata")
-            except (ValueError, FileNotFoundError):
-                raise ServiceError("invalid_output") from None
-            language, selections = select_original_captions(metadata, requested_language)
-            if language is None:
-                available = [code for code in ("en", "zh") if select_original_captions(metadata, code)[1]]
-                return {"status": "missing", "source": "youtube", "language_required": bool(available),
-                        "available_languages": available}
-            failures = 0
-            # At most one manual and one automatic attempt, independent of how
-            # many regional aliases YouTube exposes. Never download media.
-            attempted = set()
-            for source, code, formats in selections:
-                if source in attempted:
-                    continue
-                attempted.add(source)
-                selected = dict(metadata, subtitles={}, automatic_captions={})
-                selected[source] = {code: formats}
-                selected.pop("requested_subtitles", None)
-                info = work / "selected.info.json"
-                info.write_text(json.dumps(selected), encoding="utf-8")
-                with tempfile.TemporaryDirectory(prefix="track-", dir=work) as attempt:
-                    output_template = Path(attempt) / f"youtube-{safe_id}-youtube.%(ext)s"
-                    flag = "--write-subs" if source == "subtitles" else "--write-auto-subs"
-                    result = self.run_command(
-                        self._youtube_command() + ["--skip-download", "--no-playlist", flag,
-                            "--sub-langs", re.escape(code).replace(r"\-", "-"), "--sub-format", "srt/vtt/best",
-                            "--convert-subs", "srt", "--load-info-json", str(info),
-                            "-o", str(output_template)],
-                        capture_output=True, text=True, timeout=180, check=False,
-                    )
-                    self._check_cancelled()
-                    if result.returncode:
-                        failures += 1
-                        continue
-                    candidate = next((path for path in Path(attempt).glob("*.srt")
-                                      if path.is_file() and path.stat().st_size), None)
-                    if candidate:
-                        contents = self._clean_srt(self._read_subtitle(candidate))
-                        self._validate_srt(contents)
-                        if language == "zh":
-                            contents = self._pinyinize_srt(candidate, contents)
-                        else:
-                            self._write_text_atomically(candidate, contents)
-                        self._check_cancelled()
-                        record = {"version": CAPTION_CACHE_VERSION, "language": language,
-                                  "requested_language": requested_language,
-                                  "track": code, "kind": source,
-                                  "sha256": hashlib.sha256(contents.encode("utf-8")).hexdigest()}
-                        # Bind provenance to exact bytes. Publish SRT last; failed
-                        # refreshes preserve it, crashes cannot trust stale metadata.
-                        self._write_text_atomically(paths.youtube_srt.with_suffix(".language.json"), json.dumps(record))
-                        candidate.replace(paths.youtube_srt)
-                        return self._subtitle_payload(paths.youtube_srt, "youtube", contents, language)
-            if failures:
-                raise ServiceError("command_failed")
-            return {"status": "missing", "source": "youtube"}
+            record = {"version": CAPTION_CACHE_VERSION, "language": language,
+                      "requested_language": language, "provider": "video-download-api",
+                      "sha256": hashlib.sha256(contents.encode("utf-8")).hexdigest()}
+            self._write_text_atomically(destination.with_suffix(".language.json"), json.dumps(record))
+            candidate.replace(destination)
+            return self._subtitle_payload(destination, "youtube", contents, language)
 
     def generate(self, video_id: str, language: str = "") -> dict:
         safe_id = validate_video_id(video_id)
-        language = validate_caption_language(language) or "zh"
+        language = validate_caption_language(language)
+        if not language:
+            return self._language_required("generated")
         with self.lock:
             self._check_cancelled()
             if safe_id in self.active_jobs:
@@ -561,42 +470,17 @@ class SubtitleService:
         try:
             self._check_cancelled()
             paths.directory.mkdir(parents=True, exist_ok=True)
-            audio = paths.lossless_audio
-            if (not audio.is_file() or not audio.stat().st_size) and paths.audio.is_file() and paths.audio.stat().st_size:
-                audio = paths.audio
+            # Legacy audio is preserved but has no reliable requested-language
+            # provenance. API audio language is only a request: it may fall back.
+            audio = paths.lossless_audio.with_name(paths.lossless_audio.stem + "-" + language + ".flac")
             if not audio.is_file() or not audio.stat().st_size:
                 with self.lock:
                     self.jobs[video_id].update(stage="downloading", progress=0)
-                audio_template = paths.directory / f"youtube-{video_id}-audio.working.%(ext)s"
-                audio_format = audio.suffix.lstrip(".")
-                working_audio = Path(str(audio_template).replace("%(ext)s", audio_format))
-                self._remove_work_file(working_audio)
-                result = self.run_command(
-                    self._youtube_command() + [
-                        "--no-playlist",
-                        "-f",
-                        "ba/bestaudio",
-                        "-x",
-                        "--audio-format",
-                        audio_format,
-                        "-o",
-                        str(audio_template),
-                        f"https://www.youtube.com/watch?v={video_id}",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=600,
-                    check=False,
-                )
-                self._require_success(result)
-                self._check_cancelled()
-                if not working_audio.is_file() or not working_audio.stat().st_size:
-                    raise ServiceError("invalid_output")
-                if working_audio.stat().st_size > MAX_AUDIO_BYTES:
-                    raise ServiceError("too_large")
-                working_audio.replace(audio)
+                self.provider.acquire(video_id, language, "audio", audio,
+                                      cancel=self._check_cancelled, limit=MAX_AUDIO_BYTES)
+            self._check_cancelled()
             if not audio.is_file() or not audio.stat().st_size:
-                raise RuntimeError("yt-dlp did not create the audio file")
+                raise ServiceError("invalid_output")
             if audio.stat().st_size > MAX_AUDIO_BYTES:
                 raise ServiceError("too_large")
             temporary = {
@@ -698,6 +582,8 @@ class SubtitleService:
     def cancel(self, video_id: str) -> dict:
         safe_id = validate_video_id(video_id)
         with self.lock:
+            if safe_id in self.caption_active:
+                self.caption_cancel_events[safe_id].set()
             if safe_id in self.active_jobs and self.jobs[safe_id].get("status") == "running":
                 self.cancel_events[safe_id].set()
                 self._finish_job(safe_id, error_payload(ServiceError("cancelled")))
@@ -710,6 +596,8 @@ class SubtitleService:
                 if self.jobs[video_id].get("status") == "running":
                     self.cancel_events[video_id].set()
                     self._finish_job(video_id, error_payload(ServiceError("cancelled")))
+            for event in self.caption_cancel_events.values():
+                event.set()
             threads = list(self.threads)
         with self.process_lock:
             processes = list(self.processes)
@@ -742,23 +630,7 @@ class SubtitleService:
                 pass
 
     def _run_managed(self, command, *, timeout, **kwargs):
-        # yt-dlp saves its cookie jar on exit. Copy a read-only mount into a
-        # private, short-lived directory rather than granting it write access.
-        with tempfile.TemporaryDirectory(prefix="subsanywhere-command-") as directory:
-            command = list(command)
-            if "--cookies" in command:
-                index = command.index("--cookies") + 1
-                source = Path(command[index]).expanduser()
-                with source.open("rb") as cookie:
-                    data = cookie.read(MAX_SUBTITLE_BYTES + 1)
-                if len(data) > MAX_SUBTITLE_BYTES:
-                    raise ServiceError("too_large")
-                copy = Path(directory) / "cookies.txt"
-                with copy.open("xb") as destination:
-                    os.chmod(copy, 0o600)
-                    destination.write(data)
-                command[index] = str(copy)
-            return self._run_process(command, timeout=timeout)
+        return self._run_process(list(command), timeout=timeout)
 
     def _run_process(self, command, *, timeout):
         self._check_cancelled()
@@ -997,7 +869,7 @@ def handler_for(service):
                 options = {}
                 if parsed.path in {"/api/subtitles/existing", "/api/subtitles/generate"} and "language" in query:
                     languages = query.pop("language")
-                    if len(languages) != 1 or languages[0] not in {"en", "zh"}:
+                    if len(languages) != 1 or languages[0] not in {"", "en", "zh"}:
                         raise ValueError("Invalid caption language")
                     options["language"] = languages[0]
                 if set(query) != {"video_id"} or len(query["video_id"]) != 1 or parsed.netloc or parsed.fragment:
