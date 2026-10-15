@@ -36,7 +36,7 @@ class CaptionHttpTests(unittest.TestCase):
                 ("existing", "&language=zh", 200), ("existing", "&language=en", 200),
                 ("existing", "&language=", 200), ("existing", "&language=fr", 400),
                 ("existing", "&language=zh&language=en", 400),
-                ("generated", "&language=zh", 400), ("existing", "&other=zh", 400),
+                ("existing", "&other=zh", 400),
             ]:
                 with self.subTest(endpoint=endpoint, suffix=suffix):
                     connection = http.client.HTTPConnection(*httpd.server_address, timeout=2)

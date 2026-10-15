@@ -36,8 +36,8 @@
           <button id="changeVideo" type="button" class="text-button" aria-controls="videoOptions" aria-expanded="false" hidden>Изменить</button>
         </div>
         <p id="videoTitle" class="video-title" hidden></p>
-        <p id="status" class="hint" role="status" aria-live="polite">Нажмите «Включить субтитры» на странице с видео.</p>
-        <button id="activate" type="button" class="primary">Включить субтитры</button>
+        <p id="status" class="hint" role="status" aria-live="polite"></p>
+        <button id="activate" type="button" class="primary">Найти видео</button>
         <div id="videoOptions" class="workspace-options" hidden>
           <label id="playerChoice">Видео на странице
             <select id="player"></select>
@@ -51,24 +51,25 @@
         <p id="captionTitle" class="caption-title">Субтитры не выбраны</p>
         <p id="captionSource" class="caption-source" hidden></p>
         <p id="captionState" class="hint" role="status" aria-live="polite"></p>
-        <div class="workspace-actions">
+        <div class="workspace-actions" id="otherSubtitleActions">
           <button id="changeSubtitles" type="button" aria-controls="subtitleOptions" aria-expanded="false">Другие субтитры</button>
-          <button id="showTiming" type="button" class="text-button" aria-controls="syncBox" aria-expanded="false" hidden>Настроить время</button>
         </div>
 
-        <section id="youtubeSubtitles" class="youtube-activity" hidden>
-          <p id="youtubeSubtitleStatus" class="hint" role="status" aria-live="polite"></p>
-          <div id="youtubeProgressBox" class="youtube-progress" hidden>
-            <div class="progress-row">
-              <progress id="youtubeProgress" max="100" value="0" aria-label="Создание субтитров"></progress>
-              <output id="youtubeProgressValue">0%</output>
-            </div>
-            <p id="youtubeProgressDetail" class="hint">0%</p>
-          </div>
-          <button id="chooseYoutubeLanguage" type="button" hidden>Выбрать язык</button>
-          <button id="cancelYoutubeSubtitles" type="button" hidden>Остановить</button>
-          <button id="retryYoutubeSubtitles" type="button" hidden>Повторить</button>
+        <section id="youtubeActions" class="language-tracks" aria-label="Язык субтитров" hidden>
+          <button id="englishSubtitles" type="button" class="language-track" aria-pressed="false">
+            <span>Английский</span><span id="englishSubtitleState" class="language-state">Скачать и показать</span>
+          </button>
+          <button id="chineseSubtitles" type="button" class="language-track" aria-pressed="false">
+            <span>Китайский</span><span id="chineseSubtitleState" class="language-state">Скачать и показать</span>
+          </button>
         </section>
+        <section id="youtubeSubtitles" hidden>
+          <p id="youtubeSubtitleStatus" class="hint" role="status" aria-live="polite"></p>
+        </section>
+        <div class="workspace-actions">
+          <button id="showTiming" type="button" class="text-button" aria-controls="syncBox" aria-expanded="false" hidden>Сдвиг</button>
+          <button id="hideSubtitles" type="button" class="text-button" hidden>Выключить</button>
+        </div>
 
         <div id="subtitleOptions" class="workspace-options" hidden>
           <label>Показывать
@@ -78,46 +79,16 @@
             <input id="subtitleFile" type="file" accept=".srt,application/x-subrip,text/plain">
           </label>
 
-          <section id="youtubeActions" class="youtube-actions" hidden>
-            <div class="youtube-download-row">
-              <label>Язык субтитров
-                <select id="youtubeLanguage">
-                  <option value="">Выберите язык</option>
-                  <option value="en">Английский</option>
-                  <option value="zh">Китайский</option>
-                </select>
-              </label>
-              <button id="downloadYoutubeSubtitles" type="button">Скачать</button>
-            </div>
-            <details id="generationOptions" class="workspace-details">
-              <summary>Создать из речи</summary>
 
-              <label>Язык речи
-                <select id="generationLanguage">
-                  <option value="">Выберите язык</option>
-                  <option value="en">Английский</option>
-                  <option value="zh">Китайский</option>
-                </select>
-              </label>
-              <p id="generationHint" class="hint" role="status" aria-live="polite"></p>
-              <button id="createYoutubeSubtitles" type="button">Начать создание</button>
-            </details>
-          </section>
-
-          <details id="externalFiles" class="workspace-details" hidden>
-            <summary>Сохранённые дорожки</summary>
-            <div id="externalList" class="external-list"></div>
-          </details>
         </div>
 
         <section id="syncBox" class="workspace-options sync-box" hidden>
-          <h2>Настройка времени</h2>
-          <p id="syncTrackName" class="hint"></p>
+          <p id="syncTrackName" class="hint" hidden></p>
           <div class="two-columns">
             <label>Смещение, сек.
               <input id="offsetSeconds" type="number" min="-3600" max="3600" step="0.1" value="0" title="Минус - показать раньше, плюс - позже">
             </label>
-            <label>Скорость, %
+            <label hidden>Скорость, %
               <input id="timeScalePercent" type="number" min="90" max="110" step="0.001" value="100">
             </label>
           </div>
@@ -129,7 +100,7 @@
             <button type="button" data-shift="1">+1</button>
             <button type="button" data-shift="5">+5</button>
           </div>
-          <p class="hint">Минус - показать раньше, плюс - позже. Скорость исправляет нарастающее расхождение.</p>
+
         </section>
       </section>
 

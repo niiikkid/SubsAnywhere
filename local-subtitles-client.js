@@ -1,17 +1,14 @@
 const DEFAULT_BASE_URL = 'http://127.0.0.1:43817';
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
 const SERVER_ERRORS = Object.freeze({
-  interrupted: 'Сервер перезапущен. Запустите создание субтитров заново; прежние файлы сохранены',
   start_failed: 'Не удалось запустить задание. Попробуйте ещё раз',
   timeout: 'Превышено время обработки. Повторите запрос или выберите более короткое видео',
-  dependency_missing: 'Не найдены зависимости сервера. Проверьте окружение Docker и наличие моделей',
-  command_failed: 'Не удалось обработать видео. Проверьте доступность ролика, авторизацию YouTube и окружение сервера',
-  generation_failed: 'Не удалось создать субтитры. Прежние файлы сохранены',
+  download_failed: 'Не удалось скачать субтитры. Прежние файлы сохранены',
   storage_error: 'Не удалось сохранить файлы. Проверьте свободное место и права на папку сервера',
   busy: 'Сервер занят другим заданием. Повторите попытку немного позже',
-  cancelled: 'Создание остановлено. Прежние файлы сохранены',
+  cancelled: 'Загрузка остановлена. Задание API сохранено',
   invalid_output: 'Обработка не дала корректных субтитров. Попробуйте другой ролик',
-  resource_limit: 'Распознавание превысило лимит памяти. Выберите меньшую модель или увеличьте лимит памяти сервера. Прежние субтитры сохранены',
+
   too_large: 'Файл превышает ограничение сервера. Выберите более короткое видео или меньший SRT',
 });
 
@@ -44,47 +41,19 @@ export function youtubeVideoId(rawUrl) {
 
 export function localSubtitleTrack(videoId, source, cues, language = '') {
   const safeId = assertVideoId(videoId);
-  const safeSource = source === 'generated' ? 'generated' : 'youtube';
+  const safeSource = 'youtube';
   // Older servers have no language field; infer the label from their subtitle text.
   const safeLanguage = ['en', 'zh'].includes(language) ? language
     : cues.some((cue) => /\p{Script=Han}/u.test(cue.text)) ? 'zh' : 'en';
   const label = safeLanguage === 'zh' ? 'Китайские с пиньинем' : 'Английские';
   return {
     id: `youtube-${safeId}-${safeSource}-${safeLanguage}`,
-    name: `${label} — ${safeSource === 'generated' ? 'распознаны локально' : 'YouTube'}`,
+    name: `${label} — YouTube`,
     language: safeLanguage,
     cues,
     offsetSeconds: 0,
     timeScale: 1,
     sourceType: 'local-server',
-  };
-}
-
-function formatEta(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) return '';
-  if (seconds < 60) return 'меньше минуты';
-  const minutes = Math.ceil(seconds / 60);
-  if (minutes < 60) return `${minutes} мин`;
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return `${hours} ч${remainingMinutes ? ` ${remainingMinutes} мин` : ''}`;
-}
-
-export function formatGenerationProgress(payload) {
-  if (payload?.status !== 'running') return { visible: false, value: 0, label: '', detail: '' };
-  const value = Math.max(0, Math.min(100, Math.round(Number(payload.progress) || 0)));
-  if (payload.stage !== 'recognizing') {
-    const label = payload.stage === 'downloading' ? 'Скачиваю аудио…' : 'Подготавливаю распознавание…';
-    return { visible: true, value, label, detail: `${value}%` };
-  }
-  const completed = Math.max(0, Math.round(Number(payload.completed_segments) || 0));
-  const total = Math.max(0, Math.round(Number(payload.total_segments) || 0));
-  const eta = formatEta(Number(payload.eta_seconds));
-  return {
-    visible: true,
-    value,
-    label: total ? `Распознаю речь: ${completed} из ${total} сегментов.` : value > 0 ? 'Распознаю речь…' : 'Определяю объём речи…',
-    detail: `${value}%${eta ? ` · осталось примерно ${eta}` : ''}`,
   };
 }
 
@@ -103,18 +72,6 @@ export class LocalSubtitleClient {
     return this.#request('/api/subtitles/existing', videoId, 'GET', language);
   }
 
-  generate(videoId, language = '') {
-    if (!['', 'en', 'zh'].includes(language)) throw new Error('Некорректный язык субтитров');
-    return this.#request('/api/subtitles/generate', videoId, 'POST', language || 'zh');
-  }
-
-  cancel(videoId) {
-    return this.#request('/api/subtitles/cancel', videoId, 'POST');
-  }
-
-  status(videoId) {
-    return this.#request('/api/subtitles/generated', videoId);
-  }
 
   async #request(path, videoId, method = 'GET', language = '') {
     const safeId = assertVideoId(videoId);

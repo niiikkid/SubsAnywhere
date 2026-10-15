@@ -2,27 +2,25 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
-test('video workspace unifies caption choice, import and explicit recognition', async () => {
+test('video workspace offers English and Chinese buttons without creation or saved lists', async () => {
   const html = await fs.readFile(new URL('../popup.html', import.meta.url), 'utf8');
 
   assert.match(html, /id="originalTrack"/);
   assert.match(html, /id="playerTab"[^>]*>Видео</);
-  assert.match(html, /id="activate"[^>]*>Включить субтитры</);
+  assert.match(html, /id="activate"[^>]*>Найти видео</);
   assert.match(html, /id="restartSearch"[^>]*>Найти видео заново</);
   assert.match(html, /id="changeSubtitles"[^>]*aria-expanded="false"/);
   assert.match(html, /id="subtitleOptions"[^>]*hidden/);
   assert.match(html, /id="youtubeSubtitles"/);
-  assert.match(html, /id="downloadYoutubeSubtitles"[^>]*>Скачать</);
-  const languageSelect = html.match(/<select id="youtubeLanguage">([\s\S]*?)<\/select>/)?.[1];
-  assert.ok(languageSelect);
-  assert.match(languageSelect, /<option value="">Выберите язык<\/option>/);
-  assert.doesNotMatch(languageSelect, /Авто|value="auto"/);
-  assert.match(html, /id="createYoutubeSubtitles"[^>]*>Начать создание</);
+  for (const id of ['englishSubtitles', 'chineseSubtitles', 'englishSubtitleState', 'chineseSubtitleState', 'hideSubtitles', 'otherSubtitleActions']) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /<button[^>]*id="englishSubtitles"/);
+  assert.match(html, /<button[^>]*id="chineseSubtitles"/);
   assert.match(html, /id="youtubeSubtitleStatus"/);
-  assert.doesNotMatch(html, /Запускается только вручную: сервер скачает аудио/);
-  assert.match(html, /id="generationLanguage"/);
+  assert.doesNotMatch(html, /id="(?:downloadYoutubeSubtitles|createYoutubeSubtitles|cancelYoutubeSubtitles|generationLanguage|generationOptions|youtubeLanguage|externalList)"/);
   assert.doesNotMatch(html, /для создания — китайский|<h2>Источник<|id="syncTrack"|id="subtitleSettingsTab"/);
-  for (const id of ['subtitleFile', 'originalTrack', 'generationLanguage', 'syncBox']) {
+  for (const id of ['subtitleFile', 'originalTrack', 'englishSubtitles', 'chineseSubtitles', 'syncBox']) {
     assert.equal(html.split(`id="${id}"`).length, 2, `${id} must appear exactly once`);
     assert.ok(html.indexOf(`id="${id}"`) < html.indexOf('id="appearancePanel"'), `${id} belongs to the video workspace`);
   }
@@ -38,7 +36,6 @@ test('popup has accessible job navigation and an always-available appearance pre
   }
   assert.match(html, /id="subtitlePreview"/);
   assert.match(html, /id="saveStatus"[^>]*role="status"/);
-  assert.match(html, /id="retryYoutubeSubtitles"/);
   assert.doesNotMatch(html, /Короткий русский перевод над каждым словом|Плеер не нужен для настройки|Перетаскивайте субтитры по видео/);
   assert.match(html, /id="panelDock"[^>]*aria-pressed="false"/);
   assert.doesNotMatch(html, /id="controls" hidden/);
@@ -83,7 +80,7 @@ test('background protocol exposes local subtitle actions without page subtitle s
   ]);
 
   assert.match(protocol, /LOCAL_SUBTITLE_EXISTING/);
-  assert.match(protocol, /LOCAL_SUBTITLE_GENERATE/);
+  assert.doesNotMatch(protocol, /LOCAL_SUBTITLE_(?:GENERATE|STATUS|CANCEL)/);
   assert.match(protocol, /TRACK_UPSERT_LOCAL/);
   assert.doesNotMatch(protocol, /CONTENT_SAMPLE_TRACK|sampleTrack/);
   assert.doesNotMatch(protocol, /WORDS_|SENTENCES_|PANEL_AI_|SENTENCE_EXPLAIN|WORD_TRANSLATE/);

@@ -12,7 +12,6 @@ import re
 import shutil
 import signal
 import socket
-import subprocess
 import sys
 import tempfile
 import threading
@@ -22,11 +21,9 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Iterator
 from urllib.parse import parse_qs, urlparse
 
-from pinyin import bilingual_srt, contains_han
-from asr_models import nano_model_available, select_engine
+from pinyin import bilingual_srt
 from video_download_api import VideoDownloadAPI, ProviderError, MESSAGES as PROVIDER_MESSAGES
 
 VIDEO_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -34,21 +31,15 @@ EXTENSION_ORIGIN_PATTERN = re.compile(r"chrome-extension://[a-p]{32}\Z")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 43817
 MAX_SUBTITLE_BYTES = 5 * 1024 * 1024
-MAX_AUDIO_BYTES = 512 * 1024 * 1024
 CAPTION_CACHE_VERSION = 1
 ERROR_MESSAGES = {
-    "interrupted": "Generation interrupted by server restart; retry.",
-    "start_failed": "Could not start generation; retry.",
-    "timeout": "Local command timed out; retry or use a shorter video.",
-    "dependency_missing": "Required local executable is unavailable; check service health.",
-    "command_failed": "Local recognition command failed; check service health.",
-    "generation_failed": "Subtitle generation failed; previous subtitles were preserved.",
+    "start_failed": "Could not start subtitle download; retry.",
+    "download_failed": "Subtitle download failed; previous subtitles were preserved.",
     "storage_error": "Subtitle storage is unavailable or full.",
     "busy": "Local service is busy; retry shortly.",
-    "cancelled": "Generation cancelled; previous subtitles were preserved.",
-    "invalid_output": "Local command did not create valid subtitle output.",
-    "too_large": "Subtitle or media file exceeds the service size limit.",
-    "resource_limit": "Recognition exceeded the memory limit; choose a smaller model or increase the limit. Previous subtitles were preserved.",
+    "cancelled": "Subtitle download stopped; provider job was preserved.",
+    "invalid_output": "Provider did not return valid subtitles.",
+    "too_large": "Subtitle file exceeds the service size limit.",
 }
 ERROR_MESSAGES.update(PROVIDER_MESSAGES)
 
@@ -59,17 +50,13 @@ class ServiceError(RuntimeError):
         super().__init__(ERROR_MESSAGES[code])
 
 
-def error_payload(error: BaseException, source: str = "generated") -> dict:
+def error_payload(error: BaseException, source: str = "youtube") -> dict:
     if isinstance(error, (ServiceError, ProviderError)):
         code = error.code
-    elif isinstance(error, subprocess.TimeoutExpired):
-        code = "timeout"
-    elif isinstance(error, FileNotFoundError):
-        code = "dependency_missing"
     elif isinstance(error, OSError):
         code = "storage_error"
     else:
-        code = "generation_failed"
+        code = "download_failed"
     return {"status": "error", "source": source, "error_code": code, "error": ERROR_MESSAGES[code]}
 
 
@@ -83,40 +70,13 @@ def validate_video_id(value: str) -> str:
 @dataclass(frozen=True)
 class OutputPaths:
     directory: Path
-    audio: Path
     youtube_srt: Path
-    generated_srt: Path
-    generated_txt: Path
-    generated_markdown: Path
-
-    @property
-    def lossless_audio(self) -> Path:
-        # Keep the legacy MP3 path and tuple layout for existing caches/callers.
-        return self.audio.with_suffix(".flac")
-
-    def __iter__(self) -> Iterator[Path]:
-        return iter((
-            self.directory,
-            self.audio,
-            self.youtube_srt,
-            self.generated_srt,
-            self.generated_txt,
-            self.generated_markdown,
-        ))
 
 
 def output_paths(root: Path, video_id: str) -> OutputPaths:
     safe_id = validate_video_id(video_id)
     directory = Path(root).expanduser().resolve() / safe_id
-    prefix = f"youtube-{safe_id}"
-    return OutputPaths(
-        directory=directory,
-        audio=directory / f"{prefix}-audio.mp3",
-        youtube_srt=directory / f"{prefix}-youtube.srt",
-        generated_srt=directory / f"{prefix}-generated.srt",
-        generated_txt=directory / f"{prefix}-generated.txt",
-        generated_markdown=directory / f"{prefix}-generated.timestamps.md",
-    )
+    return OutputPaths(directory, directory / f"youtube-{safe_id}-youtube.srt")
 
 
 def validate_caption_language(language: str) -> str:
@@ -125,54 +85,28 @@ def validate_caption_language(language: str) -> str:
     return language
 
 
-def progress_path(paths: OutputPaths) -> Path:
-    return paths.directory / f".{paths.generated_srt.stem}.progress.json"
-
-
-def job_path(paths: OutputPaths) -> Path:
-    return paths.directory / ".generated-job.json"
-
-
 class SubtitleService:
     def __init__(
         self,
         output_root: Path,
-        run_command=None,
-        asr_python: str | None = None,
         start_background=None,
         pinyinize=None,
-        max_jobs: int | None = None,
         provider=None,
     ) -> None:
         self.output_root = Path(output_root).expanduser().resolve()
-        self.run_command = run_command or self._run_managed
         self.provider = provider if provider is not None else VideoDownloadAPI(self.output_root)
-        self.asr_python = asr_python or os.environ.get("SUBSANYWHERE_ASR_PYTHON") or str(
-            Path.home() / ".hermes/venvs/video-url-to-subtitles/bin/python"
-        )
-        self.transcriber = Path(__file__).with_name("transcribe.py")
         self.start_background = start_background or self._start_thread
         self.pinyinize = pinyinize or bilingual_srt
-        self.jobs = {}
         self.lock = threading.Lock()
         # Fixed lock stripes avoid growing a lock map for every requested ID.
         self.subtitle_locks = [threading.Lock() for _ in range(64)]
         self.download_locks = [threading.Lock() for _ in range(64)]
-        max_jobs = int(os.environ.get("SUBSANYWHERE_MAX_JOBS", "1")) if max_jobs is None else max_jobs
-        if not 1 <= max_jobs <= 16:
-            raise ValueError("max_jobs must be between 1 and 16")
-        self.max_jobs = max_jobs
-        self.slots = threading.BoundedSemaphore(max_jobs)
         self.caption_slots = threading.BoundedSemaphore(1)
         self.caption_jobs = OrderedDict()
         self.caption_active = set()
         self.caption_cancel_events = {}
-        self.active_jobs = set()
-        self.cancel_events = {}
         self.closing = threading.Event()
         self.local = threading.local()
-        self.process_lock = threading.Lock()
-        self.processes = set()
         self.threads = set()
         self.health_lock = threading.Lock()
         self.health_cached = None
@@ -182,71 +116,19 @@ class SubtitleService:
         # Probe module presence, not heavyweight imports/model loading; no network.
         with self.health_lock:
             if self.health_cached is None or time.monotonic() - self.health_checked_at > 60:
-                python_available = bool(shutil.which(self.asr_python))
-                dependencies = False
-                if python_available:
-                    try:
-                        result = subprocess.run(
-                            [self.asr_python, "-I", "-c", "import importlib.util,sys; "
-                             "sys.exit(0 if all(importlib.util.find_spec(m) is not None "
-                             "for m in ('funasr','torch','torchaudio','modelscope')) else 1)"],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            timeout=3, check=False,
-                        )
-                        dependencies = result.returncode == 0
-                    except (OSError, subprocess.TimeoutExpired):
-                        pass
-                models_root = Path(os.environ.get("SUBSANYWHERE_MODELS_DIR", str(
-                    Path.home() / ".cache/modelscope/hub/models/iic"))).expanduser()
                 checks = {
-                    "ffmpeg": bool(shutil.which("ffmpeg")),
                     "pinyin": importlib.util.find_spec("pypinyin") is not None or
                               (sys.platform == "darwin" and bool(shutil.which("swift"))),
-                    "asr_python": python_available,
-                    "asr_dependencies": dependencies,
-                    "models": all((models_root / model / "model.pt").is_file() and
-                                  (models_root / model / "configuration.json").is_file()
-                                  for model in ("SenseVoiceSmall", "speech_fsmn_vad_zh-cn-16k-common-pytorch")),
                 }
                 self.health_cached = checks
                 self.health_checked_at = time.monotonic()
             checks = dict(self.health_cached)
-        model_setting = os.environ.get("SUBSANYWHERE_ASR_MODEL", "auto")
-        models = {language: select_engine(model_setting, language) for language in ("en", "zh")}
-        checks.pop("yt_dlp", None)
         checks["video_api"] = bool(self.provider.configured)
-        base_ready = all(checks[key] for key in ("ffmpeg", "pinyin", "asr_python", "asr_dependencies", "models", "video_api"))
-        checks["nano_model"] = nano_model_available()
-        languages = [language for language, model in models.items()
-                     if base_ready and (model != "nano" or checks["nano_model"])]
         return {"ok": True, "service": "subsanywhere", "api_version": 1,
-                "checks": checks, "recognition_models": models, "capabilities": {
+                "checks": checks, "capabilities": {
                     "existing": all(checks[key] for key in ("video_api", "pinyin")),
                     "video_api_configured": checks["video_api"],
-                    "asr": bool(languages), "asr_languages": languages,
-                }, "limits": {"max_jobs": self.max_jobs}}
-
-    def _save_job(self, video_id: str, job: dict) -> None:
-        path = job_path(output_paths(self.output_root, video_id))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._write_text_atomically(path, json.dumps(job))
-        self._remember_job(video_id, job)
-
-    def _remember_job(self, video_id, job):
-        self.jobs[video_id] = dict(job)
-        while len(self.jobs) > 128:
-            old = next(key for key in self.jobs if key not in self.active_jobs)
-            del self.jobs[old]
-
-    def _finish_job(self, video_id: str, job: dict) -> None:
-        language = job.get("language", self.jobs.get(video_id, {}).get("language", "zh"))
-        job = dict(job, language=language if language in ("en", "zh") else "zh")
-        try:
-            self._save_job(video_id, job)
-        except OSError:
-            # Disk-full cannot make the worker immortal. The persisted running
-            # record becomes interrupted on restart if this final write fails.
-            self._remember_job(video_id, dict(error_payload(ServiceError("storage_error")), language=job["language"]))
+                }}
 
     @staticmethod
     def _remove_work_file(path: Path):
@@ -254,24 +136,6 @@ class SubtitleService:
             path.unlink(missing_ok=True)
         except OSError:
             pass
-
-    def _load_job(self, video_id: str) -> dict:
-        if video_id in self.jobs:
-            return dict(self.jobs[video_id])
-        path = job_path(output_paths(self.output_root, video_id))
-        try:
-            with path.open(encoding="utf-8") as source:
-                job = json.loads(source.read(8192))
-            if not isinstance(job, dict):
-                return {}
-        except (OSError, ValueError):
-            return {}
-        if job.get("status") == "running":
-            job = {"status": "error", "source": "generated", "language": job.get("language", "zh"),
-                   "error_code": "interrupted", "error": "Generation interrupted by server restart; retry."}
-            self._finish_job(video_id, job)
-            return dict(self.jobs[video_id])
-        return job
 
     @staticmethod
     def _language_required(source="youtube") -> dict:
@@ -388,175 +252,6 @@ class SubtitleService:
             candidate.replace(destination)
             return self._subtitle_payload(destination, "youtube", contents, language)
 
-    def generate(self, video_id: str, language: str = "") -> dict:
-        safe_id = validate_video_id(video_id)
-        language = validate_caption_language(language)
-        if not language:
-            return self._language_required("generated")
-        with self.lock:
-            self._check_cancelled()
-            if safe_id in self.active_jobs:
-                return dict(self.jobs[safe_id])
-            if not self.slots.acquire(blocking=False):
-                raise ServiceError("busy")
-            self.active_jobs.add(safe_id)
-            self.cancel_events[safe_id] = threading.Event()
-            try:
-                progress_path(output_paths(self.output_root, safe_id)).unlink(missing_ok=True)
-                self._save_job(safe_id, {
-                    "status": "running",
-                    "source": "generated",
-                    "language": language,
-                    "stage": "preparing",
-                    "progress": 0,
-                })
-            except OSError:
-                self.active_jobs.remove(safe_id)
-                self.cancel_events.pop(safe_id, None)
-                self.slots.release()
-                raise ServiceError("storage_error") from None
-        try:
-            self.start_background(lambda: self._generate_worker(safe_id, language))
-        except Exception:
-            with self.lock:
-                self._finish_job(safe_id, {"status": "error", "source": "generated",
-                                         "error_code": "start_failed", "error": "Could not start generation; retry."})
-                self.active_jobs.remove(safe_id)
-                self.cancel_events.pop(safe_id, None)
-                self.slots.release()
-        return self.generated(safe_id)
-
-    def generated(self, video_id: str) -> dict:
-        safe_id = validate_video_id(video_id)
-        path = output_paths(self.output_root, safe_id).generated_srt
-        with self._subtitle_lock(path):
-            return self._generated_locked(safe_id, path)
-
-    def _generated_locked(self, safe_id: str, path: Path) -> dict:
-        with self.lock:
-            job = self._load_job(safe_id)
-        if job.get("status") in {"running", "error"}:
-            if job.get("status") == "running":
-                try:
-                    with progress_path(output_paths(self.output_root, safe_id)).open(encoding="utf-8") as source:
-                        live_progress = json.loads(source.read(8192))
-                    if isinstance(live_progress, dict):
-                        if live_progress.get("stage") in {"preparing", "downloading", "recognizing"}:
-                            job["stage"] = live_progress["stage"]
-                        for key, maximum in (("progress", 100), ("completed_segments", 1_000_000),
-                                             ("total_segments", 1_000_000), ("eta_seconds", 86_400)):
-                            value = live_progress.get(key)
-                            if type(value) is int and 0 <= value <= maximum:
-                                job[key] = value
-                except (ValueError, OSError):
-                    pass
-            return job
-        if path.is_file() and path.stat().st_size:
-            contents = self._read_subtitle(path)
-            # Job provenance is trusted only for the exact published SRT bytes.
-            # Legacy/replaced files must never inherit a stale ready-job language.
-            language = job.get("language")
-            if (language not in ("en", "zh")
-                    or job.get("sha256") != hashlib.sha256(contents.encode("utf-8")).hexdigest()):
-                language = "zh" if contains_han(contents) else "en"
-            if language == "zh":
-                contents = self._pinyinize_srt_locked(path, contents)
-            return self._subtitle_payload(path, "generated", contents, language)
-        return {"status": "missing", "source": "generated"}
-
-    def _generate_worker(self, video_id: str, language: str = "zh") -> None:
-        paths = output_paths(self.output_root, video_id)
-        self.local.cancel_event = self.cancel_events[video_id]
-        try:
-            self._check_cancelled()
-            paths.directory.mkdir(parents=True, exist_ok=True)
-            # Legacy audio is preserved but has no reliable requested-language
-            # provenance. API audio language is only a request: it may fall back.
-            audio = paths.lossless_audio.with_name(paths.lossless_audio.stem + "-" + language + ".flac")
-            if not audio.is_file() or not audio.stat().st_size:
-                with self.lock:
-                    self.jobs[video_id].update(stage="downloading", progress=0)
-                self.provider.acquire(video_id, language, "audio", audio,
-                                      cancel=self._check_cancelled, limit=MAX_AUDIO_BYTES)
-            self._check_cancelled()
-            if not audio.is_file() or not audio.stat().st_size:
-                raise ServiceError("invalid_output")
-            if audio.stat().st_size > MAX_AUDIO_BYTES:
-                raise ServiceError("too_large")
-            temporary = {
-                "srt": paths.directory / f"youtube-{video_id}-generated.working.srt",
-                "text": paths.directory / f"youtube-{video_id}-generated.working.txt",
-                "markdown": paths.directory / f"youtube-{video_id}-generated.working.timestamps.md",
-            }
-            for path in temporary.values():
-                path.unlink(missing_ok=True)
-            with self.lock:
-                self.jobs[video_id].update(stage="recognizing", progress=0)
-            result = self.run_command(
-                [
-                    self.asr_python,
-                    str(self.transcriber),
-                    str(audio),
-                    "--srt",
-                    str(temporary["srt"]),
-                    "--text",
-                    str(temporary["text"]),
-                    "--markdown",
-                    str(temporary["markdown"]),
-                    "--device",
-                    "cpu",
-                    "--language",
-                    language,
-                    "--progress",
-                    str(progress_path(paths)),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=21_600,
-                check=False,
-            )
-            if result.returncode == 73:
-                raise ServiceError("resource_limit")
-            self._require_success(result)
-            destinations = {
-                "srt": paths.generated_srt,
-                "text": paths.generated_txt,
-                "markdown": paths.generated_markdown,
-            }
-            for key, path in temporary.items():
-                if not path.is_file() or not path.stat().st_size:
-                    raise ServiceError("invalid_output")
-                if path.stat().st_size > MAX_SUBTITLE_BYTES:
-                    raise ServiceError("too_large")
-            contents = self._read_subtitle(temporary["srt"])
-            self._validate_srt(contents)
-            if language == "zh":
-                contents = self._pinyinize_srt(temporary["srt"], contents)
-            with self._subtitle_lock(paths.generated_srt), self.lock:
-                self._check_cancelled()
-                # Commit SRT last: failed conversion/cancellation never replaces it.
-                for key in ("text", "markdown", "srt"):
-                    temporary[key].replace(destinations[key])
-                self._finish_job(video_id, {"status": "ready", "source": "generated", "language": language,
-                                            "sha256": hashlib.sha256(contents.encode("utf-8")).hexdigest()})
-        except BaseException as error:
-            with self.lock:
-                self._finish_job(video_id, error_payload(error))
-        finally:
-            try:
-                self._remove_work_file(progress_path(paths))
-                for pattern in (f"youtube-{video_id}-generated.working.*", f"youtube-{video_id}-audio.working.*"):
-                    for path in paths.directory.glob(pattern):
-                        self._remove_work_file(path)
-            except OSError:
-                pass
-            finally:
-                with self.lock:
-                    self.active_jobs.discard(video_id)
-                    self.cancel_events.pop(video_id, None)
-                    self.slots.release()
-                self.local.cancel_event = None
-
     def _start_thread(self, target) -> None:
         def run():
             try:
@@ -579,104 +274,16 @@ class SubtitleService:
         if self.closing.is_set() or (event is not None and event.is_set()):
             raise ServiceError("cancelled")
 
-    def cancel(self, video_id: str) -> dict:
-        safe_id = validate_video_id(video_id)
-        with self.lock:
-            if safe_id in self.caption_active:
-                self.caption_cancel_events[safe_id].set()
-            if safe_id in self.active_jobs and self.jobs[safe_id].get("status") == "running":
-                self.cancel_events[safe_id].set()
-                self._finish_job(safe_id, error_payload(ServiceError("cancelled")))
-        return self.generated(safe_id)
-
     def close(self) -> None:
         self.closing.set()
         with self.lock:
-            for video_id in list(self.active_jobs):
-                if self.jobs[video_id].get("status") == "running":
-                    self.cancel_events[video_id].set()
-                    self._finish_job(video_id, error_payload(ServiceError("cancelled")))
             for event in self.caption_cancel_events.values():
                 event.set()
             threads = list(self.threads)
-        with self.process_lock:
-            processes = list(self.processes)
-        for process in processes:
-            self._stop_process(process)
         deadline = time.monotonic() + 5
         for thread in threads:
             if thread is not threading.current_thread():
                 thread.join(max(0, deadline - time.monotonic()))
-
-    @staticmethod
-    def _stop_process(process) -> None:
-        try:
-            if os.name == "posix":
-                os.killpg(process.pid, signal.SIGTERM)
-            elif process.poll() is None:
-                process.terminate()
-            process.wait(timeout=1)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        finally:
-            try:
-                if os.name == "posix":
-                    # Also kill grandchildren after their parent has exited.
-                    os.killpg(process.pid, signal.SIGKILL)
-                elif process.poll() is None:
-                    process.kill()
-                process.wait(timeout=1)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
-
-    def _run_managed(self, command, *, timeout, **kwargs):
-        return self._run_process(list(command), timeout=timeout)
-
-    def _run_process(self, command, *, timeout):
-        self._check_cancelled()
-        output_directory = None
-        for flag in ("-o", "--srt"):
-            if flag in command:
-                output_directory = Path(command[command.index(flag) + 1]).parent
-                break
-        with self.process_lock:
-            self._check_cancelled()
-            process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                       start_new_session=os.name == "posix")
-            self.processes.add(process)
-        try:
-            deadline = time.monotonic() + timeout
-            while process.poll() is None:
-                self._check_cancelled()
-                if output_directory is not None:
-                    used = 0
-                    for path in output_directory.iterdir():
-                        try:
-                            if path.is_file():
-                                used += path.stat().st_size
-                        except FileNotFoundError:
-                            continue
-                        if used > MAX_AUDIO_BYTES * 2:
-                            raise ServiceError("too_large")
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise ServiceError("timeout")
-                try:
-                    process.wait(timeout=min(0.1, remaining))
-                except subprocess.TimeoutExpired:
-                    pass
-            self._check_cancelled()
-            return subprocess.CompletedProcess(command, process.returncode, "", "")
-        finally:
-            self._stop_process(process)
-            with self.process_lock:
-                self.processes.discard(process)
-
-    @staticmethod
-    def _require_success(result: subprocess.CompletedProcess) -> None:
-        if result.returncode:
-            raise ServiceError("command_failed")
 
     def _subtitle_lock(self, path: Path) -> threading.Lock:
         key = str(path.resolve())
@@ -828,7 +435,7 @@ def handler_for(service):
             origin = self.headers.get("Origin", "")
             requested_headers = {name.strip().lower() for name in self.headers.get("Access-Control-Request-Headers", "").split(",") if name.strip()}
             if (not EXTENSION_ORIGIN_PATTERN.fullmatch(origin)
-                    or self.headers.get("Access-Control-Request-Method", "GET") not in {"GET", "POST"}
+                    or self.headers.get("Access-Control-Request-Method", "GET") not in {"GET"}
                     or not requested_headers.issubset({"x-subsanywhere-client"})):
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden origin"})
                 return
@@ -847,7 +454,6 @@ def handler_for(service):
                 return
             actions = {
                 "/api/subtitles/existing": getattr(service, "existing_job", service.existing),
-                "/api/subtitles/generated": service.generated,
             }
             self._run_action(actions.get(parsed.path), parsed)
 
@@ -856,9 +462,7 @@ def handler_for(service):
             if not self._authorized():
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden client"})
                 return
-            action = {"/api/subtitles/generate": service.generate,
-                      "/api/subtitles/cancel": getattr(service, "cancel", None)}.get(parsed.path)
-            self._run_action(action, parsed)
+            self._run_action(None, parsed)
 
         def _run_action(self, action, parsed) -> None:
             if action is None:
@@ -867,7 +471,7 @@ def handler_for(service):
             try:
                 query = parse_qs(parsed.query, keep_blank_values=True, max_num_fields=4)
                 options = {}
-                if parsed.path in {"/api/subtitles/existing", "/api/subtitles/generate"} and "language" in query:
+                if parsed.path == "/api/subtitles/existing" and "language" in query:
                     languages = query.pop("language")
                     if len(languages) != 1 or languages[0] not in {"", "en", "zh"}:
                         raise ValueError("Invalid caption language")
@@ -912,7 +516,7 @@ def handler_for(service):
 
         def _cors_headers(self, origin: str) -> None:
             self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "X-SubsAnywhere-Client")
             self.send_header("Vary", "Origin")
 

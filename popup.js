@@ -1,5 +1,5 @@
 import { parseSrt } from './caption-core.js';
-import { formatGenerationProgress, localSubtitleTrack, youtubeVideoId } from './local-subtitles-client.js';
+import { localSubtitleTrack, youtubeVideoId } from './local-subtitles-client.js';
 import { canonicalPageKey } from './page-context.js';
 import {
   choosePlayer,
@@ -41,9 +41,9 @@ let connectionBusy = false;
 let playerDeliveryFailed = false;
 let pageHydrated = false;
 let discoveryRevision = 0;
-let youtubePhase = 'loading';
-let generationRunning = false;
-let generationLanguageEdited = false;
+
+let downloadingLanguage = '';
+const subtitleResults = new Map();
 let aiConfig = {
   activeProvider: 'deepseek',
   providers: {
@@ -61,9 +61,7 @@ let youtubeId = '';
 let youtubePollTimer;
 let youtubeEpoch = 0;
 let popupClosed = false;
-let selectGeneratedWhenReady = false;
 let selectionRevision = 0;
-let generatedSelectionRevision = 0;
 
 function postPanelMessage(type, payload = {}) {
   if (!embeddedPanel) return;
@@ -219,30 +217,38 @@ function setYoutubeStatus(text, error = false, phase = 'ready') {
   const element = $('youtubeSubtitleStatus');
   element.textContent = text;
   element.classList.toggle('error', error);
-  youtubePhase = error ? 'error' : phase;
+
   drawWorkspace();
 }
 
-function youtubeFailure(error, canGenerate = false, epoch = youtubeEpoch) {
+function youtubeFailure(error, epoch = youtubeEpoch) {
   if (popupClosed || epoch !== youtubeEpoch) return;
   clearTimeout(youtubePollTimer);
-  $('createYoutubeSubtitles').disabled = !canGenerate;
-  $('retryYoutubeSubtitles').hidden = false;
-  drawYoutubeProgress({ status: 'error' });
+  if (downloadingLanguage) subtitleResults.set(downloadingLanguage,
+    /не найден|субтитров.*нет/i.test(error.message) ? 'Нет субтитров' : 'Повторить');
+  downloadingLanguage = '';
   setYoutubeStatus(error.message, true);
 }
 
-function drawYoutubeProgress(payload) {
-  const progress = formatGenerationProgress(payload);
-  generationRunning = progress.visible;
-  $('youtubeProgressBox').hidden = !progress.visible;
-  $('cancelYoutubeSubtitles').hidden = !progress.visible;
-  if (!progress.visible) $('cancelYoutubeSubtitles').disabled = false;
-  $('youtubeProgress').value = progress.value;
-  $('youtubeProgressValue').value = `${progress.value}%`;
-  $('youtubeProgressDetail').textContent = progress.detail;
-  if (progress.visible) setYoutubeStatus(progress.label, false, 'working');
-  else drawWorkspace();
+function savedLanguageTrack(language) {
+  const matching = state.externalTracks.filter((track) => !isBuiltInCacheTrack(track)
+    && track.language === language && track.cues?.length);
+  return matching.find((track) => track.id === `youtube-${youtubeId}-youtube-${language}`)
+    ?? matching.find((track) => track.id === `youtube-${youtubeId}-youtube`)
+    ?? matching[0];
+}
+
+function drawLanguageTracks() {
+  for (const [language, prefix] of [['en', 'english'], ['zh', 'chinese']]) {
+    const track = savedLanguageTrack(language);
+    const selected = Boolean(track && state.settings.secondTrackId === `external:${track.id}`);
+    const button = $(`${prefix}Subtitles`);
+    button.disabled = !pageHydrated || !pageKey || Boolean(downloadingLanguage);
+    button.setAttribute('aria-pressed', String(selected));
+    $(`${prefix}SubtitleState`).textContent = downloadingLanguage === language ? 'Скачиваю…'
+      : selected ? 'Показываются' : track ? 'Сохранены · Показать'
+        : subtitleResults.get(language) || 'Скачать и показать';
+  }
 }
 
 function currentPlayer() {
@@ -309,15 +315,17 @@ function drawWorkspace() {
   $('changeSubtitles').setAttribute('aria-expanded', subtitleOptionsOpen);
   $('subtitleOptions').hidden = !subtitleOptionsOpen;
   $('showTiming').hidden = !external;
-  $('showTiming').textContent = timingOpen ? 'Закрыть настройку времени' : 'Настроить время';
+  $('showTiming').textContent = timingOpen ? 'Закрыть сдвиг' : 'Сдвиг';
   $('showTiming').setAttribute('aria-expanded', Boolean(external && timingOpen));
   $('youtubeActions').hidden = !youtubeId;
-  $('youtubeSubtitles').hidden = !youtubeId || Boolean(!subtitleOptionsOpen && selectedId
-    && !['loading', 'working', 'error', 'language'].includes(youtubePhase));
-  $('chooseYoutubeLanguage').hidden = youtubePhase !== 'language';
-  $('youtubeLanguage').disabled = !pageKey || generationRunning;
-  $('downloadYoutubeSubtitles').disabled = !pageKey || generationRunning || youtubePhase === 'loading' || !state.settings.youtubeLanguage;
-  $('generationLanguage').disabled = !pageKey || generationRunning;
+  $('youtubeSubtitles').hidden = !youtubeId || !$('youtubeSubtitleStatus').textContent;
+  $('otherSubtitleActions').hidden = Boolean(youtubeId);
+  $('subtitleOptions').hidden = Boolean(youtubeId) || !subtitleOptionsOpen;
+  $('captionTitle').hidden = Boolean(youtubeId);
+  $('captionSource').hidden = Boolean(youtubeId) || !$('captionSource').textContent;
+  $('captionState').hidden = Boolean(youtubeId);
+  $('hideSubtitles').hidden = !selectedId;
+  drawLanguageTracks();
 }
 
 function option(parent, value, label) {
@@ -385,30 +393,6 @@ function drawTrackSelect(select, selectedId) {
   select.value = selectedId;
 }
 
-function drawExternalList() {
-  const list = $('externalList');
-  list.replaceChildren();
-  const tracks = state.externalTracks.filter((track) => !isBuiltInCacheTrack(track));
-  $('externalFiles').hidden = !tracks.length;
-  for (const track of tracks) {
-    const row = document.createElement('div');
-    row.className = 'external-item';
-    const text = document.createElement('div');
-    text.className = 'external-name';
-    text.title = track.name;
-    text.textContent = track.name;
-    const meta = document.createElement('span');
-    meta.className = 'external-meta';
-    meta.textContent = `${track.cues.length} строк`;
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'delete';
-    remove.textContent = 'Удалить';
-    remove.addEventListener('click', () => deleteTrack(track.id).catch((error) => setStatus(error.message, true)));
-    row.append(text, meta, remove);
-    list.append(row);
-  }
-}
 
 function drawSync() {
   const box = $('syncBox');
@@ -426,8 +410,7 @@ function drawSettings() {
   for (const voice of speechVoices) option($('speechVoice'), voice.voiceName, voice.voiceName);
   $('speechVoice').value = speechVoices.some((voice) => voice.voiceName === speechVoiceName) ? speechVoiceName : '';
   $('speechRate').value = String(speechRate);
-  $('youtubeLanguage').value = settings.youtubeLanguage;
-  if (!generationLanguageEdited) $('generationLanguage').value = settings.youtubeLanguage || selectedExternalTrack()?.language || '';
+
   for (const id of ['fontSize', 'inlineTranslations', 'subtitleColor', 'subtitleBackground', 'originalTrack', 'subtitleFile']) $(id).disabled = !pageKey;
   drawTrackSelect($('originalTrack'), settings.secondTrackId);
   $('fontSize').value = settings.fontSize;
@@ -474,7 +457,7 @@ function render() {
   controls.hidden = false;
   drawPlayers();
   drawSettings();
-  drawExternalList();
+
   drawSync();
 }
 
@@ -492,7 +475,7 @@ async function selectPlayer(player) {
   playerDeliveryFailed = data.delivered === false;
   videoOptionsOpen = false;
   render();
-  if (playerDeliveryFailed) throw new Error('Видео не ответило. Нажмите «Включить субтитры» ещё раз. Выбор сохранён.');
+  if (playerDeliveryFailed) throw new Error('Видео не ответило. Нажмите «Найти видео» ещё раз.');
   if (!youtubeId && !state.settings.secondTrackId && revision === selectionRevision
     && !Object.hasOwn(editedSettings, 'secondTrackId') && player.tracks?.length === 1) {
     await persistSetting('secondTrackId', player.tracks[0].id);
@@ -557,7 +540,7 @@ async function importFile(file) {
   $('subtitleFile').value = '';
 }
 
-async function installLocalSubtitle(payload, selectTrack = false, selectionAtStart = generatedSelectionRevision) {
+async function installLocalSubtitle(payload, selectTrack = false, selectionAtStart = selectionRevision) {
   if (popupClosed) return false;
   const epoch = youtubeEpoch;
   if (payload?.status !== 'ready' || typeof payload.srt !== 'string') return false;
@@ -586,189 +569,62 @@ async function installLocalSubtitle(payload, selectTrack = false, selectionAtSta
   return true;
 }
 
-async function pollGeneratedSubtitle(epoch = youtubeEpoch) {
-  if (!youtubeId || popupClosed || epoch !== youtubeEpoch) return;
-  clearTimeout(youtubePollTimer);
-  try {
-    const result = await request(MESSAGE.LOCAL_SUBTITLE_STATUS, { videoId: youtubeId });
-    if (popupClosed || epoch !== youtubeEpoch) return;
-    if (result.status === 'ready') {
-      drawYoutubeProgress(result);
-      await installLocalSubtitle(result, selectGeneratedWhenReady);
-      if (popupClosed || epoch !== youtubeEpoch) return;
-      selectGeneratedWhenReady = false;
-      setYoutubeStatus('Созданные субтитры готовы.');
-      $('createYoutubeSubtitles').disabled = false;
-      $('createYoutubeSubtitles').textContent = 'Создать заново';
-      return;
-    }
-    if (result.status === 'error') return youtubeFailure(new Error(result.error || 'Не удалось создать субтитры'), true, epoch);
-    if (result.status === 'running') {
-      drawYoutubeProgress(result);
-      $('createYoutubeSubtitles').disabled = true;
-      youtubePollTimer = setTimeout(() => pollGeneratedSubtitle(epoch), 1500);
-      return;
-    }
-    $('createYoutubeSubtitles').disabled = false;
-    drawYoutubeProgress(result);
-    setYoutubeStatus('Задание не найдено на сервере. Можно запустить создание снова.');
-  } catch (error) {
-    youtubeFailure(error, false, epoch);
-  }
-}
-
-async function pollExistingSubtitle(epoch, generatedReady = false, selectionAtStart = null, generatedError = null) {
+async function pollExistingSubtitle(epoch, language, selectionAtStart) {
   if (popupClosed || epoch !== youtubeEpoch) return;
-  const result = await request(MESSAGE.LOCAL_SUBTITLE_EXISTING, { videoId: youtubeId, language: state.settings.youtubeLanguage });
+  const result = await request(MESSAGE.LOCAL_SUBTITLE_EXISTING, { videoId: youtubeId, language });
   if (popupClosed || epoch !== youtubeEpoch) return;
   if (result.status === 'running') {
-    setYoutubeStatus('Получаю готовые субтитры YouTube…', false, 'loading');
-    youtubePollTimer = setTimeout(() => pollExistingSubtitle(epoch, generatedReady, selectionAtStart, generatedError).catch((error) => youtubeFailure(error, true, epoch)), 1500);
+    setYoutubeStatus('Скачиваю субтитры…', false, 'loading');
+    youtubePollTimer = setTimeout(() => pollExistingSubtitle(epoch, language, selectionAtStart)
+      .catch((error) => youtubeFailure(error, epoch)), 1500);
     return;
   }
   if (result.status === 'error') throw new Error(result.error || 'Не удалось скачать дорожку YouTube');
-  if (result.language_required) {
-    if (generatedError) return youtubeFailure(generatedError, true, epoch);
-    subtitleOptionsOpen = true;
-    setYoutubeStatus('Выберите язык субтитров.', false, 'language');
-    return;
-  }
-  const existingReady = await installLocalSubtitle(result, selectionAtStart !== null, selectionAtStart);
+  const existingReady = await installLocalSubtitle(result, true, selectionAtStart);
   if (popupClosed || epoch !== youtubeEpoch) return;
-  if (generatedReady) {
-    setYoutubeStatus(existingReady
-      ? 'Созданные субтитры готовы. Готовая дорожка YouTube также сохранена.'
-      : 'Созданные субтитры готовы. Готовой дорожки YouTube нет.');
-  } else if (existingReady) {
-    setYoutubeStatus('Субтитры скачаны.');
-  } else if (generatedError) {
-    youtubeFailure(generatedError, true, epoch);
-  } else {
-    setYoutubeStatus('Субтитров на выбранном языке нет.', true, 'missing');
+  downloadingLanguage = '';
+  if (existingReady) setYoutubeStatus('');
+  else {
+    subtitleResults.set(language, 'Нет субтитров');
+    setYoutubeStatus('Субтитров на этом языке нет.', true);
   }
 }
 
-async function loadYoutubeSubtitles(download = false) {
+async function loadYoutubeSubtitles() {
   if (!youtubeId || popupClosed) return;
-  clearTimeout(youtubePollTimer);
-  const epoch = ++youtubeEpoch;
-  $('createYoutubeSubtitles').disabled = true;
-  $('retryYoutubeSubtitles').hidden = true;
-  setYoutubeStatus('Проверяю доступные субтитры YouTube…', false, 'loading');
-  let generationSettled = false;
-  try {
-    const generated = await request(MESSAGE.LOCAL_SUBTITLE_STATUS, { videoId: youtubeId });
-    if (popupClosed || epoch !== youtubeEpoch) return;
-    generationSettled = generated.status !== 'running';
-    const generatedError = generated.status === 'error'
-      ? new Error(generated.error || 'Создание субтитров прервано') : null;
-    let generatedReady = false;
-    let generatedRunning = false;
-    if (generated.status === 'ready') {
-      drawYoutubeProgress(generated);
-      await installLocalSubtitle(generated);
-      if (popupClosed || epoch !== youtubeEpoch) return;
-      $('createYoutubeSubtitles').textContent = 'Создать заново';
-      generatedReady = true;
-    }
-    if (generated.status === 'running') {
-      drawYoutubeProgress(generated);
-      $('createYoutubeSubtitles').disabled = true;
-      generatedRunning = true;
-      youtubePollTimer = setTimeout(() => pollGeneratedSubtitle(epoch), 1500);
-    }
-    if (!generatedRunning) {
-      $('createYoutubeSubtitles').disabled = false;
-      if (download) await pollExistingSubtitle(epoch, generatedReady, selectionRevision);
-      else if (generatedError) youtubeFailure(generatedError, true, epoch);
-      else if (!state.settings.youtubeLanguage) {
-        subtitleOptionsOpen = !state.settings.secondTrackId;
-        setYoutubeStatus('Выберите язык субтитров.', false, 'language');
-      } else setYoutubeStatus(generatedReady ? 'Субтитры готовы.' : 'Выберите язык и нажмите «Скачать».');
-    }
-  } catch (error) {
-    youtubeFailure(error, generationSettled, epoch);
-  }
+  setYoutubeStatus('');
 }
 
-async function createYoutubeSubtitles() {
-  if (!youtubeId || popupClosed || $('createYoutubeSubtitles').disabled) return;
-  const language = $('generationLanguage').value;
-  if (!['en', 'zh'].includes(language)) {
-    subtitleOptionsOpen = true;
-    $('generationOptions').open = true;
-    $('generationHint').textContent = 'Выберите язык речи перед созданием субтитров.';
-    $('generationLanguage').focus();
-    drawWorkspace();
-    return;
-  }
-  $('generationHint').textContent = '';
+async function showLanguageSubtitles(language) {
+  if (!youtubeId || popupClosed || downloadingLanguage || !pageHydrated) return;
   clearTimeout(youtubePollTimer);
   const epoch = ++youtubeEpoch;
-  const button = $('createYoutubeSubtitles');
-  button.disabled = true;
-  $('retryYoutubeSubtitles').hidden = true;
-  selectGeneratedWhenReady = true;
-  generatedSelectionRevision = selectionRevision;
-  drawYoutubeProgress({ status: 'running', stage: 'preparing', progress: 0 });
-  // Wait for the server to admit the job before offering to cancel it.
-  $('cancelYoutubeSubtitles').hidden = true;
+  const revision = ++selectionRevision;
+  downloadingLanguage = language;
+  setYoutubeStatus('');
   try {
-    const result = await request(MESSAGE.LOCAL_SUBTITLE_GENERATE, { videoId: youtubeId, language });
+    if (!connectedPlayer()) await activate();
     if (popupClosed || epoch !== youtubeEpoch) return;
-    if (result.status === 'ready') {
-      drawYoutubeProgress(result);
-      await installLocalSubtitle(result, true);
-      if (popupClosed || epoch !== youtubeEpoch) return;
-      selectGeneratedWhenReady = false;
-      setYoutubeStatus('Созданные субтитры сохранены. Выбранная дорожка указана выше.');
-      button.disabled = false;
-      button.textContent = 'Создать заново';
+    if (!connectedPlayer()) {
+      downloadingLanguage = '';
+      drawWorkspace();
       return;
     }
-    if (result.status === 'error') return youtubeFailure(new Error(result.error || 'Не удалось запустить создание'), true, epoch);
-    if (result.status !== 'running') throw new Error('Сервер не подтвердил запуск задания');
-    drawYoutubeProgress(result);
-    youtubePollTimer = setTimeout(() => pollGeneratedSubtitle(epoch), 1500);
-  } catch (error) {
-    youtubeFailure(error, false, epoch);
-  }
-}
-
-async function cancelYoutubeSubtitles() {
-  const button = $('cancelYoutubeSubtitles');
-  if (!youtubeId || popupClosed || button.hidden || button.disabled) return;
-  button.disabled = true;
-  clearTimeout(youtubePollTimer);
-  const epoch = ++youtubeEpoch;
-  setYoutubeStatus('Останавливаю создание субтитров…');
-  try {
-    const result = await request(MESSAGE.LOCAL_SUBTITLE_CANCEL, { videoId: youtubeId });
+    await persistSetting('youtubeLanguage', language);
     if (popupClosed || epoch !== youtubeEpoch) return;
-    if (result.status === 'ready') {
-      await loadYoutubeSubtitles();
+    const saved = savedLanguageTrack(language);
+    if (saved) {
+      downloadingLanguage = '';
+      await persistSetting('secondTrackId', `external:${saved.id}`);
+      render();
       return;
     }
-    drawYoutubeProgress(result);
-    $('createYoutubeSubtitles').disabled = false;
-    setYoutubeStatus(result.error_code === 'cancelled'
-      ? 'Создание остановлено. Сохранённые дорожки не удалены.'
-      : result.error || 'Задание уже остановлено. Сохранённые дорожки не удалены.');
+    await pollExistingSubtitle(epoch, language, revision);
   } catch (error) {
-    youtubeFailure(error, false, epoch);
-  } finally {
-    button.disabled = false;
+    youtubeFailure(error, epoch);
   }
 }
 
-async function deleteTrack(id) {
-  const data = await request(MESSAGE.TRACK_REMOVE, { tabId, pageKey, id });
-  if (state.settings.secondTrackId === `external:${id}`) updateLocalSetting('secondTrackId', '');
-  editedTiming.delete(id);
-  adoptState(data.state);
-
-  render();
-}
 
 async function setTiming(trackId, { offsetSeconds, timeScale }) {
   state = updateExternalTrackTiming(state, trackId, { offsetSeconds, timeScale });
@@ -964,7 +820,7 @@ async function hydratePage(aiPromise) {
       players = snapshot.players;
       render();
       if (!connectable) setStatus('На служебных страницах подключение недоступно. Внешний вид и перевод можно настроить без плеера.');
-      else setStatus(connectedPlayer() ? '' : 'Нажмите «Включить субтитры» на странице с видео.');
+      else setStatus('');
     },
     onError(name, error) {
       if (revision !== hydrationRevision) return;
@@ -1013,15 +869,7 @@ $('restartSearch').addEventListener('click', () => activate(true).catch((error) 
 $('changeVideo').addEventListener('click', () => { videoOptionsOpen = !videoOptionsOpen; drawWorkspace(); });
 $('changeSubtitles').addEventListener('click', () => { subtitleOptionsOpen = !subtitleOptionsOpen; drawWorkspace(); });
 $('showTiming').addEventListener('click', () => { timingOpen = !timingOpen; drawWorkspace(); drawSync(); });
-$('chooseYoutubeLanguage').addEventListener('click', () => {
-  subtitleOptionsOpen = true;
-  drawWorkspace();
-  $('youtubeLanguage').focus();
-});
-$('generationLanguage').addEventListener('change', () => {
-  generationLanguageEdited = true;
-  $('generationHint').textContent = '';
-});
+$('hideSubtitles').addEventListener('click', () => { void persistSetting('secondTrackId', ''); });
 $('aiProvider').addEventListener('change', () => {
   aiProvider = $('aiProvider').value === 'openai' ? 'openai' : 'deepseek';
   aiCatalogRevision += 1;
@@ -1039,23 +887,8 @@ $('speechVoice').addEventListener('change', () => { void saveSpeechSettings(); }
 $('speechRate').addEventListener('change', () => { void saveSpeechSettings(); });
 $('speechPreview').addEventListener('click', () => { void previewSpeech(); });
 $('subtitleFile').addEventListener('change', (event) => importFile(event.target.files?.[0]).catch((error) => setStatus(error.message, true)));
-$('createYoutubeSubtitles').addEventListener('click', () => createYoutubeSubtitles());
-$('cancelYoutubeSubtitles').addEventListener('click', () => cancelYoutubeSubtitles());
-$('retryYoutubeSubtitles').addEventListener('click', () => loadYoutubeSubtitles(true));
-$('downloadYoutubeSubtitles').addEventListener('click', () => loadYoutubeSubtitles(true));
-$('youtubeLanguage').addEventListener('change', () => {
-  youtubeEpoch += 1;
-  clearTimeout(youtubePollTimer);
-  const epoch = youtubeEpoch;
-  void persistSetting('youtubeLanguage', $('youtubeLanguage').value).then(() => {
-    if (!popupClosed && epoch === youtubeEpoch) {
-      if (!generationLanguageEdited) $('generationLanguage').value = state.settings.youtubeLanguage;
-      $('retryYoutubeSubtitles').hidden = true;
-      setYoutubeStatus(state.settings.youtubeLanguage ? 'Нажмите «Скачать».' : 'Выберите язык субтитров.', false,
-        state.settings.youtubeLanguage ? 'ready' : 'language');
-    }
-  }).catch((error) => setYoutubeStatus(error.message, true));
-});
+$('englishSubtitles').addEventListener('click', () => { void showLanguageSubtitles('en'); });
+$('chineseSubtitles').addEventListener('click', () => { void showLanguageSubtitles('zh'); });
 $('player').addEventListener('change', () => {
   if (!$('player').value || connectionBusy) return;
   discoveryRevision += 1;

@@ -203,7 +203,7 @@ class VideoDownloadAPI:
             return False
 
     def state_path(self, video, language, kind):
-        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video) or language not in ("en", "zh") or kind not in ("subtitles", "audio"):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video) or language not in ("en", "zh") or kind != "subtitles":
             raise ValueError("Invalid provider job identity")
         return self.root / video / f".video-api-{kind}-{language}.json"
 
@@ -266,13 +266,9 @@ class VideoDownloadAPI:
                 raise ProviderError("provider_uncertain") from None
             if state is None:
                 key = self._key()
-                params = {"url": f"https://www.youtube.com/watch?v={video}", "format": "srt" if kind == "subtitles" else "flac"}
-                if kind == "subtitles":
-                    endpoint = "/ajax/subtitles"
-                    params.update(api=key, lang="zh-Hans" if language == "zh" else "en")
-                else:
-                    endpoint = "/ajax/download.php"
-                    params.update(apikey=key, audio_language="zh-CN" if language == "zh" else "en")
+                params = {"url": f"https://www.youtube.com/watch?v={video}", "format": "srt",
+                          "api": key, "lang": "zh-Hans" if language == "zh" else "en"}
+                endpoint = "/ajax/subtitles"
                 # Persist BEFORE submit: lost responses must not cause a second charge.
                 self._save(path, {"state": "submitting"})
                 try:

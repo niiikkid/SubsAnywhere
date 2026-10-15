@@ -19,9 +19,7 @@ export const MESSAGE = Object.freeze({
   SPEECH_SETTINGS_PATCH: 'dualCaptions.speech.settings.patch',
   SPEECH_SPEAK: 'dualCaptions.speech.speak',
   LOCAL_SUBTITLE_EXISTING: 'dualCaptions.localSubtitle.existing',
-  LOCAL_SUBTITLE_GENERATE: 'dualCaptions.localSubtitle.generate',
-  LOCAL_SUBTITLE_CANCEL: 'dualCaptions.localSubtitle.cancel',
-  LOCAL_SUBTITLE_STATUS: 'dualCaptions.localSubtitle.status',
+
   CONTENT_FULL_STATE: 'dualCaptions.content.fullState',
   CONTENT_SETTINGS: 'dualCaptions.content.settings',
   CONTENT_TRACKS: 'dualCaptions.content.tracks',

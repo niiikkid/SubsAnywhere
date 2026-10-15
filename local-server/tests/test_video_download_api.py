@@ -47,23 +47,19 @@ def client(root, transport, **kwargs):
 class ProviderTests(unittest.TestCase):
     def test_submit_exact_contract_and_honor_progress_url(self):
         for language in ("en", "zh"):
-            for kind in ("subtitles", "audio"):
+            for kind in ("subtitles",):
                 with self.subTest(language=language, kind=kind), tempfile.TemporaryDirectory() as directory:
                     transport = Transport([{"success": True, "id": "paid-123", "progress_url": "https://worker.example/api/progress?id=paid-123"}, READY])
                     service = client(directory, transport)
                     target = pathlib.Path(directory) / "result"
                     service.acquire(VIDEO, language, kind, target)
                     query = parse_qs(urlsplit(transport.calls[0]).query)
-                    self.assertEqual(query["format"], ["srt" if kind == "subtitles" else "flac"])
+                    self.assertEqual(query["format"], ["srt"])
                     self.assertEqual(query["url"], ["https://www.youtube.com/watch?v=" + VIDEO])
                     if kind == "subtitles":
                         self.assertEqual(urlsplit(transport.calls[0]).path, "/ajax/subtitles")
                         self.assertEqual(query["api"], ["offline-secret-key"])
                         self.assertEqual(query["lang"], ["zh-Hans" if language == "zh" else "en"])
-                    else:
-                        self.assertEqual(urlsplit(transport.calls[0]).path, "/ajax/download.php")
-                        self.assertEqual(query["apikey"], ["offline-secret-key"])
-                        self.assertEqual(query["audio_language"], ["zh-CN" if language == "zh" else "en"])
                     self.assertEqual(transport.calls[1], "https://worker.example/api/progress?id=paid-123")
                     record = service.state_path(VIDEO, language, kind).read_text()
                     self.assertNotIn("offline-secret-key", record)
@@ -98,15 +94,15 @@ class ProviderTests(unittest.TestCase):
             service = client(directory, transport, poll_timeout=0)
             def check_persisted(url, **kwargs):
                 if "/api/progress" in url:
-                    self.assertEqual(json.loads(service.state_path(VIDEO, "en", "audio").read_text())["id"], "charged")
+                    self.assertEqual(json.loads(service.state_path(VIDEO, "en", "subtitles").read_text())["id"], "charged")
                 return original(url, **kwargs)
             original = transport.fetch
             transport.fetch = check_persisted
             with self.assertRaises(api.ProviderError) as caught:
-                service.acquire(VIDEO, "en", "audio", target)
+                service.acquire(VIDEO, "en", "subtitles", target)
             self.assertEqual(caught.exception.code, "provider_timeout")
             resumed = Transport([READY])
-            client(directory, resumed).acquire(VIDEO, "en", "audio", target)
+            client(directory, resumed).acquire(VIDEO, "en", "subtitles", target)
             self.assertEqual(resumed.calls[0], "https://worker.example/api/progress?id=charged")
             self.assertEqual(len(resumed.calls), 2)
 
@@ -115,9 +111,9 @@ class ProviderTests(unittest.TestCase):
             transport = Transport([api.ProviderError("provider_timeout")])
             target = pathlib.Path(directory) / "result"
             with self.assertRaises(api.ProviderError):
-                client(directory, transport).acquire(VIDEO, "en", "audio", target)
+                client(directory, transport).acquire(VIDEO, "en", "subtitles", target)
             with self.assertRaises(api.ProviderError) as caught:
-                client(directory, transport).acquire(VIDEO, "en", "audio", target)
+                client(directory, transport).acquire(VIDEO, "en", "subtitles", target)
             self.assertEqual(caught.exception.code, "provider_uncertain")
             self.assertEqual(len(transport.calls), 1)
 
@@ -127,10 +123,10 @@ class ProviderTests(unittest.TestCase):
             target.write_bytes(b"old")
             transport = Transport([{"id": "charged"}, READY], content=b"too big")
             with self.assertRaises(api.ProviderError):
-                client(directory, transport).acquire(VIDEO, "en", "audio", target, limit=3)
+                client(directory, transport).acquire(VIDEO, "en", "subtitles", target, limit=3)
             self.assertEqual(target.read_bytes(), b"old")
             transport = Transport([], content=b"new")
-            client(directory, transport).acquire(VIDEO, "en", "audio", target, limit=3)
+            client(directory, transport).acquire(VIDEO, "en", "subtitles", target, limit=3)
             self.assertEqual(transport.calls, [READY["download_url"]])
             self.assertEqual(target.read_bytes(), b"new")
             self.assertEqual(sorted(p.name for p in target.parent.iterdir()), sorted([VIDEO, "result"]))
@@ -141,7 +137,7 @@ class ProviderTests(unittest.TestCase):
             service = api.VideoDownloadAPI(directory, key="", transport=transport)
             self.assertFalse(service.configured)
             with self.assertRaises(api.ProviderError) as caught:
-                service.acquire(VIDEO, "en", "audio", pathlib.Path(directory) / "result")
+                service.acquire(VIDEO, "en", "subtitles", pathlib.Path(directory) / "result")
             self.assertEqual(caught.exception.code, "provider_unconfigured")
             for language in ("", "fr", "zh-CN", "../en"):
                 with self.assertRaises(ValueError):
@@ -170,10 +166,10 @@ class ProviderTests(unittest.TestCase):
                 if len(transport.calls) >= 2:
                     raise api.ProviderError("cancelled")
             with self.assertRaises(api.ProviderError) as caught:
-                service.acquire(VIDEO, "zh", "audio", pathlib.Path(directory) / "result", cancel=cancel)
+                service.acquire(VIDEO, "zh", "subtitles", pathlib.Path(directory) / "result", cancel=cancel)
             self.assertEqual(caught.exception.code, "cancelled")
             resumed = Transport([READY])
-            client(directory, resumed).acquire(VIDEO, "zh", "audio", pathlib.Path(directory) / "result")
+            client(directory, resumed).acquire(VIDEO, "zh", "subtitles", pathlib.Path(directory) / "result")
             self.assertNotIn("download.php", resumed.calls[0])
 
     def test_auth_balance_and_missing_errors_are_short_russian_and_redacted(self):
@@ -239,12 +235,12 @@ class URLSafetyTests(unittest.TestCase):
 
 
 class ServiceProviderTests(unittest.TestCase):
-    def test_empty_language_is_missing_without_paid_work_even_async_or_generate(self):
+    def test_empty_language_is_missing_without_paid_work_even_async(self):
         with tempfile.TemporaryDirectory() as directory:
             provider = FakeProvider()
             service = server.SubtitleService(pathlib.Path(directory), provider=provider,
                                              start_background=mock.Mock(side_effect=AssertionError("no work")))
-            for action in (service.existing, service.existing_job, service.generate):
+            for action in (service.existing, service.existing_job):
                 result = action(VIDEO)
                 self.assertEqual(result["status"], "missing")
                 self.assertTrue(result["language_required"])
@@ -277,29 +273,6 @@ class ServiceProviderTests(unittest.TestCase):
             self.assertEqual(legacy.read_text(), "old unknown captions")
             self.assertEqual(len(provider.calls), 2)
 
-    def test_audio_language_isolated_and_only_local_asr_uses_subprocess(self):
-        import subprocess
-        with tempfile.TemporaryDirectory() as directory:
-            root = pathlib.Path(directory)
-            paths = server.output_paths(root, VIDEO)
-            paths.directory.mkdir()
-            paths.audio.write_bytes(b"legacy mp3")
-            paths.lossless_audio.write_bytes(b"legacy flac")
-            provider, commands = FakeProvider(), []
-            def run(command, **kwargs):
-                commands.append(command)
-                for flag in ("--srt", "--text", "--markdown"):
-                    pathlib.Path(command[command.index(flag) + 1]).write_text(SRT)
-                return subprocess.CompletedProcess(command, 0)
-            service = server.SubtitleService(root, provider=provider, run_command=run,
-                                             start_background=lambda f: f(), pinyinize=lambda s: s)
-            for language in ("zh", "en", "zh"):
-                self.assertEqual(service.generate(VIDEO, language)["status"], "ready")
-            self.assertEqual([(c[1], c[2]) for c in provider.calls], [("zh", "audio"), ("en", "audio")])
-            self.assertEqual(len(commands), 3)
-            self.assertTrue(all("--srt" in c and "--language" in c for c in commands))
-            self.assertEqual(paths.audio.read_bytes(), b"legacy mp3")
-            self.assertEqual(paths.lossless_audio.read_bytes(), b"legacy flac")
 
     def test_invalid_provider_subtitles_do_not_replace_saved_data(self):
         with tempfile.TemporaryDirectory() as directory:
