@@ -386,6 +386,49 @@ test('DeepSeek generates tone-marked pinyin with a Chinese sentence translation 
   assert.match(request.messages[0].content, /full tone-marked Hanyu Pinyin/i);
 });
 
+test('Chinese translation accepts emoji and keeps exact glossary offsets in one request', async () => {
+  for (const emoji of ['😊', '❤️', '👍🏽', '👩‍🍳', '👨‍👩‍👧‍👦', '🇨🇳', '1️⃣']) {
+    const caption = `开动吧${emoji}盛一碗米饭`;
+    const pinyin = `kāi dòng ba${emoji}shèng yī wǎn mǐ fàn`;
+    let requests = 0;
+    const client = new DeepSeekClient(async (_url, options) => {
+      requests += 1;
+      const request = JSON.parse(options.body);
+      assert.equal(JSON.parse(request.messages[1].content).caption, caption);
+      return Response.json({ choices: [{ message: { content: JSON.stringify({
+        pinyin, translation: 'Начнём есть! Положи миску риса.',
+        glossary: [{ text: '米饭', pinyin: 'mǐ fàn', translation: 'рис' }],
+      }) } }] });
+    }, { get: async () => ({ provider: 'deepseek', apiKey: 'offline-fixture', model: 'deepseek-chat' }) });
+    const result = await client.translateChineseCaption(caption);
+    assert.equal(result.pinyin, pinyin);
+    assert.equal(result.context, 'Начнём есть! Положи миску риса.');
+    assert.deepEqual(result.glossary, [{ text: '米饭', pinyin: 'mǐ fàn', translation: 'рис',
+      pinyinStart: pinyin.indexOf('mǐ fàn'), pinyinEnd: pinyin.length }]);
+    assert.equal(requests, 1);
+  }
+});
+
+test('emoji do not disable Chinese homophone alignment or validated subtitle fallback', async () => {
+  for (const returned of ['tā😊tā', 'broken', 'tā😊']) {
+    const client = new DeepSeekClient(async () => Response.json({ choices: [{ message: { content: JSON.stringify({
+      pinyin: returned, translation: 'Она, он.', glossary: [
+        { text: '她', pinyin: 'tā', translation: 'она' },
+        { text: '他', pinyin: 'tā', translation: 'он' },
+      ],
+    }) } }] }), { get: async () => ({ provider: 'deepseek', apiKey: 'offline-fixture', model: 'deepseek-chat' }) });
+    const result = await client.translateChineseCaption('她😊他', 'tā😊tā');
+    assert.equal(result.context, 'Она, он.');
+    assert.deepEqual(result.glossary.map(({ text, pinyinStart, pinyinEnd }) => ({ text, pinyinStart, pinyinEnd })), [
+      { text: '她', pinyinStart: 0, pinyinEnd: 2 },
+      { text: '他', pinyinStart: 4, pinyinEnd: 6 },
+    ]);
+    if (returned !== 'tā😊tā') {
+      await assert.rejects(client.translateChineseCaption('她😊他', ''), /пиньинь/);
+    }
+  }
+});
+
 test('DeepSeek rejects generated pinyin that omits Chinese caption syllables', async () => {
   const client = new DeepSeekClient(async () => Response.json({ choices: [{ message: { content: JSON.stringify({
     pinyin: 'nǐ hǎo',
