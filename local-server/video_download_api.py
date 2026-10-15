@@ -252,7 +252,20 @@ class VideoDownloadAPI:
         return url
 
     def acquire(self, video, language, kind, target, *, cancel=lambda: None, limit=5 * 1024 * 1024):
+        codes = ("zh-Hans", "zh-CN", "zh", "zh-Hant", "zh-TW", "zh-HK") if language == "zh" else ("en",)
+        for code in codes:
+            try:
+                return self._acquire_variant(video, language, kind, target, code,
+                                             cancel=cancel, limit=limit)
+            except ProviderError as error:
+                if error.code != "provider_captions_missing":
+                    raise
+        raise ProviderError("provider_captions_missing")
+
+    def _acquire_variant(self, video, language, kind, target, code, *, cancel, limit):
         path = self.state_path(video, language, kind)
+        if language == "zh" and code != "zh-Hans":
+            path = path.with_name(path.stem + "-" + code + path.suffix)
         with self.locks[hash(str(path)) % len(self.locks)]:
             cancel()
             try:
@@ -267,7 +280,7 @@ class VideoDownloadAPI:
             if state is None:
                 key = self._key()
                 params = {"url": f"https://www.youtube.com/watch?v={video}", "format": "srt",
-                          "api": key, "lang": "zh-Hans" if language == "zh" else "en"}
+                          "api": key, "lang": code}
                 endpoint = "/ajax/subtitles"
                 # Persist BEFORE submit: lost responses must not cause a second charge.
                 self._save(path, {"state": "submitting"})
