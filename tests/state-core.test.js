@@ -98,17 +98,18 @@ test('normalizeState defaults to 24px text with an opaque background and preserv
 
 test('normalizeState preserves all subtitle appearance preferences and horizontal position', () => {
   const sized = patchSettings(normalizeState({ settings: { fontSize: 31 } }), {
-    pinyinFontSize: 34, translationFontSize: 20, inlineTranslationFontSize: 16,
+    showOriginalWithInline: true, translationFontSize: 20, inlineTranslationFontSize: 16,
   });
   assert.equal(sized.settings.fontSize, 31);
-  assert.equal(sized.settings.pinyinFontSize, 34);
+  assert.equal(sized.settings.showOriginalWithInline, true);
   assert.equal(sized.settings.translationFontSize, 20);
   assert.equal(sized.settings.inlineTranslationFontSize, 16);
-  const bounded = normalizeState({ settings: { pinyinFontSize: 100, translationFontSize: 1, inlineTranslationFontSize: 100 } });
-  assert.equal(bounded.settings.pinyinFontSize, 48);
+  const bounded = normalizeState({ settings: { fontSize: 100, translationFontSize: 1, inlineTranslationFontSize: 100 } });
+  assert.equal(bounded.settings.fontSize, 48);
   assert.equal(bounded.settings.translationFontSize, 8);
   assert.equal(bounded.settings.inlineTranslationFontSize, 48);
-  assert.equal(normalizeState({ settings: { fontSize: 31 } }).settings.pinyinFontSize, 31);
+  assert.equal(normalizeState().settings.showOriginalWithInline, false);
+  assert.equal(Object.hasOwn(normalizeState({ settings: { pinyinFontSize: 31 } }).settings, 'pinyinFontSize'), false);
   const settings = normalizeState({
     settings: {
       secondLeft: 73,

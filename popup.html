@@ -116,18 +116,24 @@
           Переводы над фразами
         </label>
 
-        <label>Размер английского текста <output id="fontSizeValue"></output>
-          <input id="fontSize" type="range" min="12" max="48" value="24">
+        <label class="toggle-control">
+          <input id="showOriginalWithInline" type="checkbox">
+          Отдельная строка оригинала под ячейками
         </label>
-        <label>Размер пиньиня <output id="pinyinFontSizeValue"></output>
-          <input id="pinyinFontSize" type="range" min="12" max="48" value="24">
-        </label>
-        <label>Размер полного перевода <output id="translationFontSizeValue"></output>
-          <input id="translationFontSize" type="range" min="8" max="48" value="14">
-        </label>
-        <label>Размер переводов над фразами <output id="inlineTranslationFontSizeValue"></output>
-          <input id="inlineTranslationFontSize" type="range" min="8" max="48" value="10">
-        </label>
+        <div class="appearance-sliders">
+          <label>Оригинал <output id="fontSizeValue"></output>
+            <input id="fontSize" type="range" min="12" max="48" value="24">
+          </label>
+          <label>Полный перевод <output id="translationFontSizeValue"></output>
+            <input id="translationFontSize" type="range" min="8" max="48" value="14">
+          </label>
+          <label>Переводы в ячейках <output id="inlineTranslationFontSizeValue"></output>
+            <input id="inlineTranslationFontSize" type="range" min="8" max="48" value="10">
+          </label>
+          <label>Непрозрачность фона <output id="subtitleBackgroundOpacityValue"></output>
+            <input id="subtitleBackgroundOpacity" type="range" min="10" max="100" value="100">
+          </label>
+        </div>
         <div class="two-columns">
           <label>Цвет текста
             <input id="subtitleColor" type="color" value="#ffffff">
@@ -136,9 +142,7 @@
             <input id="subtitleBackgroundColor" type="color" value="#000000">
           </label>
         </div>
-        <label>Непрозрачность фона <output id="subtitleBackgroundOpacityValue"></output>
-          <input id="subtitleBackgroundOpacity" type="range" min="10" max="100" value="100">
-        </label>
+
         <label class="toggle-control">
           <input id="subtitleBackground" type="checkbox" checked>
           Показывать фон

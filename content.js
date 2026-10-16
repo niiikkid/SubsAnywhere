@@ -44,6 +44,7 @@
       renderedCaptionItems: null,
       inlineCells: null,
       sentenceTranslationLine: null,
+      originalLine: null,
 
       captionLayoutKey: '',
     };
@@ -762,13 +763,14 @@
         ? { ...sourceDescriptor, displayText: translatedPinyin }
         : sourceDescriptor;
       const failure = translationFailures.get(sourceDescriptor.key) || '';
-      state.second.style.fontSize = `${descriptor.language === 'zh' ? state.settings.pinyinFontSize : state.settings.fontSize}px`;
-      const key = `${state.settings.secondTrackId}\u0000${sourceDescriptor.key}\u0000${descriptor.displayText}\u0000${state.settings.inlineTranslations}\u0000${state.settings.pinyinFontSize}\u0000${state.settings.translationFontSize}\u0000${state.settings.inlineTranslationFontSize}\u0000${state.settings.fontSize}\u0000${failure}`;
+      state.second.style.fontSize = `${state.settings.fontSize}px`;
+      const key = `${state.settings.secondTrackId}\u0000${sourceDescriptor.key}\u0000${descriptor.displayText}\u0000${state.settings.inlineTranslations}\u0000${state.settings.showOriginalWithInline}\u0000${state.settings.translationFontSize}\u0000${state.settings.inlineTranslationFontSize}\u0000${state.settings.fontSize}\u0000${failure}`;
       if (state.renderedCaptionKey === key && state.renderedCaptionItems === items) return;
       state.renderedCaptionKey = key;
       state.renderedCaptionItems = items;
       state.inlineCells = null;
       state.sentenceTranslationLine = null;
+      state.originalLine = null;
       state.captionLayoutKey = '';
       dismissCopyMenu();
       state.copyTexts = {
@@ -794,6 +796,14 @@
       }
       if (state.settings.inlineTranslations && items?.length) {
         if (renderInlineCaption(target, descriptor.displayText, items, descriptor)) {
+          if (state.settings.showOriginalWithInline) {
+            const original = document.createElement('div');
+            original.className = 'dual-captions-sentence-original';
+            original.textContent = descriptor.displayText;
+            original.style.cssText = 'margin-top:.18em;white-space:pre-line;overflow-wrap:anywhere;';
+            target.append(original);
+            state.originalLine = original;
+          }
           return;
         }
       }
@@ -802,7 +812,7 @@
         if (!items && !failure) requestTranslation(descriptor, true);
         return;
       }
-      if (!descriptor.characters) appendSentenceTranslation(target, items);
+      appendSentenceTranslation(target, items);
       for (const segment of runtime.captionSegments(descriptor.displayText, items)) {
         if (!segment.item) {
           target.append(document.createTextNode(segment.text));
@@ -905,9 +915,9 @@
       const boxes = Array.from(state.inlineCells.children, (cell) => cell.getBoundingClientRect()).filter((box) => box.width && box.height);
       if (!boxes.length) return;
       let contentWidth = Math.max(...boxes.map((box) => box.right)) - Math.min(...boxes.map((box) => box.left));
-      if (state.sentenceTranslationLine) {
+      for (const line of [state.sentenceTranslationLine, state.originalLine].filter(Boolean)) {
         const range = document.createRange();
-        range.selectNodeContents(state.sentenceTranslationLine);
+        range.selectNodeContents(line);
         contentWidth = Math.max(contentWidth, range.getBoundingClientRect().width);
       }
 

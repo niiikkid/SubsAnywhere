@@ -188,7 +188,7 @@ function drawPreview() {
   const settings = state.settings;
   const preview = $('subtitlePreview');
   const chinese = settings.youtubeLanguage === 'zh' || /^zh/i.test(selectedExternalTrack()?.language || '');
-  preview.style.fontSize = `${chinese ? settings.pinyinFontSize : settings.fontSize}px`;
+  preview.style.fontSize = `${settings.fontSize}px`;
   preview.style.color = settings.subtitleColor;
   preview.replaceChildren();
   const sentence = document.createElement('span');
@@ -209,7 +209,14 @@ function drawPreview() {
       cell.append(meaning, original);
       preview.append(cell);
     }
-  } else preview.append(document.createTextNode(chinese ? 'nǐ hǎo, shì jiè!' : 'One line at a time.'));
+  }
+  if (!settings.inlineTranslations || settings.showOriginalWithInline) {
+    const original = document.createElement('span');
+    original.className = 'dual-captions-sentence-original';
+    original.style.cssText = 'display:block;margin-top:.18em;';
+    original.textContent = chinese ? 'nǐ hǎo, shì jiè!' : 'One line at a time.';
+    preview.append(original);
+  }
   const rgb = [1, 3, 5].map((index) => parseInt(settings.subtitleBackgroundColor.slice(index, index + 2), 16));
   preview.style.backgroundColor = settings.subtitleBackground
     ? `rgba(${rgb.join(', ')}, ${settings.subtitleBackgroundOpacity / 100})` : 'transparent';
@@ -407,13 +414,15 @@ function drawSync() {
 
 function drawSettings() {
   const settings = state.settings;
-  for (const id of ['fontSize', 'pinyinFontSize', 'translationFontSize', 'inlineTranslationFontSize', 'inlineTranslations', 'subtitleColor', 'subtitleBackground', 'originalTrack', 'subtitleFile']) $(id).disabled = !pageKey;
+  for (const id of ['fontSize', 'translationFontSize', 'inlineTranslationFontSize', 'inlineTranslations', 'showOriginalWithInline', 'subtitleColor', 'subtitleBackground', 'originalTrack', 'subtitleFile']) $(id).disabled = !pageKey;
   drawTrackSelect($('originalTrack'), settings.secondTrackId);
-  for (const key of ['fontSize', 'pinyinFontSize', 'translationFontSize', 'inlineTranslationFontSize']) {
+  for (const key of ['fontSize', 'translationFontSize', 'inlineTranslationFontSize']) {
     $(key).value = settings[key];
     $(`${key}Value`).value = `${settings[key]}px`;
   }
   $('inlineTranslations').checked = settings.inlineTranslations;
+  $('showOriginalWithInline').checked = settings.showOriginalWithInline;
+  $('showOriginalWithInline').disabled = !pageKey || !settings.inlineTranslations;
   $('subtitleColor').value = settings.subtitleColor;
   $('subtitleBackground').checked = settings.subtitleBackground;
   $('subtitleBackgroundColor').value = settings.subtitleBackgroundColor;
@@ -490,7 +499,7 @@ function updateLocalSetting(key, value) {
   state = patchSettings(state, { [key]: value });
   editedSettings[key] = state.settings[key];
   drawPreview();
-  if (['fontSize', 'pinyinFontSize', 'translationFontSize', 'inlineTranslationFontSize'].includes(key)) $(`${key}Value`).value = `${state.settings[key]}px`;
+  if (['fontSize', 'translationFontSize', 'inlineTranslationFontSize'].includes(key)) $(`${key}Value`).value = `${state.settings[key]}px`;
   if (key === 'subtitleBackgroundOpacity') $('subtitleBackgroundOpacityValue').value = `${state.settings.subtitleBackgroundOpacity}%`;
   return state.settings[key];
 }
@@ -853,10 +862,14 @@ $('player').addEventListener('change', () => {
   });
 });
 $('originalTrack').addEventListener('change', () => persistSetting('secondTrackId', $('originalTrack').value));
-for (const key of ['fontSize', 'pinyinFontSize', 'translationFontSize', 'inlineTranslationFontSize']) {
+for (const key of ['fontSize', 'translationFontSize', 'inlineTranslationFontSize']) {
   $(key).addEventListener('input', () => previewSetting(key, Number($(key).value)));
 }
-$('inlineTranslations').addEventListener('change', () => persistSetting('inlineTranslations', $('inlineTranslations').checked));
+$('inlineTranslations').addEventListener('change', () => {
+  persistSetting('inlineTranslations', $('inlineTranslations').checked);
+  drawSettings();
+});
+$('showOriginalWithInline').addEventListener('change', () => persistSetting('showOriginalWithInline', $('showOriginalWithInline').checked));
 $('subtitleColor').addEventListener('input', () => previewSetting('subtitleColor', $('subtitleColor').value));
 
 $('subtitleBackground').addEventListener('change', () => {

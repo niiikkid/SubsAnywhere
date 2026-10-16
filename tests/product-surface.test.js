@@ -67,10 +67,12 @@ test('manifest grants network access only to both AI providers and the fixed loc
 
 test('appearance exposes independent font sizes without pronunciation controls', async () => {
   const popup = await fs.readFile(new URL('../popup.html', import.meta.url), 'utf8');
-  for (const key of ['fontSize', 'pinyinFontSize', 'translationFontSize', 'inlineTranslationFontSize']) {
+  for (const key of ['fontSize', 'translationFontSize', 'inlineTranslationFontSize', 'showOriginalWithInline']) {
     assert.match(popup, new RegExp(`id="${key}"`));
   }
   assert.doesNotMatch(popup, /speechVoice|speechRate|speechPreview|voiceSettings/);
+  assert.doesNotMatch(popup, /pinyinFontSize|Размер английского/);
+  assert.match(popup, /class="appearance-sliders"/);
   assert.doesNotMatch(popup, /id="openWords"|id="openReview"/);
 });
 

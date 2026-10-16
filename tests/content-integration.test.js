@@ -283,7 +283,7 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
     vm.runInContext(harness.contentSource, harness.context);
     const listener = [...harness.onMessage.listeners][0];
     const settings = { secondTrackId: 'external:mine', inlineTranslations: true,
-      fontSize: 28, pinyinFontSize: 32, translationFontSize: 20, inlineTranslationFontSize: 16 };
+      fontSize: 28, translationFontSize: 20, inlineTranslationFontSize: 16 };
     listener({ type: 'dualCaptions.content.fullState', settings,
       externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: chinese ? `\u2063${source}\n\u2064你好，世界` : source }] }],
     }, {}, () => {});
@@ -297,7 +297,7 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
     assert.equal(sentenceTranslation.textContent, 'Привет, мир');
     assert.match(sentenceTranslation.style.cssText, /text-align:center/);
     assert.equal(sentenceTranslation.style.fontSize, '20px');
-    assert.equal(caption.style.fontSize, chinese ? '32px' : '28px');
+    assert.equal(caption.style.fontSize, '28px');
     assert.equal(cells.className, 'dual-captions-inline');
     assert.equal(cells.children[0].children[0].textContent, item.glossary[0].translation);
     assert.match(cells.children[0].children[0].style.cssText, /font-size:16px/);
@@ -316,8 +316,16 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
     if (chinese) assert.equal(caption.children.length, 1);
     cells.children[0].dispatch('click', { stopPropagation() {} });
     assert.equal(overlay.children.length, 4);
+    listener({ type: 'dualCaptions.content.settings', settings: { ...settings, showOriginalWithInline: true } }, {}, () => {});
+    const withOriginalTarget = chinese ? caption.children[0] : caption;
+    assert.equal(withOriginalTarget.children.at(-1).className, 'dual-captions-sentence-original');
+    assert.equal(withOriginalTarget.children.at(-1).textContent, source);
     listener({ type: 'dualCaptions.content.settings', settings: { ...settings, inlineTranslations: false } }, {}, () => {});
     assert.notEqual(caption.children[0].className, 'dual-captions-inline');
+    const plainTarget = chinese ? caption.children[0] : caption;
+    assert.equal(plainTarget.children[0].className, 'dual-captions-sentence-translation');
+    assert.equal(plainTarget.children[0].textContent, 'Привет, мир');
+    assert.equal(plainTarget.children.at(-1).textContent, source);
     assert.equal(requests, 1);
   }
 });
@@ -384,7 +392,7 @@ test('a Han-only Chinese caption receives pinyin and a translation without savin
   assert.deepEqual(messages.filter((message) => message.type === 'dualCaptions.caption.translate')
     .map(({ text, displayText, language }) => ({ text, displayText, language })),
   [{ text: sentence.text, displayText: '', language: 'zh' }]);
-  assert.equal(overlay.children[0].children[0].children.map((child) => child.textContent).join(''), sentence.pinyin);
+  assert.equal(overlay.children[0].children[0].children.at(-1).textContent, sentence.pinyin);
   assert.equal(findClass(overlay, 'dual-captions-sentence-characters'), undefined);
   assert.equal(findClass(overlay, 'dual-captions-save-sentence'), undefined);
   assert.equal(messages.some((message) => /dualCaptions\.(words|sentences)\./.test(message.type)), false);
@@ -411,7 +419,7 @@ test('a Chinese translation replaces broken displayed pinyin without saving', as
   for (let index = 0; index < 15; index += 1) await Promise.resolve();
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
   assert.deepEqual(translations, [{ text: sentence.text, displayText: sourcePinyin, language: 'zh' }]);
-  assert.equal(overlay.children[0].children[0].children.map((child) => child.textContent).join(''), sentence.pinyin);
+  assert.equal(overlay.children[0].children[0].children.at(-1).textContent, sentence.pinyin);
 });
 
 test('Chinese glossary without mapped Han still shows cell translation without save controls', async () => {

@@ -31,7 +31,7 @@ function makeDocument() {
   const ids = [
     'controls', 'status', 'player', 'originalTrack',
     'fontSize', 'subtitleColor', 'subtitleBackground', 'subtitleBackgroundColor', 'subtitleBackgroundOpacity', 'subtitleBackgroundOpacityValue', 'fontSizeValue',
-    'pinyinFontSize', 'translationFontSize', 'inlineTranslationFontSize', 'pinyinFontSizeValue', 'translationFontSizeValue', 'inlineTranslationFontSizeValue',
+    'showOriginalWithInline', 'translationFontSize', 'inlineTranslationFontSize', 'translationFontSizeValue', 'inlineTranslationFontSizeValue',
     'syncBox', 'syncTrackName', 'offsetSeconds', 'timeScalePercent', 'activate', 'restartSearch', 'subtitleFile',
     'videoConnection', 'videoTitle', 'changeVideo', 'videoOptions', 'playerChoice',
     'captionTitle', 'captionSource', 'captionState', 'changeSubtitles', 'subtitleOptions', 'showTiming', 'externalFiles',
@@ -216,14 +216,22 @@ test('inline translations toggle hydrates, previews and saves immediately', asyn
   assert.deepEqual(messages.filter((message) => message.type === 'dualCaptions.state.patch').at(-1).patch, { inlineTranslations: false });
   assert.equal(elements.subtitlePreview.children.at(-1).textContent, 'One line at a time.');
   messages.length = 0;
-  for (const [key, value] of [['pinyinFontSize', 32], ['translationFontSize', 21], ['inlineTranslationFontSize', 15]]) {
+  for (const [key, value] of [['fontSize', 32], ['translationFontSize', 21], ['inlineTranslationFontSize', 15]]) {
     elements[key].value = value;
     elements[key].listeners.get('input')();
     assert.equal(elements[`${key}Value`].value, `${value}px`);
   }
   assert.deepEqual(messages.filter((message) => message.type === 'dualCaptions.state.patch').map((message) => message.patch), [
-    { pinyinFontSize: 32 }, { translationFontSize: 21 }, { inlineTranslationFontSize: 15 },
+    { fontSize: 32 }, { translationFontSize: 21 }, { inlineTranslationFontSize: 15 },
   ]);
+  elements.inlineTranslations.checked = true;
+  elements.inlineTranslations.listeners.get('change')();
+  assert.equal(elements.showOriginalWithInline.disabled, false);
+  assert.equal(elements.subtitlePreview.children.some((child) => child.className === 'dual-captions-sentence-original'), false);
+  elements.showOriginalWithInline.checked = true;
+  elements.showOriginalWithInline.listeners.get('change')();
+  assert.equal(elements.subtitlePreview.children.at(-1).textContent, 'One line at a time.');
+  assert.deepEqual(messages.filter((message) => message.type === 'dualCaptions.state.patch').at(-1).patch, { showOriginalWithInline: true });
 });
 
 test('English button downloads and selects its language instead of the previous track', async () => {
