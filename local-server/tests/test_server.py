@@ -1,6 +1,6 @@
 import json
 import pathlib
-import subprocess
+
 import sys
 import tempfile
 import threading
@@ -10,9 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import server
-from provider_fixtures import FakeProvider
-import pinyin
-from caption_fixtures import metadata_response
+
 
 
 class PathSafetyTests(unittest.TestCase):
@@ -26,7 +24,7 @@ class PathSafetyTests(unittest.TestCase):
             paths = server.output_paths(pathlib.Path(temporary), "rwnyaH6cTDE")
             self.assertEqual(paths.directory.name, "rwnyaH6cTDE")
             self.assertEqual(paths.youtube_srt.name, "youtube-rwnyaH6cTDE-youtube.srt")
-            for path in paths:
+            for path in (paths.directory, paths.youtube_srt):
                 path.name.encode("ascii")
 
 
@@ -46,6 +44,8 @@ class HttpServerTests(unittest.TestCase):
             def existing_job(self, video_id, language=""):
                 calls.append(("existing", video_id))
                 return {"status": "missing", "source": "youtube"}
+
+            existing = existing_job
 
         httpd = server.create_server(FakeService(), host="127.0.0.1", port=0)
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)

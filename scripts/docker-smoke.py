@@ -50,27 +50,35 @@ def main():
         assert code == 200 and health["ok"] and health["service"] == "subsanywhere", health
         assert compose("exec", "-T", "subtitles", "id", "-u") == "10001"
         origin = "chrome-extension://" + "a" * 32
-        assert request("/api/subtitles/generated?video_id=invalid", origin)[0] == 400
-        assert request("/api/subtitles/generated?video_id=rwnyaH6cTDE", "https://untrusted.example")[0] == 403
-        assert request("/api/subtitles/generated?video_id=rwnyaH6cTDE", origin)[1]["status"] == "missing"
-        # Explicit synthetic SRT fixture: this tests storage and pinyin, NOT ASR.
-        compose("exec", "-T", "subtitles", "python", "-", input='''from pathlib import Path
+        assert request("/api/subtitles/existing?video_id=invalid&language=zh", origin)[0] == 400
+        assert request("/api/subtitles/existing?video_id=rwnyaH6cTDE&language=zh", "https://untrusted.example")[0] == 403
+        assert request("/api/subtitles/existing?video_id=rwnyaH6cTDE", origin)[1]["status"] == "missing"
+        # Synthetic caption fixture; no paid download is submitted.
+        compose("exec", "-T", "subtitles", "python", "-", input='''import hashlib
+import json
+from pathlib import Path
 from pinyin import convert_many_to_pinyin
 assert convert_many_to_pinyin(["你好"])[0] == "nǐ hǎo"
-path = Path("/data/subtitles/rwnyaH6cTDE/youtube-rwnyaH6cTDE-generated.srt")
+path = Path("/data/subtitles/rwnyaH6cTDE/youtube-rwnyaH6cTDE-youtube.srt")
 path.parent.mkdir(parents=True, exist_ok=True)
 path.write_text("1\\n00:00:01,000 --> 00:00:02,000\\n你好\\n", encoding="utf-8")
+from pinyin import bilingual_srt
+path.write_text(bilingual_srt(path.read_text(encoding="utf-8")), encoding="utf-8")
+path.with_suffix(".language.json").write_text(json.dumps({
+    "version": 1, "language": "zh", "requested_language": "zh",
+    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+}), encoding="utf-8")
 ''')
-        code, ready = request("/api/subtitles/generated?video_id=rwnyaH6cTDE", origin)
+        code, ready = request("/api/subtitles/existing?video_id=rwnyaH6cTDE&language=zh", origin)
         assert code == 200 and ready["status"] == "ready", ready
         assert "nǐ hǎo" in ready["srt"] and "你好" in ready["srt"], ready
         assert request("/api/words", origin)[0] == 404
         assert request("/api/sentences", origin)[0] == 404
         compose("restart", "subtitles")
         compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "90", "subtitles")
-        assert request("/api/subtitles/generated?video_id=rwnyaH6cTDE", origin)[1]["srt"] == ready["srt"]
+        assert request("/api/subtitles/existing?video_id=rwnyaH6cTDE&language=zh", origin)[1]["srt"] == ready["srt"]
         assert request("/words", origin)[0] == 404
-        print("PASS: Docker health, non-root user, API validation, hostile-origin rejection, removed vocabulary routes, real pinyin conversion and SRT persistence across restart. No YouTube, AI or model downloads.")
+        print("PASS: Docker health, non-root user, API validation, hostile-origin rejection, removed vocabulary routes, real pinyin conversion and SRT persistence across restart. No YouTube or AI requests.")
         print(json.dumps(health, ensure_ascii=False))
     finally:
         # This project name is newly generated above. Never touch user volumes.

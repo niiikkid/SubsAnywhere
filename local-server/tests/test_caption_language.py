@@ -1,23 +1,19 @@
-import json
+
 import pathlib
-import subprocess
+
 import sys
-import tempfile
+
 import unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import server
-from provider_fixtures import FakeProvider
 
-ENGLISH_VIDEO = "1evO3Nekrr8"
+
 CHINESE_VIDEO = "0Zaxca2sUGs"
-SRT = "1\n00:00:00,000 --> 00:00:01,000\nHello, 你好\n"
 
 
-def track(language, translated=False):
-    return [{"ext": "vtt", "url": "https://www.youtube.com/api/timedtext?lang=" + language +
-             ("&tlang=zh" if translated else "")}]
+
 
 
 

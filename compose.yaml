@@ -13,27 +13,19 @@ services:
       # Server-only credential; never bake it into the image or extension.
       SUBSANYWHERE_VIDEO_API_KEY: "${SUBSANYWHERE_VIDEO_API_KEY:-}"
       SUBSANYWHERE_VIDEO_API_URL: "${SUBSANYWHERE_VIDEO_API_URL:-https://p.savenow.to}"
-      SUBSANYWHERE_MAX_JOBS: "1"
-      SUBSANYWHERE_ASR_MODEL: "${SUBSANYWHERE_ASR_MODEL:-auto}"
-      # CPU/RAM are already budgeted below; do not divide cgroup limits again.
-      SUBSANYWHERE_RESOURCE_FRACTION: "1"
-      OMP_NUM_THREADS: "4"
-      MKL_NUM_THREADS: "4"
     volumes:
       # Retain the existing volume, including any legacy words.sqlite3.
       # The subtitle service no longer opens the vocabulary database.
       - subtitles:/data
-      - models:/models:ro
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=1g,mode=1777
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 256
-    # Fixed fallback only. Generate this host's limits with configure-resources.py.
-    mem_limit: 8g
-    memswap_limit: 8g
-    cpus: 4
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 1
     stop_grace_period: 20s
     logging:
       driver: json-file
@@ -41,22 +33,5 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  model-import:
-    image: subsanywhere-server:0.11.0
-    profiles: [tools]
-    init: true
-    network_mode: none
-    read_only: true
-    volumes:
-      - models:/models
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    command: [python, import_models.py, /source, /models]
-
 volumes:
   subtitles:
-  models:
-  # Historical archive only; the subtitle server no longer mounts cookies.
-  cookies:

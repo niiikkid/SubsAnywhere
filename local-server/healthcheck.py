@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Container liveness probe; optional ASR models do not affect liveness."""
+"""Container liveness probe identifying the local subtitle service."""
 
 import json
 import os

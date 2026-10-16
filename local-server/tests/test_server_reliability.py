@@ -1,21 +1,20 @@
 import json
-import hashlib
+
 import http.client
 import os
 import pathlib
 import socket
-import subprocess
+
 import sys
 import tempfile
 import threading
-import time
+
 import unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import server
-from provider_fixtures import FakeProvider
-from caption_fixtures import metadata_response, missing_captions, mark_cache
+
 
 VIDEO = "rwnyaH6cTDE"
 VALID_SRT = "1\n00:00:00,000 --> 00:00:01,000\nCaptions\n"
@@ -25,6 +24,7 @@ VALID_SRT = "1\n00:00:00,000 --> 00:00:01,000\nCaptions\n"
 
 
 
+class SubtitleStorageTests(unittest.TestCase):
     def test_atomic_write_failure_removes_its_temporary_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "saved.srt"
@@ -109,7 +109,7 @@ class HttpSecurityTests(unittest.TestCase):
         for host in (f"127.0.0.1:{self.port}", f"localhost:{self.port}", f"[::1]:{self.port}"):
             self.assertEqual(self.request(headers={"Host": host, "X-SubsAnywhere-Client": "extension-v1"})[0], 200)
         status, headers, _ = self.request(method="OPTIONS", headers={"Origin": origin,
-            "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "X-SubsAnywhere-Client"})
+            "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "X-SubsAnywhere-Client"})
         self.assertEqual(status, 204)
         self.assertEqual(headers["Access-Control-Allow-Origin"], origin)
         self.assertEqual(self.request(headers={"Origin": origin})[0], 403)
@@ -146,6 +146,15 @@ class HttpSecurityTests(unittest.TestCase):
                 self.assertEqual(status, 403)
                 self.assertEqual(headers["Access-Control-Allow-Headers"], "X-SubsAnywhere-Client")
             self.assertEqual(database.read_bytes(), b"legacy database fixture")
+
+    def test_removed_recognition_and_audio_routes_are_unavailable(self):
+        client = {"X-SubsAnywhere-Client": "extension-v1"}
+        for action in ("generate", "generated", "status", "cancel", "audio"):
+            path = f"/api/subtitles/{action}?video_id={VIDEO}"
+            with self.subTest(action=action):
+                self.assertEqual(self.request(path=path, headers=client)[0], 404)
+                self.assertEqual(self.request(path=path, method="POST", headers=client)[0], 404)
+        self.service.existing_job.assert_not_called()
 
     def test_http_errors_never_expose_exception_text(self):
         self.service.existing_job.side_effect = RuntimeError("token=secret /private/key")

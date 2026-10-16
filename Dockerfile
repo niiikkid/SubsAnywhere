@@ -10,23 +10,15 @@ ENV PYTHONUNBUFFERED=1 \
     SUBSANYWHERE_HOST=0.0.0.0 \
     SUBSANYWHERE_PORT=43817 \
     SUBSANYWHERE_OUTPUT_DIR=/data/subtitles \
-    SUBSANYWHERE_ASR_PYTHON=/app/.venv/bin/python \
-    SUBSANYWHERE_MODELS_DIR=/models \
-    SUBSANYWHERE_MAX_JOBS=1 \
-    HF_HUB_OFFLINE=1 \
-    HF_HOME=/tmp/huggingface \
-    MODELSCOPE_CACHE=/tmp/modelscope \
-    HOME=/tmp \
-    OMP_NUM_THREADS=4 \
-    MKL_NUM_THREADS=4
+    HOME=/tmp
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y ffmpeg libsndfile1 ca-certificates \
+    && apt-get install --no-install-recommends -y ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 subsanywhere \
     && useradd --uid 10001 --gid 10001 --no-create-home subsanywhere \
-    && mkdir -p /app /data/subtitles /models /run/cookies \
-    && chown -R 10001:10001 /data /models /run/cookies
+    && mkdir -p /app /data/subtitles \
+    && chown -R 10001:10001 /data
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 COPY local-server/pyproject.toml local-server/uv.lock ./

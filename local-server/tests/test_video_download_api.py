@@ -66,6 +66,15 @@ class ProviderTests(unittest.TestCase):
                     self.assertEqual(json.loads(record)["id"], "paid-123")
                     self.assertEqual(target.read_bytes(), b"downloaded")
 
+    def test_audio_download_is_rejected_before_network_or_storage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transport = Transport([])
+            service = client(directory, transport)
+            with self.assertRaises(ValueError):
+                service.acquire(VIDEO, "en", "audio", pathlib.Path(directory) / "audio.mp3")
+            self.assertEqual(transport.calls, [])
+            self.assertEqual(list(pathlib.Path(directory).iterdir()), [])
+
     def test_pending_is_pending_even_when_success_false_or_download_url_present(self):
         with tempfile.TemporaryDirectory() as directory:
             transport = Transport([{"id": "charged"}, {"progress": 400, "success": False, "download_url": "https://files.example/early"}, READY])
@@ -82,7 +91,7 @@ class ProviderTests(unittest.TestCase):
                 service = client(directory, transport)
                 for instance in (service, client(directory, transport)):
                     with self.assertRaises(api.ProviderError) as caught:
-                        instance.acquire(VIDEO, "zh", "subtitles", pathlib.Path(directory) / "result")
+                        instance.acquire(VIDEO, "en", "subtitles", pathlib.Path(directory) / "result")
                     self.assertEqual(caught.exception.code, "provider_captions_missing")
                     self.assertNotIn("offline-secret-key", str(caught.exception))
                 self.assertEqual(len(transport.calls), 2)
