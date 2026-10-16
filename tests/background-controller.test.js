@@ -154,32 +154,7 @@ test('the own popup page remains trusted when Chrome hosts it in an extension ta
   assert.equal(embedded.ok, true);
 });
 
-test('speech settings and pronunciation remain available in the popup but not an untrusted page', async () => {
-  const calls = [];
-  const speech = {
-    async getSettings() { calls.push('get'); return { rate: 0.8, voiceName: '' }; },
-    async getVoiceOptions() { calls.push('voices'); return [{ voiceName: 'Tingting', lang: 'zh-CN' }]; },
-    async patchSettings(settings) { calls.push(['patch', settings]); return settings; },
-    async speak(value) { calls.push(['speak', value]); return { language: value.language, rate: 0.55, voiceName: 'Tingting' }; },
-  };
-  const controller = new RuntimeBackgroundController(makeChrome(), new FakeStore(), { speech });
-  assert.deepEqual(await controller.handle({ type: MESSAGE.SPEECH_SETTINGS_GET }, POPUP), {
-    ok: true, data: { settings: { rate: 0.8, voiceName: '' }, voices: [{ voiceName: 'Tingting', lang: 'zh-CN' }] },
-  });
-  assert.deepEqual(await controller.handle({ type: MESSAGE.SPEECH_SETTINGS_PATCH, rate: 0.55, voiceName: 'Tingting' }, POPUP), {
-    ok: true, data: { settings: { rate: 0.55, voiceName: 'Tingting' }, voices: [{ voiceName: 'Tingting', lang: 'zh-CN' }] },
-  });
-  assert.deepEqual(await controller.handle({ type: MESSAGE.SPEECH_SPEAK, text: '你好', language: 'zh' }, POPUP), {
-    ok: true, data: { language: 'zh', rate: 0.55, voiceName: 'Tingting' },
-  });
-  assert.deepEqual(calls, [
-    'get', 'voices', ['patch', { rate: 0.55, voiceName: 'Tingting' }], 'voices',
-    ['speak', { text: '你好', language: 'zh' }],
-  ]);
-  assert.equal((await controller.handle({ type: MESSAGE.SPEECH_SETTINGS_GET }, {
-    id: EXTENSION_ID, frameId: 0, url: 'https://video.example/', tab: { id: 3, url: 'https://video.example/' },
-  })).ok, false);
-});
+
 
 test('unknown extension and missing sender identities cannot read state', async () => {
   const controller = new RuntimeBackgroundController(makeChrome(), new FakeStore());
@@ -201,7 +176,7 @@ async function backgroundHarness(setAccessLevel) {
   const sandbox = {
     chrome, MESSAGE, failure, console, fetch() { throw new Error('No network in bootstrap tests'); },
     StateStore: class {}, AiCredentialStore: class {}, AIClient: class {}, LocalSubtitleClient: class {},
-    SpeechService: class {},
+
     BackgroundController: class {
       async handle(message) { handled.push(message); return { ok: true }; }
       async initialize() {}

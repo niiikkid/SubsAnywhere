@@ -1,7 +1,7 @@
 import { AIClient, AiCredentialStore } from './ai-client.js';
 import { BackgroundController } from './background-controller.js';
 import { LocalSubtitleClient } from './local-subtitles-client.js';
-import { SpeechService } from './speech-service.js';
+
 import { StateStore } from './state-store.js';
 import { MESSAGE, failure, ok } from './protocol.js';
 
@@ -10,8 +10,7 @@ const store = new StateStore(storage);
 const credentialStore = new AiCredentialStore(storage);
 const aiClient = new AIClient(globalThis.fetch.bind(globalThis), credentialStore);
 const localSubtitles = new LocalSubtitleClient(globalThis.fetch.bind(globalThis));
-const speech = new SpeechService(chrome, storage);
-const controller = new BackgroundController(chrome, store, { credentialStore, aiClient, localSubtitles, speech });
+const controller = new BackgroundController(chrome, store, { credentialStore, aiClient, localSubtitles });
 const PANEL_STORAGE_KEY = 'dualCaptionsPanel';
 
 function normalizePanelState(value = {}) {

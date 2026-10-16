@@ -11,7 +11,7 @@
     CONTENT_TRACKS: 'dualCaptions.content.tracks',
     TRACK_CACHE_BUILTIN: 'dualCaptions.track.cacheBuiltin',
     CONTENT_POSITION_PATCH: 'dualCaptions.content.positionPatch',
-    SPEECH_SPEAK: 'dualCaptions.speech.speak',
+
 
     CONTENT_RESET: 'dualCaptions.content.reset',
   });
@@ -20,27 +20,7 @@
     catch { return Promise.resolve({ ok: false }); }
   }
 
-  async function speakText(text, language, button) {
-    if (!text || !['zh', 'en'].includes(language) || button?.speaking) return;
-    const previous = button?.textContent;
-    if (button) {
-      button.speaking = true;
-      button.disabled = true;
-      button.textContent = '🔊…';
-    }
-    try {
-      const response = await sendMessage({ type: MESSAGE.SPEECH_SPEAK, text, language });
-      if (!response?.ok) throw new Error(response?.error || 'Не удалось произнести текст');
-    } catch (error) {
-      if (button) button.title = error?.message || 'Не удалось произнести текст';
-    } finally {
-      if (button) {
-        button.speaking = false;
-        button.disabled = false;
-        button.textContent = previous;
-      }
-    }
-  }
+
 
   function createController() {
     const state = {
@@ -50,9 +30,7 @@
       root: null,
       second: null,
       dragHandle: null,
-      sentenceSpeakButton: null,
-      sentenceSpeechText: '',
-      sentenceSpeechLanguage: '',
+
       copyButton: null,
       copyMenu: null,
       copyTexts: null,
@@ -66,7 +44,7 @@
       renderedCaptionItems: null,
       inlineCells: null,
       sentenceTranslationLine: null,
-      characterLine: null,
+
       captionLayoutKey: '',
     };
     const builtInTrackResolver = runtime.createBuiltInTrackResolver();
@@ -131,7 +109,6 @@
         Object.assign(state.settings, position);
         applyCaptionPosition();
         positionDragHandle();
-        positionSentenceSpeakButton();
         positionCopyControls();
       };
       const finishDrag = (event) => {
@@ -171,19 +148,7 @@
       dragHandle.addEventListener('pointercancel', finishDrag);
       root.append(dragHandle);
       state.dragHandle = dragHandle;
-      const sentenceSpeak = document.createElement('button');
-      sentenceSpeak.type = 'button';
-      sentenceSpeak.className = 'dual-captions-speak-sentence';
-      sentenceSpeak.textContent = '🔊';
-      sentenceSpeak.title = 'Произнести фразу';
-      sentenceSpeak.setAttribute('aria-label', 'Произнести фразу');
-      sentenceSpeak.style.cssText = 'position:absolute;z-index:2;display:none;width:30px;height:30px;place-items:center;border:1px solid rgba(166,190,255,.65);border-radius:8px;background:rgba(19,24,38,.92);color:#eef1ff;font:16px/1 Arial,sans-serif;box-shadow:0 3px 12px rgba(0,0,0,.5);cursor:pointer;pointer-events:auto;';
-      sentenceSpeak.addEventListener('click', (event) => {
-        event.stopPropagation();
-        void speakText(state.sentenceSpeechText, state.sentenceSpeechLanguage, sentenceSpeak);
-      });
-      root.append(sentenceSpeak);
-      state.sentenceSpeakButton = sentenceSpeak;
+
       const copyButton = document.createElement('button');
       copyButton.type = 'button';
       copyButton.className = 'dual-captions-copy';
@@ -319,29 +284,7 @@
       state.tooltipAnchor = null;
     }
 
-    function showSentenceSpeech(descriptor) {
-      const speechText = descriptor.characters || descriptor.sourceText;
-      const speechLanguage = descriptor.characters ? 'zh' : 'en';
-      if (speechText && state.sentenceSpeakButton) {
-        state.sentenceSpeechText = speechText;
-        state.sentenceSpeechLanguage = speechLanguage;
-        state.sentenceSpeakButton.style.display = 'grid';
-      }
-    }
 
-    function appendTooltipSpeechButton(tooltip, item) {
-      if (typeof item?.speechText !== 'string' || !item.speechText.trim() || !['zh', 'en'].includes(item.speechLanguage)) return;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'dual-captions-speak-word';
-      button.textContent = '🔊 Произнести';
-      button.style.cssText = 'display:block;margin-top:10px;padding:7px 10px;border:1px solid rgba(166,190,255,.45);border-radius:6px;background:rgba(91,110,174,.18);color:#eef1ff;font:600 12px/1.3 Arial,sans-serif;cursor:pointer;';
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        void speakText(item.speechText, item.speechLanguage, button);
-      });
-      tooltip.append(button);
-    }
 
     function dismissMeaningPreview() {
       state.meaningPreview?.remove();
@@ -416,6 +359,7 @@
         .filter((term) => term.source && term.translation);
       const dictionary = document.createElement('div');
       dictionary.style.cssText = 'font-size:14px;line-height:1.35;';
+      dictionary.style.fontSize = `${state.settings.translationFontSize}px`;
       const dictionaryLabel = document.createElement('span');
       dictionaryLabel.style.cssText = 'display:block;margin-bottom:2px;color:#8f9ab3;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;';
       dictionaryLabel.textContent = glossary.length || item.isSentenceTranslation ? 'Перевод' : 'Обычно';
@@ -448,7 +392,7 @@
       } else {
         tooltip.append(close, dictionary);
       }
-      appendTooltipSpeechButton(tooltip, item);
+
       state.root.append(tooltip);
       state.tooltip = tooltip;
       state.tooltipItem = item;
@@ -753,7 +697,7 @@
             && pinyinTerm;
           meaning.textContent = hidesParticleMeaning ? '' : segment.translation;
           meaning.title = '';
-          meaning.style.cssText = `display:${hidesParticleMeaning ? 'none' : 'block'};width:100%;max-width:18em;font-size:.4em;font-weight:400;line-height:1.3;opacity:.8;margin-bottom:.2em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
+          meaning.style.cssText = `display:${hidesParticleMeaning ? 'none' : 'block'};width:100%;max-width:18em;font-size:${state.settings.inlineTranslationFontSize}px;font-weight:400;line-height:1.3;opacity:.8;margin-bottom:.2em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
           if (!hidesParticleMeaning) {
             meaning.addEventListener('mouseenter', () => showMeaningPreview(segment.translation, meaning));
             meaning.addEventListener('mouseleave', dismissMeaningPreview);
@@ -770,8 +714,7 @@
           const cellItem = {
             dictionary: segment.translation || 'Перевод этой ячейки пока отсутствует',
             isSentenceTranslation: true,
-            speechText: descriptor.characters ? segment.term?.text || '' : segment.text,
-            speechLanguage: descriptor.characters ? 'zh' : 'en',
+
           };
           cell.className = 'dual-captions-word-cell';
           cell.setAttribute('aria-label', `${segment.text}: ${cellItem.dictionary}`);
@@ -804,6 +747,7 @@
       translation.className = 'dual-captions-sentence-translation';
       translation.textContent = sentenceText;
       translation.style.cssText = 'display:block;width:100%;box-sizing:border-box;margin:0 0 .18em;padding:0 .22em;color:inherit;text-align:center;font-size:.58em;font-weight:400;line-height:1.3;opacity:.88;white-space:normal;overflow-wrap:anywhere;pointer-events:none;';
+      translation.style.fontSize = `${state.settings.translationFontSize}px`;
       target.append(translation);
       state.sentenceTranslationLine = translation;
     }
@@ -818,16 +762,14 @@
         ? { ...sourceDescriptor, displayText: translatedPinyin }
         : sourceDescriptor;
       const failure = translationFailures.get(sourceDescriptor.key) || '';
-      const key = `${state.settings.secondTrackId}\u0000${sourceDescriptor.key}\u0000${descriptor.displayText}\u0000${state.settings.inlineTranslations}\u0000${failure}`;
+      state.second.style.fontSize = `${descriptor.language === 'zh' ? state.settings.pinyinFontSize : state.settings.fontSize}px`;
+      const key = `${state.settings.secondTrackId}\u0000${sourceDescriptor.key}\u0000${descriptor.displayText}\u0000${state.settings.inlineTranslations}\u0000${state.settings.pinyinFontSize}\u0000${state.settings.translationFontSize}\u0000${state.settings.inlineTranslationFontSize}\u0000${state.settings.fontSize}\u0000${failure}`;
       if (state.renderedCaptionKey === key && state.renderedCaptionItems === items) return;
       state.renderedCaptionKey = key;
       state.renderedCaptionItems = items;
       state.inlineCells = null;
       state.sentenceTranslationLine = null;
-      state.characterLine = null;
       state.captionLayoutKey = '';
-      state.sentenceSpeechText = '';
-      state.sentenceSpeechLanguage = '';
       dismissCopyMenu();
       state.copyTexts = {
         original: descriptor.sourceText,
@@ -835,7 +777,7 @@
         pinyin: descriptor.language === 'zh' && (translatedPinyin || !descriptor.generatedPinyin) ? descriptor.displayText : '',
         chinese: descriptor.language === 'zh',
       };
-      if (state.sentenceSpeakButton) state.sentenceSpeakButton.style.display = 'none';
+
       dismissMeaningPreview();
       dismissTooltip();
       state.second.replaceChildren();
@@ -848,22 +790,15 @@
       if (descriptor.characters) {
         target = document.createElement('div');
         target.style.cssText = 'pointer-events:auto;';
-        const characters = document.createElement('div');
-        characters.className = 'dual-captions-sentence-characters';
-        characters.textContent = descriptor.characters;
-        characters.style.cssText = 'margin-top:2px;color:inherit;font-size:.72em;font-weight:600;line-height:1.15;opacity:.68;pointer-events:none;';
-        state.second.append(target, characters);
-        state.characterLine = characters;
+        state.second.append(target);
       }
       if (state.settings.inlineTranslations && items?.length) {
         if (renderInlineCaption(target, descriptor.displayText, items, descriptor)) {
-          showSentenceSpeech(descriptor);
           return;
         }
       }
       if (!items || !items.length) {
         renderPendingCaption(target, descriptor.displayText, descriptor, failure);
-        showSentenceSpeech(descriptor);
         if (!items && !failure) requestTranslation(descriptor, true);
         return;
       }
@@ -885,7 +820,6 @@
         });
         target.append(phrase);
       }
-      showSentenceSpeech(descriptor);
     }
 
     function restoreTrackMode(track) {
@@ -939,7 +873,6 @@
       state.root.style.display = state.active && rect.width && rect.height ? 'block' : 'none';
       applyCaptionPosition();
       positionDragHandle();
-      positionSentenceSpeakButton();
       positionCopyControls();
       positionMeaningPreview();
       positionTooltip();
@@ -962,7 +895,7 @@
     }
 
     function fitCaptionWidth(root) {
-      const key = `${root.width}:${root.height}:${state.settings.fontSize}:${state.settings.subtitleBackground}`;
+      const key = `${root.width}:${root.height}:${state.second.style.fontSize}:${state.settings.translationFontSize}:${state.settings.inlineTranslationFontSize}:${state.settings.subtitleBackground}`;
       if (state.captionLayoutKey === key) return;
       state.captionLayoutKey = key;
       state.second.style.width = 'max-content';
@@ -977,14 +910,10 @@
         range.selectNodeContents(state.sentenceTranslationLine);
         contentWidth = Math.max(contentWidth, range.getBoundingClientRect().width);
       }
-      if (state.characterLine) {
-        const range = document.createRange();
-        range.selectNodeContents(state.characterLine);
-        contentWidth = Math.max(contentWidth, range.getBoundingClientRect().width);
-      }
+
       // Balance at the available width, then trim unused sides. Keep cell margins
       // and rounding slack so the measured row does not acquire a new wrap.
-      state.second.style.width = `${Math.ceil(Math.min(row.width, contentWidth + state.settings.fontSize * .18 + 2) + inset)}px`;
+      state.second.style.width = `${Math.ceil(Math.min(row.width, contentWidth + Number.parseFloat(state.second.style.fontSize) * .18 + 2) + inset)}px`;
     }
 
     function positionDragHandle() {
@@ -1000,17 +929,7 @@
       state.dragHandle.style.top = `${top}px`;
     }
 
-    function positionSentenceSpeakButton() {
-      const button = state.sentenceSpeakButton;
-      if (!state.root || !state.second || !button || button.style.display === 'none') return;
-      const root = state.root.getBoundingClientRect();
-      const caption = state.second.getBoundingClientRect();
-      if (!root.width || !root.height) return;
-      const left = Math.max(0, Math.min(root.width - 30, caption.left - root.left - 34));
-      const top = Math.max(0, Math.min(root.height - 30, caption.top - root.top));
-      button.style.left = `${left}px`;
-      button.style.top = `${top}px`;
-    }
+
 
     function positionCopyControls() {
       if (!state.root || !state.copyButton) return;
@@ -1066,7 +985,6 @@
           requestTranslation(translationDescriptor(text));
         }
       }
-      state.second.style.fontSize = `${state.settings.fontSize}px`;
       state.second.style.color = state.settings.subtitleColor;
       state.second.style.background = state.settings.subtitleBackground ? subtitleBackgroundStyle() : 'transparent';
       state.second.style.padding = state.settings.subtitleBackground ? '4px 20px 4px 8px' : '0 12px 0 0';

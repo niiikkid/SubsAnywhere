@@ -28,10 +28,7 @@ const hydrationErrors = new Map();
 let hydrationRevision = 0;
 let aiLoadRevision = 0;
 let aiLoaded = false;
-let speechRate = 0.8;
-let speechVoiceName = '';
-let speechVoices = [];
-let speechRevision = 0;
+
 let youtubeLoaded = false;
 let selectedFrameId;
 let videoOptionsOpen = false;
@@ -190,16 +187,21 @@ function setupTabs(sections) {
 function drawPreview() {
   const settings = state.settings;
   const preview = $('subtitlePreview');
-  preview.style.fontSize = `${settings.fontSize}px`;
+  const chinese = settings.youtubeLanguage === 'zh' || /^zh/i.test(selectedExternalTrack()?.language || '');
+  preview.style.fontSize = `${chinese ? settings.pinyinFontSize : settings.fontSize}px`;
   preview.style.color = settings.subtitleColor;
   preview.replaceChildren();
+  const sentence = document.createElement('span');
+  sentence.textContent = chinese ? 'Привет, мир!' : 'По одной строке за раз.';
+  sentence.style.cssText = `display:block;font-size:${settings.translationFontSize}px;font-weight:400;line-height:1.3;margin-bottom:.18em;opacity:.88;`;
+  preview.append(sentence);
   if (settings.inlineTranslations) {
-    preview.textContent = '';
-    for (const [source, translation] of [['One line', 'одна строка'], ['at a time.', 'за раз, по очереди']]) {
+    const examples = chinese ? [['nǐ hǎo,', 'привет'], ['shì jiè!', 'мир']] : [['One line', 'одна строка'], ['at a time.', 'за раз, по очереди']];
+    for (const [source, translation] of examples) {
       const cell = document.createElement('span');
       cell.style.cssText = 'display:inline-flex;flex-direction:column;align-items:center;vertical-align:bottom;width:max-content;max-width:calc(100% - .18em);box-sizing:border-box;margin:.12em .09em;padding:.12em .22em;border:1px solid #ffffff20;border-radius:6px;';
       const meaning = document.createElement('span');
-      meaning.style.cssText = 'width:100%;max-width:18em;font-size:.58em;font-weight:400;line-height:1.3;opacity:.8;margin-bottom:.2em;white-space:normal;overflow-wrap:anywhere;';
+      meaning.style.cssText = `width:100%;max-width:18em;font-size:${settings.inlineTranslationFontSize}px;font-weight:400;line-height:1.3;opacity:.8;margin-bottom:.2em;white-space:normal;overflow-wrap:anywhere;`;
       meaning.textContent = translation;
       const original = document.createElement('span');
       original.style.cssText = 'max-width:100%;overflow-wrap:anywhere;';
@@ -207,7 +209,7 @@ function drawPreview() {
       cell.append(meaning, original);
       preview.append(cell);
     }
-  } else preview.textContent = 'One line at a time.';
+  } else preview.append(document.createTextNode(chinese ? 'nǐ hǎo, shì jiè!' : 'One line at a time.'));
   const rgb = [1, 3, 5].map((index) => parseInt(settings.subtitleBackgroundColor.slice(index, index + 2), 16));
   preview.style.backgroundColor = settings.subtitleBackground
     ? `rgba(${rgb.join(', ')}, ${settings.subtitleBackgroundOpacity / 100})` : 'transparent';
@@ -405,15 +407,12 @@ function drawSync() {
 
 function drawSettings() {
   const settings = state.settings;
-  $('speechVoice').replaceChildren();
-  option($('speechVoice'), '', 'Авто · Google');
-  for (const voice of speechVoices) option($('speechVoice'), voice.voiceName, voice.voiceName);
-  $('speechVoice').value = speechVoices.some((voice) => voice.voiceName === speechVoiceName) ? speechVoiceName : '';
-  $('speechRate').value = String(speechRate);
-
-  for (const id of ['fontSize', 'inlineTranslations', 'subtitleColor', 'subtitleBackground', 'originalTrack', 'subtitleFile']) $(id).disabled = !pageKey;
+  for (const id of ['fontSize', 'pinyinFontSize', 'translationFontSize', 'inlineTranslationFontSize', 'inlineTranslations', 'subtitleColor', 'subtitleBackground', 'originalTrack', 'subtitleFile']) $(id).disabled = !pageKey;
   drawTrackSelect($('originalTrack'), settings.secondTrackId);
-  $('fontSize').value = settings.fontSize;
+  for (const key of ['fontSize', 'pinyinFontSize', 'translationFontSize', 'inlineTranslationFontSize']) {
+    $(key).value = settings[key];
+    $(`${key}Value`).value = `${settings[key]}px`;
+  }
   $('inlineTranslations').checked = settings.inlineTranslations;
   $('subtitleColor').value = settings.subtitleColor;
   $('subtitleBackground').checked = settings.subtitleBackground;
@@ -422,7 +421,7 @@ function drawSettings() {
   $('subtitleBackgroundOpacityValue').value = `${settings.subtitleBackgroundOpacity}%`;
   $('subtitleBackgroundColor').disabled = !pageKey || !settings.subtitleBackground;
   $('subtitleBackgroundOpacity').disabled = !pageKey || !settings.subtitleBackground;
-  $('fontSizeValue').value = `${settings.fontSize}px`;
+
   const providerInfo = aiConfig.providers[aiProvider];
   const catalogReady = aiCatalogProvider === aiProvider && aiCatalog.length > 0;
   const selectedModel = catalogReady && aiCatalog.includes($('aiModel').value)
@@ -491,7 +490,7 @@ function updateLocalSetting(key, value) {
   state = patchSettings(state, { [key]: value });
   editedSettings[key] = state.settings[key];
   drawPreview();
-  if (key === 'fontSize') $('fontSizeValue').value = `${state.settings.fontSize}px`;
+  if (['fontSize', 'pinyinFontSize', 'translationFontSize', 'inlineTranslationFontSize'].includes(key)) $(`${key}Value`).value = `${state.settings[key]}px`;
   if (key === 'subtitleBackgroundOpacity') $('subtitleBackgroundOpacityValue').value = `${state.settings.subtitleBackgroundOpacity}%`;
   return state.settings[key];
 }
@@ -746,52 +745,7 @@ async function loadAiSettings() {
   }
 }
 
-async function loadSpeechSettings() {
-  const revision = speechRevision;
-  try {
-    const data = await request(MESSAGE.SPEECH_SETTINGS_GET);
-    if (revision === speechRevision && Number.isFinite(Number(data.settings?.rate))) {
-      speechRate = Number(data.settings.rate);
-      speechVoiceName = typeof data.settings?.voiceName === 'string' ? data.settings.voiceName : '';
-      speechVoices = Array.isArray(data.voices) ? data.voices : [];
-      drawSettings();
-    }
-    hydrationErrors.delete('speech');
-    drawSaveFeedback();
-    return data;
-  } catch (error) {
-    if (revision === speechRevision) hydrationErrors.set('speech', error);
-    drawSaveFeedback();
-    return {};
-  }
-}
 
-function saveSpeechSettings() {
-  const requested = Number($('speechRate').value);
-  const voiceName = $('speechVoice').value;
-  speechRevision += 1;
-  speechRate = requested;
-  speechVoiceName = voiceName;
-  return saveRequest('speech:settings', MESSAGE.SPEECH_SETTINGS_PATCH, { rate: requested, voiceName }, (data) => {
-    if (Number.isFinite(Number(data.settings?.rate))) speechRate = Number(data.settings.rate);
-    if (typeof data.settings?.voiceName === 'string') speechVoiceName = data.settings.voiceName;
-    if (Array.isArray(data.voices)) speechVoices = data.voices;
-    hydrationErrors.delete('speech');
-    drawSettings();
-  }).catch((error) => setStatus(`Не удалось сохранить произношение: ${error.message}`, true));
-}
-
-async function previewSpeech() {
-  const button = $('speechPreview');
-  button.disabled = true;
-  try {
-    await request(MESSAGE.SPEECH_SPEAK, { text: '你好，很高兴认识你。', language: 'zh' });
-  } catch (error) {
-    setStatus(`Не удалось проверить голос: ${error.message}`, true);
-  } finally {
-    button.disabled = false;
-  }
-}
 
 async function hydratePage(aiPromise) {
   if (!pageKey) return;
@@ -835,7 +789,7 @@ async function init() {
   render();
   drawSaveFeedback();
   const aiPromise = loadAiSettings();
-  const speechPromise = loadSpeechSettings();
+
   let tab;
   if (embeddedPanel) {
     const context = await request(MESSAGE.PANEL_CONTEXT_GET);
@@ -849,11 +803,11 @@ async function init() {
   youtubeId = youtubeVideoId(tab.url || '');
   pageKey = canonicalPageKey(tab.url || `https://local.invalid/tab/${tab.id}`);
   drawSettings();
-  await Promise.all([hydratePage(aiPromise), speechPromise]);
+  await hydratePage(aiPromise);
 }
 
 setupTabs(['player', 'appearance', 'settings']);
-setupTabs(['aiSettings', 'voiceSettings']);
+
 setupEmbeddedPanel();
 document.defaultView?.addEventListener('pagehide', () => {
   popupClosed = true;
@@ -863,7 +817,7 @@ document.defaultView?.addEventListener('pagehide', () => {
 $('retrySave').addEventListener('click', () => {
   for (const entry of [...saves.values()]) if (entry.error) void entry.retry().catch(() => {});
 });
-$('retrySettings').addEventListener('click', () => { void Promise.all([hydratePage(loadAiSettings()), loadSpeechSettings()]); });
+$('retrySettings').addEventListener('click', () => { void hydratePage(loadAiSettings()); });
 $('activate').addEventListener('click', () => activate().catch((error) => setStatus(error.message, true)));
 $('restartSearch').addEventListener('click', () => activate(true).catch((error) => setStatus(error.message, true)));
 $('changeVideo').addEventListener('click', () => { videoOptionsOpen = !videoOptionsOpen; drawWorkspace(); });
@@ -883,9 +837,7 @@ $('aiModel').addEventListener('change', () => drawSettings());
 $('loadAiModels').addEventListener('click', () => loadAiModels().catch((error) => setStatus(error.message, true)));
 $('clearAiKey').addEventListener('click', () => clearAiKey().catch((error) => setStatus(error.message, true)));
 $('saveAiSettings').addEventListener('click', () => saveAiSettings().catch((error) => setStatus(error.message, true)));
-$('speechVoice').addEventListener('change', () => { void saveSpeechSettings(); });
-$('speechRate').addEventListener('change', () => { void saveSpeechSettings(); });
-$('speechPreview').addEventListener('click', () => { void previewSpeech(); });
+
 $('subtitleFile').addEventListener('change', (event) => importFile(event.target.files?.[0]).catch((error) => setStatus(error.message, true)));
 $('englishSubtitles').addEventListener('click', () => { void showLanguageSubtitles('en'); });
 $('chineseSubtitles').addEventListener('click', () => { void showLanguageSubtitles('zh'); });
@@ -901,7 +853,9 @@ $('player').addEventListener('change', () => {
   });
 });
 $('originalTrack').addEventListener('change', () => persistSetting('secondTrackId', $('originalTrack').value));
-$('fontSize').addEventListener('input', () => previewSetting('fontSize', Number($('fontSize').value)));
+for (const key of ['fontSize', 'pinyinFontSize', 'translationFontSize', 'inlineTranslationFontSize']) {
+  $(key).addEventListener('input', () => previewSetting(key, Number($(key).value)));
+}
 $('inlineTranslations').addEventListener('change', () => persistSetting('inlineTranslations', $('inlineTranslations').checked));
 $('subtitleColor').addEventListener('input', () => previewSetting('subtitleColor', $('subtitleColor').value));
 

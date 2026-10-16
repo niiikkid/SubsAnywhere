@@ -15,9 +15,7 @@ export const MESSAGE = Object.freeze({
   AI_CONFIG_PATCH: 'dualCaptions.ai.patch',
   AI_MODELS_GET: 'dualCaptions.ai.models.get',
   CAPTION_TRANSLATE: 'dualCaptions.caption.translate',
-  SPEECH_SETTINGS_GET: 'dualCaptions.speech.settings.get',
-  SPEECH_SETTINGS_PATCH: 'dualCaptions.speech.settings.patch',
-  SPEECH_SPEAK: 'dualCaptions.speech.speak',
+
   LOCAL_SUBTITLE_EXISTING: 'dualCaptions.localSubtitle.existing',
 
   CONTENT_FULL_STATE: 'dualCaptions.content.fullState',

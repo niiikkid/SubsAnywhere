@@ -282,7 +282,8 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
     vm.runInContext(harness.runtimeSource, harness.context);
     vm.runInContext(harness.contentSource, harness.context);
     const listener = [...harness.onMessage.listeners][0];
-    const settings = { secondTrackId: 'external:mine', inlineTranslations: true };
+    const settings = { secondTrackId: 'external:mine', inlineTranslations: true,
+      fontSize: 28, pinyinFontSize: 32, translationFontSize: 20, inlineTranslationFontSize: 16 };
     listener({ type: 'dualCaptions.content.fullState', settings,
       externalTracks: [{ id: 'mine', cues: [{ start: 1, end: 2, text: chinese ? `\u2063${source}\n\u2064你好，世界` : source }] }],
     }, {}, () => {});
@@ -295,10 +296,11 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
     assert.equal(sentenceTranslation.className, 'dual-captions-sentence-translation');
     assert.equal(sentenceTranslation.textContent, 'Привет, мир');
     assert.match(sentenceTranslation.style.cssText, /text-align:center/);
-    assert.match(sentenceTranslation.style.cssText, /font-size:\.58em/);
+    assert.equal(sentenceTranslation.style.fontSize, '20px');
+    assert.equal(caption.style.fontSize, chinese ? '32px' : '28px');
     assert.equal(cells.className, 'dual-captions-inline');
     assert.equal(cells.children[0].children[0].textContent, item.glossary[0].translation);
-    assert.match(cells.children[0].children[0].style.cssText, /font-size:\.4em/);
+    assert.match(cells.children[0].children[0].style.cssText, /font-size:16px/);
     assert.match(cells.children[0].children[0].style.cssText, /white-space:nowrap/);
     assert.match(cells.children[0].children[0].style.cssText, /text-overflow:ellipsis/);
     assert.equal(cells.children[0].children[0].title, '');
@@ -311,9 +313,9 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
     cells.children[0].children[0].dispatch('mouseleave');
     assert.equal(overlay.children.includes(hoverTranslation), false);
 
-    if (chinese) assert.equal(caption.children[1].textContent, '你好，世界');
+    if (chinese) assert.equal(caption.children.length, 1);
     cells.children[0].dispatch('click', { stopPropagation() {} });
-    assert.equal(overlay.children.length, 5);
+    assert.equal(overlay.children.length, 4);
     listener({ type: 'dualCaptions.content.settings', settings: { ...settings, inlineTranslations: false } }, {}, () => {});
     assert.notEqual(caption.children[0].className, 'dual-captions-inline');
     assert.equal(requests, 1);
@@ -383,7 +385,7 @@ test('a Han-only Chinese caption receives pinyin and a translation without savin
     .map(({ text, displayText, language }) => ({ text, displayText, language })),
   [{ text: sentence.text, displayText: '', language: 'zh' }]);
   assert.equal(overlay.children[0].children[0].children.map((child) => child.textContent).join(''), sentence.pinyin);
-  assert.equal(findClass(overlay, 'dual-captions-sentence-characters').textContent, sentence.text);
+  assert.equal(findClass(overlay, 'dual-captions-sentence-characters'), undefined);
   assert.equal(findClass(overlay, 'dual-captions-save-sentence'), undefined);
   assert.equal(messages.some((message) => /dualCaptions\.(words|sentences)\./.test(message.type)), false);
 });
@@ -608,12 +610,12 @@ test('production content message renders only the selected original track safely
 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
   assert.ok(overlay);
-  assert.equal(overlay.children.length, 4);
+  assert.equal(overlay.children.length, 3);
   assert.equal(overlay.children[0].children.map((child) => child.textContent).join(''), 'Imported');
   assert.equal(overlay.children[0].style.bottom, '36px');
   assert.equal(overlay.children[0].style.left, '400px');
   assert.equal(overlay.children[1].textContent, '⠿');
-  assert.equal(overlay.children[2].textContent, '🔊');
+  assert.equal(overlay.children.some((child) => child.textContent === '🔊'), false);
 });
 
 test('production makes pinyin the primary clickable line and keeps its characters linked', async () => {
@@ -636,8 +638,7 @@ test('production makes pinyin the primary clickable line and keeps its character
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
   const caption = overlay.children[0];
   assert.equal(caption.children[0].children.map((child) => child.textContent).join(''), 'nǐ hǎo, shì jiè');
-  assert.equal(caption.children[1].textContent, '你好，世界');
-  assert.match(caption.children[1].style.cssText, /opacity:\.68/);
+  assert.equal(caption.children.length, 1);
   assert.deepEqual(
     harness.reports.filter((message) => message.type === 'dualCaptions.caption.translate').map((message) => ({
       text: message.text,
@@ -751,7 +752,7 @@ test('production shows only the full English translation above the original with
   assert.equal(overlay.children.at(-1).children.length, 2, 'close and full translation only');
 
   phrase.dispatch('click', { stopPropagation() {} });
-  assert.equal(overlay.children.length, 4);
+  assert.equal(overlay.children.length, 3);
 });
 
 test('English inline fallback still displays the full translation above the original', async () => {

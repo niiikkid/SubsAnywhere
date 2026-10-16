@@ -60,16 +60,17 @@ test('manifest grants network access only to both AI providers and the fixed loc
     'https://api.openai.com/*',
     'http://127.0.0.1:43817/*',
   ]);
-  assert.ok(manifest.permissions.includes('tts'));
+  assert.ok(!manifest.permissions.includes('tts'));
   assert.match(manifest.description, /оригинальн/i);
   assert.doesNotMatch(manifest.description, /две дорожки|находит/i);
 });
 
-test('pronunciation controls remain available in extension settings without a study panel', async () => {
+test('appearance exposes independent font sizes without pronunciation controls', async () => {
   const popup = await fs.readFile(new URL('../popup.html', import.meta.url), 'utf8');
-  assert.match(popup, /id="speechVoice"/);
-  assert.match(popup, /id="speechRate"/);
-  assert.match(popup, /id="speechPreview"/);
+  for (const key of ['fontSize', 'pinyinFontSize', 'translationFontSize', 'inlineTranslationFontSize']) {
+    assert.match(popup, new RegExp(`id="${key}"`));
+  }
+  assert.doesNotMatch(popup, /speechVoice|speechRate|speechPreview|voiceSettings/);
   assert.doesNotMatch(popup, /id="openWords"|id="openReview"/);
 });
 

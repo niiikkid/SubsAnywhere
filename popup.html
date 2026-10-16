@@ -116,8 +116,17 @@
           Переводы над фразами
         </label>
 
-        <label>Размер текста <output id="fontSizeValue"></output>
+        <label>Размер английского текста <output id="fontSizeValue"></output>
           <input id="fontSize" type="range" min="12" max="48" value="24">
+        </label>
+        <label>Размер пиньиня <output id="pinyinFontSizeValue"></output>
+          <input id="pinyinFontSize" type="range" min="12" max="48" value="24">
+        </label>
+        <label>Размер полного перевода <output id="translationFontSizeValue"></output>
+          <input id="translationFontSize" type="range" min="8" max="48" value="14">
+        </label>
+        <label>Размер переводов над фразами <output id="inlineTranslationFontSizeValue"></output>
+          <input id="inlineTranslationFontSize" type="range" min="8" max="48" value="10">
         </label>
         <div class="two-columns">
           <label>Цвет текста
@@ -137,44 +146,7 @@
       </section>
 
       <section id="settingsPanel" role="tabpanel" aria-labelledby="settingsTab" class="compact-settings" hidden>
-        <nav class="settings-tabs" role="tablist" aria-label="Категории настроек">
-          <button id="aiSettingsTab" type="button" role="tab" aria-controls="aiSettingsPanel" aria-selected="true">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m10 2 2.2 5.8L18 10l-5.8 2.2L10 18l-2.2-5.8L2 10l5.8-2.2Z"/></svg>
-            <span>ИИ</span>
-          </button>
-          <button id="voiceSettingsTab" type="button" role="tab" aria-controls="voiceSettingsPanel" aria-selected="false" tabindex="-1">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 8h3l4-4v12l-4-4H3Zm10-1a4 4 0 0 1 0 6m2-9a8 8 0 0 1 0 12"/></svg>
-            <span>Голос</span>
-          </button>
-
-        </nav>
-
-        <section id="voiceSettingsPanel" role="tabpanel" aria-labelledby="voiceSettingsTab" hidden>
-          <section class="control-card speech-settings">
-            <div class="section-heading">
-              <h2>Голос и произношение</h2>
-              <button id="speechPreview" type="button" title="Проверить голос">Проверить</button>
-            </div>
-            <p class="hint">Озвучивание слов и фраз в субтитрах.</p>
-            <div class="two-columns speech-fields">
-              <label>Голос
-                <select id="speechVoice">
-                  <option value="">Авто · Google</option>
-                </select>
-              </label>
-              <label>Скорость
-                <select id="speechRate">
-                  <option value="0.55">Очень медленно</option>
-                  <option value="0.7">Медленно</option>
-                  <option value="0.8">Спокойно</option>
-                  <option value="1">Обычно</option>
-                </select>
-              </label>
-            </div>
-          </section>
-        </section>
-
-        <section id="aiSettingsPanel" role="tabpanel" aria-labelledby="aiSettingsTab">
+        <section id="aiSettingsPanel">
           <section class="control-card ai-settings">
             <div class="section-heading">
               <h2>Перевод через ИИ</h2>

@@ -4,11 +4,8 @@ import { MESSAGE, failure, ok } from './protocol.js';
 const CONTENT_SCRIPT_ID = 'dual-captions-player-discovery-v1';
 const CONTENT_MESSAGES = new Set([
   MESSAGE.PLAYER_REPORT, MESSAGE.CONTENT_POSITION_PATCH, MESSAGE.TRACK_CACHE_BUILTIN, MESSAGE.CAPTION_TRANSLATE,
-  MESSAGE.SPEECH_SPEAK,
 ]);
-const SHARED_MESSAGES = new Set([
-  MESSAGE.SPEECH_SPEAK,
-]);
+
 const SERIALIZED_MESSAGES = new Set([
   MESSAGE.PLAYER_REPORT, MESSAGE.PLAYER_SELECT, MESSAGE.STATE_PATCH, MESSAGE.CONTENT_POSITION_PATCH,
   MESSAGE.TRACK_ADD, MESSAGE.TRACK_UPSERT_LOCAL, MESSAGE.TRACK_CACHE_BUILTIN,
@@ -122,7 +119,7 @@ export class BackgroundController {
   #credentialStore;
   #aiClient;
   #localSubtitles;
-  #speech;
+
   #discoveryTimeoutMs;
   #discoveryQuietMs;
   #contentRegistration;
@@ -137,7 +134,7 @@ export class BackgroundController {
     this.#credentialStore = options.credentialStore;
     this.#aiClient = options.aiClient ?? options.deepSeek;
     this.#localSubtitles = options.localSubtitles;
-    this.#speech = options.speech;
+
     this.#discoveryTimeoutMs = options.discoveryTimeoutMs ?? 5000;
     this.#discoveryQuietMs = options.discoveryQuietMs ?? 300;
   }
@@ -241,22 +238,7 @@ export class BackgroundController {
           await this.#enqueue(sender.tab.id, () => this.#selectedSender(message, sender));
           return ok(await this.#translateCaption(message));
 
-        case MESSAGE.SPEECH_SETTINGS_GET:
-          if (!this.#speech) throw new Error('Системное озвучивание недоступно');
-          return ok({ settings: await this.#speech.getSettings(), voices: await this.#speech.getVoiceOptions() });
-        case MESSAGE.SPEECH_SETTINGS_PATCH: {
-          if (!this.#speech) throw new Error('Системное озвучивание недоступно');
-          const patch = {};
-          if (Object.hasOwn(message, 'rate')) patch.rate = message.rate;
-          if (Object.hasOwn(message, 'voiceName')) patch.voiceName = message.voiceName;
-          return ok({
-            settings: await this.#speech.patchSettings(patch),
-            voices: await this.#speech.getVoiceOptions(),
-          });
-        }
-        case MESSAGE.SPEECH_SPEAK:
-          if (!this.#speech) throw new Error('Системное озвучивание недоступно');
-          return ok(await this.#speech.speak({ text: message.text, language: message.language }));
+
         case MESSAGE.LOCAL_SUBTITLE_EXISTING:
           if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');
           return ok(await this.#localSubtitles.existing(message.videoId, message.language));
@@ -272,7 +254,7 @@ export class BackgroundController {
     }
     const popupUrl = this.#chrome.runtime.getURL('popup.html');
     if (sender.url === popupUrl || sender.url?.startsWith(`${popupUrl}?`)) {
-      if (CONTENT_MESSAGES.has(message?.type) && !SHARED_MESSAGES.has(message?.type)) throw new Error('Сообщение доступно только плееру');
+      if (CONTENT_MESSAGES.has(message?.type)) throw new Error('Сообщение доступно только плееру');
       return false;
     }
     if (sender.tab) {

@@ -31,14 +31,15 @@ function makeDocument() {
   const ids = [
     'controls', 'status', 'player', 'originalTrack',
     'fontSize', 'subtitleColor', 'subtitleBackground', 'subtitleBackgroundColor', 'subtitleBackgroundOpacity', 'subtitleBackgroundOpacityValue', 'fontSizeValue',
+    'pinyinFontSize', 'translationFontSize', 'inlineTranslationFontSize', 'pinyinFontSizeValue', 'translationFontSizeValue', 'inlineTranslationFontSizeValue',
     'syncBox', 'syncTrackName', 'offsetSeconds', 'timeScalePercent', 'activate', 'restartSearch', 'subtitleFile',
     'videoConnection', 'videoTitle', 'changeVideo', 'videoOptions', 'playerChoice',
     'captionTitle', 'captionSource', 'captionState', 'changeSubtitles', 'subtitleOptions', 'showTiming', 'externalFiles',
     'youtubeActions', 'englishSubtitles', 'chineseSubtitles', 'englishSubtitleState', 'chineseSubtitleState', 'hideSubtitles', 'otherSubtitleActions',
-    'aiProvider', 'aiKey', 'aiKeyLabel', 'aiModel', 'aiModelHint', 'loadAiModels', 'clearAiKey', 'saveAiSettings', 'aiKeyState', 'speechVoice', 'speechRate', 'speechPreview',
+    'aiProvider', 'aiKey', 'aiKeyLabel', 'aiModel', 'aiModelHint', 'loadAiModels', 'clearAiKey', 'saveAiSettings', 'aiKeyState',
     'youtubeSubtitles', 'youtubeSubtitleStatus',
     'playerTab', 'appearanceTab', 'settingsTab', 'playerPanel', 'appearancePanel', 'settingsPanel',
-    'aiSettingsTab', 'voiceSettingsTab', 'aiSettingsPanel', 'voiceSettingsPanel',
+    'aiSettingsPanel',
     'subtitlePreview', 'inlineTranslations', 'saveStatus', 'retrySave', 'retrySettings', 'pageScope',
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement()]));
@@ -53,6 +54,7 @@ function makeDocument() {
     defaultView: new FakeElement(),
     getElementById(id) { return elements[id]; },
     createElement(tag) { return new FakeElement(tag); },
+    createTextNode(text) { const node = new FakeElement(); node.textContent = text; return node; },
     querySelectorAll(selector) { return selector === '[data-shift]' ? shiftButtons : []; },
   };
 }
@@ -80,8 +82,7 @@ async function bootPopup(overrides = {}, tab = { id: 77, url: 'https://video.exa
     'dualCaptions.player.discover': () => ({ players: [{ frameId: 0, key: 'youtube-player', tracks: [] }] }),
     'dualCaptions.player.select': () => ({ delivered: true, state: { settings: { selectedPlayerKey: 'youtube-player', selectedPlayerFrameId: 0 } } }),
     'dualCaptions.ai.get': () => aiInfo(),
-    'dualCaptions.speech.settings.get': () => ({ settings: { rate: 0.8, voiceName: '' }, voices: [{ voiceName: 'Tingting', lang: 'zh-CN' }] }),
-    'dualCaptions.speech.settings.patch': (message) => ({ settings: { rate: message.rate, voiceName: message.voiceName }, voices: [{ voiceName: 'Tingting', lang: 'zh-CN' }] }),
+
     'dualCaptions.state.patch': () => ({ state: {} }),
     ...overrides,
   };
@@ -191,37 +192,15 @@ test('failed delivery keeps the saved caption but never reports a connected vide
   assert.match(elements.status.textContent, /не ответило/);
 });
 
-test('settings categories switch independently without resetting drafts or writing settings', async () => {
+test('settings stay available without resetting drafts or writing settings', async () => {
   const { elements, messages } = await bootPopup();
   elements.settingsTab.listeners.get('click')();
   messages.length = 0;
   elements.aiKey.value = 'unsaved-draft';
-  const names = ['aiSettings', 'voiceSettings'];
-  for (const name of names) {
-    elements[`${name}Tab`].listeners.get('click')();
-    for (const other of names) {
-      assert.equal(elements[`${other}Panel`].hidden, other !== name);
-      assert.equal(elements[`${other}Tab`].attributes['aria-selected'], String(other === name));
-      assert.equal(elements[`${other}Tab`].tabIndex, other === name ? 0 : -1);
-    }
-    assert.equal(elements.settingsPanel.hidden, false);
-    assert.equal(elements.playerPanel.hidden, true);
-  }
   elements.appearanceTab.listeners.get('click')();
   elements.settingsTab.listeners.get('click')();
-  assert.equal(elements.voiceSettingsPanel.hidden, false);
-  for (const [from, key, target] of [
-    ['voiceSettings', 'ArrowRight', 'aiSettings'],
-    ['aiSettings', 'ArrowLeft', 'voiceSettings'],
-    ['voiceSettings', 'Home', 'aiSettings'],
-    ['aiSettings', 'End', 'voiceSettings'],
-  ]) {
-    let prevented = false;
-    elements[`${from}Tab`].listeners.get('keydown')({ key, preventDefault() { prevented = true; } });
-    assert.equal(prevented, true);
-    assert.equal(elements[`${target}Panel`].hidden, false);
-    assert.equal(elements[`${target}Tab`].focused, true);
-  }
+  assert.equal(elements.settingsPanel.hidden, false);
+  assert.equal(elements.playerPanel.hidden, true);
   assert.equal(elements.aiKey.value, 'unsaved-draft');
   assert.deepEqual(messages, []);
 });
@@ -235,7 +214,16 @@ test('inline translations toggle hydrates, previews and saves immediately', asyn
   elements.inlineTranslations.checked = false;
   elements.inlineTranslations.listeners.get('change')();
   assert.deepEqual(messages.filter((message) => message.type === 'dualCaptions.state.patch').at(-1).patch, { inlineTranslations: false });
-  assert.equal(elements.subtitlePreview.textContent, 'One line at a time.');
+  assert.equal(elements.subtitlePreview.children.at(-1).textContent, 'One line at a time.');
+  messages.length = 0;
+  for (const [key, value] of [['pinyinFontSize', 32], ['translationFontSize', 21], ['inlineTranslationFontSize', 15]]) {
+    elements[key].value = value;
+    elements[key].listeners.get('input')();
+    assert.equal(elements[`${key}Value`].value, `${value}px`);
+  }
+  assert.deepEqual(messages.filter((message) => message.type === 'dualCaptions.state.patch').map((message) => message.patch), [
+    { pinyinFontSize: 32 }, { translationFontSize: 21 }, { inlineTranslationFontSize: 15 },
+  ]);
 });
 
 test('English button downloads and selects its language instead of the previous track', async () => {
@@ -301,7 +289,7 @@ test('production popup startup performs read-only hydration and never overwrites
         }
         if (message.type === 'dualCaptions.player.get') return { ok: true, data: { players: [] } };
         if (message.type === 'dualCaptions.ai.get') return { ok: true, data: { hasApiKey: false } };
-        if (message.type === 'dualCaptions.speech.settings.get') return { ok: true, data: { settings: { rate: 0.8 } } };
+
         throw new Error(`Unexpected startup write: ${message.type}`);
       },
     },
@@ -314,14 +302,14 @@ test('production popup startup performs read-only hydration and never overwrites
   assert.deepEqual(messages.map((message) => message.type).sort(), [
     'dualCaptions.ai.get',
     'dualCaptions.player.get',
-    'dualCaptions.speech.settings.get',
+
     'dualCaptions.state.get',
   ]);
   assert.equal(messages.find((message) => message.type === 'dualCaptions.state.get').pageKey, 'https://video.example/episode-1');
   assert.equal(document.elements.controls.hidden, false);
   assert.equal(document.elements.fontSize.value, 29);
   assert.equal(messages.find((message) => message.type === 'dualCaptions.player.get').cachedOnly, true);
-  assert.equal(document.elements.status.textContent, 'Нажмите «Включить субтитры» на странице с видео.');
+  assert.equal(document.elements.status.textContent, '');
 });
 
 test('rapid appearance input is sent before popup teardown and survives late hydration', async () => {
@@ -677,6 +665,6 @@ test('popup teardown does not schedule selection from an unfinished local import
   const track = messages.find((message) => message.track).track;
   stored.resolve({ state: { externalTracks: [track] } });
   await tick();
-  assert.equal(messages.some((message) => message.type === 'dualCaptions.state.patch'), false);
+  assert.equal(messages.some((message) => message.patch?.secondTrackId), false);
 });
 
