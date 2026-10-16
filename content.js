@@ -799,7 +799,7 @@
           if (state.settings.showOriginalWithInline) {
             const original = document.createElement('div');
             original.className = 'dual-captions-sentence-original';
-            original.textContent = descriptor.displayText;
+            original.textContent = descriptor.characters || descriptor.displayText;
             original.style.cssText = 'margin-top:.18em;white-space:pre-line;overflow-wrap:anywhere;';
             target.append(original);
             state.originalLine = original;

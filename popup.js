@@ -214,7 +214,9 @@ function drawPreview() {
     const original = document.createElement('span');
     original.className = 'dual-captions-sentence-original';
     original.style.cssText = 'display:block;margin-top:.18em;';
-    original.textContent = chinese ? 'nǐ hǎo, shì jiè!' : 'One line at a time.';
+    original.textContent = chinese
+      ? (settings.inlineTranslations ? '你好，世界！' : 'nǐ hǎo, shì jiè!')
+      : 'One line at a time.';
     preview.append(original);
   }
   const rgb = [1, 3, 5].map((index) => parseInt(settings.subtitleBackgroundColor.slice(index, index + 2), 16));

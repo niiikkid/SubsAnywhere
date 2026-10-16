@@ -319,7 +319,7 @@ test('inline translations toggle reuses cached glossary for English and pinyin',
     listener({ type: 'dualCaptions.content.settings', settings: { ...settings, showOriginalWithInline: true } }, {}, () => {});
     const withOriginalTarget = chinese ? caption.children[0] : caption;
     assert.equal(withOriginalTarget.children.at(-1).className, 'dual-captions-sentence-original');
-    assert.equal(withOriginalTarget.children.at(-1).textContent, source);
+    assert.equal(withOriginalTarget.children.at(-1).textContent, chinese ? '你好，世界' : source);
     listener({ type: 'dualCaptions.content.settings', settings: { ...settings, inlineTranslations: false } }, {}, () => {});
     assert.notEqual(caption.children[0].className, 'dual-captions-inline');
     const plainTarget = chinese ? caption.children[0] : caption;
