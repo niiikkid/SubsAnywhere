@@ -140,6 +140,26 @@ async function makeHarness() {
   return { context, runtimeSource, contentSource, document, reports, onMessage, observers, scheduled };
 }
 
+test('YouTube navigation clears previous external captions before rendering the reused video', async () => {
+  const harness = await makeHarness();
+  harness.context.location.href = 'https://www.youtube.com/watch?v=abcdefghijk';
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const controller = harness.context.__dualCaptionsControllerV3;
+  controller.handle({ type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'external:previous' },
+    externalTracks: [{ id: 'previous', cues: [{ start: 1, end: 2, text: 'Wrong video captions' }] }],
+  });
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  assert.notEqual(overlay.style.display, 'none');
+  harness.context.location.href = 'https://www.youtube.com/watch?v=repevhXG7W0';
+  harness.document.videos[0].dispatch('timeupdate');
+  assert.equal(overlay.style.display, 'none');
+  assert.equal(overlay.children.find((child) => child.className === 'subs-anywhere-original').textContent, '');
+  assert.equal(harness.reports.at(-1).player.frameUrl, harness.context.location.href);
+  controller.destroy();
+});
+
 test('caption copy selects exact original, full translation and corrected Chinese pinyin without more AI calls', async () => {
   for (const chinese of [false, true]) {
     for (const inlineTranslations of [false, true]) {

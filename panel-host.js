@@ -28,6 +28,7 @@
   let dockedHeight = 760;
   let drag = null;
   let saveTimer;
+  let pageUrl = location.href.split('#')[0];
 
   const STYLE = `
     :host {
@@ -218,6 +219,13 @@
   }
 
   function syncPlacement(preferredRect = null) {
+    const nextPageUrl = location.href.split('#')[0];
+    if (nextPageUrl !== pageUrl) {
+      pageUrl = nextPageUrl;
+      // YouTube reuses the document and iframe when changing videos.
+      // Recreate the popup context, including pending polls and optimistic edits.
+      if (frame) frame.src = chrome.runtime.getURL('popup.html?embedded=1');
+    }
     if (!visible || !host) return;
     const sidebar = youtubeSidebar();
     const flexy = watchFlexy();
@@ -397,6 +405,7 @@
   });
 
   document.addEventListener('yt-navigate-finish', () => syncPlacement(), true);
+  window.addEventListener('popstate', () => syncPlacement());
   document.addEventListener('fullscreenchange', () => syncPlacement());
   document.addEventListener('webkitfullscreenchange', () => syncPlacement());
   window.addEventListener('resize', () => {

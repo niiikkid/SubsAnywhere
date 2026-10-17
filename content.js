@@ -67,6 +67,18 @@
     let translationTimer;
     let lifecycle = 0;
     let destroyed = false;
+    let pageUrl = location.href.split('#')[0];
+
+    function syncPage() {
+      const nextPageUrl = location.href.split('#')[0];
+      if (nextPageUrl === pageUrl) return false;
+      pageUrl = nextPageUrl;
+      handle({ type: MESSAGE.CONTENT_RESET });
+      localBuiltInTracks.clear();
+      cachedBuiltInSelections.clear();
+      cachingBuiltInSelections.clear();
+      return true;
+    }
 
     function cancelPendingWork() {
       lifecycle += 1;
@@ -971,6 +983,10 @@
     }
 
     function render() {
+      if (syncPage()) {
+        const { video, index } = manager.current();
+        if (video) void report(video, index);
+      }
       const { video } = manager.current();
       if (!video || !state.active || destroyed) {
         if (state.root) state.root.style.display = 'none';
@@ -1002,6 +1018,7 @@
     }
 
     function report(video, videoIndex) {
+      syncPage();
       let sourceName = '';
       try {
         sourceName = decodeURIComponent(new URL(video.currentSrc || video.src || '', location.href).pathname.split('/').pop() || '');
@@ -1037,6 +1054,7 @@
     }
 
     function handle(message) {
+      syncPage();
       if (message?.type === MESSAGE.PLAYER_DISCOVER) {
         const { video, index } = manager.current();
         return video && !destroyed ? report(video, index) : { ok: false };
@@ -1112,6 +1130,8 @@
         }
       }],
       [window, 'resize', positionOverlay],
+      [document, 'yt-navigate-finish', () => { if (syncPage()) discover(); }],
+      [window, 'popstate', () => { if (syncPage()) discover(); }],
       [window, 'scroll', positionOverlay, true],
       [document, 'fullscreenchange', positionOverlay],
       [document, 'webkitfullscreenchange', positionOverlay],
