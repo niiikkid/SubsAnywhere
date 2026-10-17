@@ -1,5 +1,5 @@
 import { parseSrt } from './caption-core.js';
-import { localSubtitleTrack, youtubeVideoId } from './local-subtitles-client.js';
+import { isLocalSubtitleTrack, localSubtitleTrack, subtitleTrackMatchesVideo, youtubeVideoId } from './local-subtitles-client.js';
 import { canonicalPageKey } from './page-context.js';
 import {
   choosePlayer,
@@ -106,6 +106,10 @@ function setupEmbeddedPanel() {
 
 function adoptState(value) {
   state = patchSettings(normalizeState(value), editedSettings);
+  const rejectedIds = new Set(state.externalTracks.filter((track) => isLocalSubtitleTrack(track)
+    && !subtitleTrackMatchesVideo(track, youtubeId)).map((track) => `external:${track.id}`));
+  state.externalTracks = state.externalTracks.filter((track) => !rejectedIds.has(`external:${track.id}`));
+  if (rejectedIds.has(state.settings.secondTrackId)) state.settings.secondTrackId = '';
   for (const [id, timing] of editedTiming) state = updateExternalTrackTiming(state, id, timing);
 }
 
@@ -243,10 +247,10 @@ function youtubeFailure(error, epoch = youtubeEpoch) {
 
 function savedLanguageTrack(language) {
   const matching = state.externalTracks.filter((track) => !isBuiltInCacheTrack(track)
-    && track.language === language && track.cues?.length);
+    && subtitleTrackMatchesVideo(track, youtubeId) && track.language === language && track.cues?.length);
   return matching.find((track) => track.id === `youtube-${youtubeId}-youtube-${language}`)
     ?? matching.find((track) => track.id === `youtube-${youtubeId}-youtube`)
-    ?? matching[0];
+    ?? null;
 }
 
 function drawLanguageTracks() {
@@ -554,11 +558,12 @@ async function installLocalSubtitle(payload, selectTrack = false, selectionAtSta
   if (popupClosed) return false;
   const epoch = youtubeEpoch;
   if (payload?.status !== 'ready' || typeof payload.srt !== 'string') return false;
+  if (payload.videoId !== youtubeId) throw new Error('Субтитры относятся к другому видео');
   if (payload.srt.length > 5 * 1024 * 1024) throw new Error('Локальный файл субтитров слишком большой');
   const cues = parseSrt(payload.srt);
   if (!cues.length) throw new Error('Локальный сервер вернул пустые субтитры');
   const source = payload.source === 'generated' ? 'generated' : 'youtube';
-  const track = localSubtitleTrack(youtubeId, source, cues, payload.language);
+  const track = localSubtitleTrack(payload.videoId, source, cues, payload.language);
   const revision = selectionRevision;
   const shouldSelect = (selectTrack && selectionAtStart === selectionRevision)
     || (!state.settings.secondTrackId && !Object.hasOwn(editedSettings, 'secondTrackId'));
@@ -581,8 +586,12 @@ async function installLocalSubtitle(payload, selectTrack = false, selectionAtSta
 
 async function pollExistingSubtitle(epoch, language, selectionAtStart) {
   if (popupClosed || epoch !== youtubeEpoch) return;
-  const result = await request(MESSAGE.LOCAL_SUBTITLE_EXISTING, { videoId: youtubeId, language });
+  const videoId = youtubeId;
+  const result = await request(MESSAGE.LOCAL_SUBTITLE_EXISTING, { tabId, pageKey, videoId, language });
   if (popupClosed || epoch !== youtubeEpoch) return;
+  if (videoId !== youtubeId || (result.videoId && result.videoId !== videoId)) {
+    throw new Error('Субтитры относятся к другому видео');
+  }
   if (result.status === 'running') {
     setYoutubeStatus('Скачиваю субтитры…', false, 'loading');
     youtubePollTimer = setTimeout(() => pollExistingSubtitle(epoch, language, selectionAtStart)
@@ -590,7 +599,7 @@ async function pollExistingSubtitle(epoch, language, selectionAtStart) {
     return;
   }
   if (result.status === 'error') throw new Error(result.error || 'Не удалось скачать дорожку YouTube');
-  const existingReady = await installLocalSubtitle(result, true, selectionAtStart);
+  const existingReady = await installLocalSubtitle({ ...result, videoId }, true, selectionAtStart);
   if (popupClosed || epoch !== youtubeEpoch) return;
   downloadingLanguage = '';
   if (existingReady) setYoutubeStatus('');

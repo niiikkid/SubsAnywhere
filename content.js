@@ -27,6 +27,7 @@
       active: false,
       settings: runtime.normalizeSettings(),
       externalTracks: [],
+      videoId: '',
       root: null,
       second: null,
       dragHandle: null,
@@ -68,6 +69,25 @@
     let lifecycle = 0;
     let destroyed = false;
     let pageUrl = location.href.split('#')[0];
+
+    function pageVideoId() {
+      const url = new URL(location.href);
+      const host = url.hostname.replace(/^www\./, '');
+      let id = '';
+      if (host === 'youtu.be') id = url.pathname.split('/')[1] || '';
+      else if (host === 'youtube.com' || host === 'm.youtube.com') {
+        id = url.pathname === '/watch' ? url.searchParams.get('v') : url.pathname.match(/^\/(?:embed|shorts)\/([^/]+)$/)?.[1];
+      }
+      return /^[A-Za-z0-9_-]{11}$/.test(id || '') ? id : '';
+    }
+
+    function currentExternalTrack(id) {
+      const track = state.externalTracks.find((item) => `external:${item.id}` === id);
+      if (!track || (track.sourceType !== 'local-server' && !/^youtube-/.test(track.id))) return track;
+      const videoId = pageVideoId() || state.videoId;
+      const source = /^youtube-([A-Za-z0-9_-]{11})-(?:youtube|generated)(?:-(?:en|zh))?$/.exec(track.id);
+      return videoId && source?.[1] === videoId && (!track.sourceVideoId || track.sourceVideoId === videoId) ? track : null;
+    }
 
     function syncPage() {
       const nextPageUrl = location.href.split('#')[0];
@@ -571,7 +591,7 @@
     function futureCaptionTexts(id, fallbackId, video) {
       if (!id) return [];
       if (id.startsWith('external:')) {
-        const external = state.externalTracks.find((track) => `external:${track.id}` === id);
+        const external = currentExternalTrack(id);
         if (!external) return [];
         const scale = Number(external.timeScale) > 0 ? Number(external.timeScale) : 1;
         const sourceTime = (video.currentTime - Number(external.offsetSeconds || 0)) / scale;
@@ -859,7 +879,7 @@
     function selectedText(id, fallbackId, video) {
       if (!id) return '';
       if (id.startsWith('external:')) {
-        const external = state.externalTracks.find((track) => `external:${track.id}` === id);
+        const external = currentExternalTrack(id);
         return external
           ? runtime.cueTextAt(external.cues, video.currentTime, external.offsetSeconds, external.timeScale)
           : '';
@@ -1055,6 +1075,11 @@
 
     function handle(message) {
       syncPage();
+      if ([MESSAGE.CONTENT_FULL_STATE, MESSAGE.CONTENT_SETTINGS, MESSAGE.CONTENT_TRACKS].includes(message?.type)) {
+        const currentVideoId = pageVideoId();
+        if (currentVideoId && message.videoId !== currentVideoId) return { ok: false };
+        state.videoId = message.videoId || '';
+      }
       if (message?.type === MESSAGE.PLAYER_DISCOVER) {
         const { video, index } = manager.current();
         return video && !destroyed ? report(video, index) : { ok: false };
@@ -1088,6 +1113,7 @@
         restoreModes(video);
         state.settings = runtime.normalizeSettings();
         state.externalTracks = [];
+        state.videoId = '';
         state.active = false;
         state.renderedCaptionKey = '';
         state.renderedCaptionItems = null;

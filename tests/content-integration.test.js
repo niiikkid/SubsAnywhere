@@ -140,13 +140,34 @@ async function makeHarness() {
   return { context, runtimeSource, contentSource, document, reports, onMessage, observers, scheduled };
 }
 
+test('YouTube rejects late state from a different video and never renders a foreign managed track', async () => {
+  const harness = await makeHarness();
+  harness.context.location.href = 'https://www.youtube.com/watch?v=repevhXG7W0';
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const controller = harness.context.__dualCaptionsControllerV3;
+  const wrong = { id: 'youtube-eXkFIwKSCjk-youtube-zh', sourceType: 'local-server',
+    cues: [{ start: 1, end: 2, text: 'Wrong video captions' }] };
+  for (const type of ['dualCaptions.content.fullState', 'dualCaptions.content.tracks', 'dualCaptions.content.settings']) {
+    assert.equal(controller.handle({ type, videoId: 'eXkFIwKSCjk',
+      settings: { secondTrackId: `external:${wrong.id}` }, externalTracks: [wrong] }).ok, false);
+  }
+  controller.handle({ type: 'dualCaptions.content.fullState', videoId: 'repevhXG7W0',
+    settings: { secondTrackId: `external:${wrong.id}` }, externalTracks: [wrong] });
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  const caption = overlay.children.find((child) => child.className === 'subs-anywhere-original');
+  assert.equal(caption.style.display, 'none');
+  assert.equal(harness.reports.some((message) => message.type === 'dualCaptions.caption.translate'), false);
+  controller.destroy();
+});
+
 test('YouTube navigation clears previous external captions before rendering the reused video', async () => {
   const harness = await makeHarness();
   harness.context.location.href = 'https://www.youtube.com/watch?v=abcdefghijk';
   vm.runInContext(harness.runtimeSource, harness.context);
   vm.runInContext(harness.contentSource, harness.context);
   const controller = harness.context.__dualCaptionsControllerV3;
-  controller.handle({ type: 'dualCaptions.content.fullState',
+  controller.handle({ type: 'dualCaptions.content.fullState', videoId: 'abcdefghijk',
     settings: { secondTrackId: 'external:previous' },
     externalTracks: [{ id: 'previous', cues: [{ start: 1, end: 2, text: 'Wrong video captions' }] }],
   });

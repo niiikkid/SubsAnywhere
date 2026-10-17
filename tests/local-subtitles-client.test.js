@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   LocalSubtitleClient,
   localSubtitleTrack,
+  subtitleTrackMatchesVideo,
   youtubeVideoId,
 } from '../local-subtitles-client.js';
 
@@ -20,10 +21,27 @@ test('localSubtitleTrack uses the original language and readable names', () => {
   assert.equal(track.language, 'en');
   assert.equal(track.name, 'Английские — YouTube');
   assert.equal(track.id, 'youtube-1evO3Nekrr8-youtube-en');
+  assert.equal(track.sourceVideoId, '1evO3Nekrr8');
   assert.deepEqual(track.cues, cues);
   assert.equal(localSubtitleTrack('1evO3Nekrr8', 'youtube', cues).language, 'en');
   assert.equal(localSubtitleTrack('0Zaxca2sUGs', 'youtube', [{ start: 0, end: 1, text: '你好' }], 'zh').name,
     'Китайские с пиньинем — YouTube');
+});
+
+test('managed subtitle identity rejects foreign, contradictory and unknown video origins', () => {
+  const track = localSubtitleTrack('repevhXG7W0', 'youtube', [], 'zh');
+  assert.equal(subtitleTrackMatchesVideo(track, 'repevhXG7W0'), true);
+  assert.equal(subtitleTrackMatchesVideo(track, 'eXkFIwKSCjk'), false);
+  assert.equal(subtitleTrackMatchesVideo({ ...track, sourceVideoId: 'eXkFIwKSCjk' }, 'repevhXG7W0'), false);
+  assert.equal(subtitleTrackMatchesVideo({ id: 'imported-file' }, 'repevhXG7W0'), false);
+  assert.equal(subtitleTrackMatchesVideo({ id: 'youtube-repevhXG7W0-youtube' }, 'repevhXG7W0'), true);
+});
+
+test('local responses cannot claim a different video than the request', async () => {
+  const client = new LocalSubtitleClient(async () => ({ ok: true,
+    json: async () => ({ status: 'ready', video_id: 'eXkFIwKSCjk', srt: '1\n00:00:00,000 --> 00:00:01,000\nWrong\n' }),
+  }));
+  await assert.rejects(() => client.existing('repevhXG7W0', 'zh'), /другого видео/);
 });
 
 test('localSubtitleTrack keeps English and Chinese tracks for the same video and source distinct', () => {

@@ -1,4 +1,5 @@
 import { canonicalPageKey } from './page-context.js';
+import { isLocalSubtitleTrack, subtitleTrackMatchesVideo, youtubeVideoId } from './local-subtitles-client.js';
 import { MESSAGE, failure, ok } from './protocol.js';
 
 const CONTENT_SCRIPT_ID = 'dual-captions-player-discovery-v1';
@@ -182,6 +183,12 @@ export class BackgroundController {
   }
 
   async #dispatch(message, sender) {
+      if (message.pageKey && Number.isInteger(message.tabId)) await this.#assertCurrentPage(message);
+      if ([MESSAGE.TRACK_ADD, MESSAGE.TRACK_UPSERT_LOCAL].includes(message.type)
+        && (message.type === MESSAGE.TRACK_UPSERT_LOCAL || isLocalSubtitleTrack(message.track))
+        && !subtitleTrackMatchesVideo(message.track, youtubeVideoId(this.#pageKey(message, sender)))) {
+        throw new Error('Субтитры относятся к другому видео');
+      }
       switch (message?.type) {
         case MESSAGE.PLAYER_REPORT:
           if (!sender.tab?.id && sender.tab?.id !== 0) throw new Error('Player report has no tab');
@@ -241,7 +248,13 @@ export class BackgroundController {
 
         case MESSAGE.LOCAL_SUBTITLE_EXISTING:
           if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');
-          return ok(await this.#localSubtitles.existing(message.videoId, message.language));
+          if (!Number.isInteger(message.tabId) || !message.pageKey
+            || youtubeVideoId(message.pageKey) !== message.videoId) throw new Error('Страница видео изменилась');
+          {
+            const result = await this.#localSubtitles.existing(message.videoId, message.language);
+            await this.#assertCurrentPage(message);
+            return ok({ ...result, videoId: message.videoId });
+          }
 
         default:
           throw new Error(`Unknown message: ${message?.type ?? 'empty'}`);
@@ -275,6 +288,14 @@ export class BackgroundController {
     const tabId = message?.tabId ?? sender?.tab?.id;
     const raw = message?.pageKey || sender?.tab?.url || this.#tabPageKeys.get(tabId) || `https://local.invalid/tab/${tabId ?? 'unknown'}`;
     return canonicalPageKey(raw);
+  }
+
+  async #assertCurrentPage(message) {
+    if (!this.#chrome.tabs.get) return;
+    const tab = await this.#chrome.tabs.get(message.tabId);
+    if (!tab.url || canonicalPageKey(tab.url) !== canonicalPageKey(message.pageKey)) {
+      throw new Error('Страница видео изменилась. Обновите панель');
+    }
   }
 
   async #contentPageKey(message, sender) {
@@ -325,6 +346,7 @@ export class BackgroundController {
           } catch { /* The replaced document may already be gone. */ }
         }
         await this.#send(tabId, replacement.frameId, {
+          videoId: youtubeVideoId(pageKey),
           type: MESSAGE.CONTENT_FULL_STATE, settings: next.settings, externalTracks: next.externalTracks,
         });
       }
@@ -413,6 +435,7 @@ export class BackgroundController {
     const selected = this.#selectedPlayer(tabId, state)?.frameId === frameId;
     const restored = selected
       ? await this.#send(tabId, frameId, {
+        videoId: youtubeVideoId(pageKey),
         type: MESSAGE.CONTENT_FULL_STATE,
         settings: state.settings,
         externalTracks: state.externalTracks,
@@ -438,6 +461,7 @@ export class BackgroundController {
       await this.#send(message.tabId, previousFrame, { type: MESSAGE.CONTENT_RESET });
     }
     const delivered = await this.#send(message.tabId, player.frameId, {
+      videoId: youtubeVideoId(pageKey),
       type: MESSAGE.CONTENT_FULL_STATE,
       settings: state.settings,
       externalTracks: state.externalTracks,
@@ -453,6 +477,7 @@ export class BackgroundController {
       this.players(message.tabId),
     );
     const delivered = await this.#sendToSelected(message.tabId, state, {
+      videoId: youtubeVideoId(pageKey),
       type: MESSAGE.CONTENT_SETTINGS,
       settings: state.settings,
     });
@@ -469,6 +494,7 @@ export class BackgroundController {
       [player],
     );
     const delivered = await this.#send(tabId, frameId, {
+      videoId: youtubeVideoId(pageKey),
       type: MESSAGE.CONTENT_SETTINGS,
       settings: state.settings,
     });
@@ -479,6 +505,7 @@ export class BackgroundController {
     await this.#adoptPage(tabId, pageKey);
     const state = await mutation();
     const delivered = await this.#sendToSelected(tabId, state, {
+      videoId: youtubeVideoId(pageKey),
       type: MESSAGE.CONTENT_TRACKS,
       settings: state.settings,
       externalTracks: state.externalTracks,
@@ -596,14 +623,21 @@ export class BackgroundController {
   }
 
   async #request(tabId, frameId, payload) {
+    if (payload.videoId && this.#chrome.tabs.get) {
+      const tab = await this.#chrome.tabs.get(tabId);
+      if (youtubeVideoId(tab.url) !== payload.videoId) throw new Error('Страница видео изменилась');
+    }
+    if (payload.externalTracks) payload = { ...payload, externalTracks: payload.externalTracks.filter((track) => (
+      !isLocalSubtitleTrack(track) || subtitleTrackMatchesVideo(track, payload.videoId)
+    )) };
     const documentId = this.players(tabId).find((player) => player.frameId === frameId)?.documentId;
     return this.#chrome.tabs.sendMessage(tabId, payload, { frameId, ...(documentId ? { documentId } : {}) });
   }
 
   async #send(tabId, frameId, payload) {
     try {
-      await this.#request(tabId, frameId, payload);
-      return true;
+      const reply = await this.#request(tabId, frameId, payload);
+      return reply?.ok !== false;
     } catch {
       return false;
     }

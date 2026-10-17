@@ -39,6 +39,16 @@ export function youtubeVideoId(rawUrl) {
   }
 }
 
+export function isLocalSubtitleTrack(track) {
+  return track?.sourceType === 'local-server' || /^youtube-/.test(track?.id || '');
+}
+
+export function subtitleTrackMatchesVideo(track, videoId) {
+  const match = /^youtube-([A-Za-z0-9_-]{11})-(?:youtube|generated)(?:-(?:en|zh))?$/.exec(track?.id || '');
+  return Boolean(VIDEO_ID_PATTERN.test(videoId || '') && match?.[1] === videoId
+    && (!track.sourceVideoId || track.sourceVideoId === videoId));
+}
+
 export function localSubtitleTrack(videoId, source, cues, language = '') {
   const safeId = assertVideoId(videoId);
   const safeSource = 'youtube';
@@ -54,6 +64,7 @@ export function localSubtitleTrack(videoId, source, cues, language = '') {
     offsetSeconds: 0,
     timeScale: 1,
     sourceType: 'local-server',
+    sourceVideoId: safeId,
   };
 }
 
@@ -107,6 +118,10 @@ export class LocalSubtitleClient {
       || (payload.status === 'ready' && (typeof payload.srt !== 'string' || !payload.srt.trim()))) {
       throw new Error('Локальный сервер вернул неверный ответ');
     }
+    if ((payload.videoId && payload.videoId !== safeId) || (payload.video_id && payload.video_id !== safeId)) {
+      throw new Error('Сервер вернул субтитры другого видео');
+    }
+    payload = { ...payload, videoId: safeId };
     return payload.status === 'error'
       ? { ...payload, error: SERVER_ERRORS[payload.error_code] || payload.error || 'Не удалось обработать видео' }
       : payload;

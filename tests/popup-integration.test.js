@@ -234,6 +234,23 @@ test('inline translations toggle hydrates, previews and saves immediately', asyn
   assert.deepEqual(messages.filter((message) => message.type === 'dualCaptions.state.patch').at(-1).patch, { showOriginalWithInline: true });
 });
 
+test('YouTube never treats another video or an arbitrary imported file as its saved language track', async () => {
+  for (const id of ['youtube-eXkFIwKSCjk-youtube-zh', 'imported-file']) {
+    const { elements, messages } = await bootPopup({
+      'dualCaptions.state.get': () => ({ state: {
+        settings: {}, externalTracks: [{ id, language: 'zh', cues: [{ start: 0, end: 1, text: 'Unrelated' }] }],
+      } }),
+      'dualCaptions.localSubtitle.existing': () => ({ status: 'missing' }),
+    }, { id: 77, url: 'https://www.youtube.com/watch?v=repevhXG7W0' });
+    assert.equal(elements.chineseSubtitleState.textContent, 'Скачать и показать');
+    elements.chineseSubtitles.listeners.get('click')();
+    await tick();
+    await tick();
+    assert.equal(messages.find((m) => m.type === 'dualCaptions.localSubtitle.existing').videoId, 'repevhXG7W0');
+    assert.equal(messages.some((m) => m.patch?.secondTrackId === `external:${id}`), false);
+  }
+});
+
 test('English button downloads and selects its language instead of the previous track', async () => {
   const { elements, messages } = await bootPopup({
     'dualCaptions.state.get': () => ({ state: { settings: { secondTrackId: 'external:generated-old' } } }),

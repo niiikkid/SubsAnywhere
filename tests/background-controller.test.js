@@ -1163,6 +1163,40 @@ test('top-page navigation resets the old frame before a new page can reuse its s
   assert.deepEqual(controller.players(9), []);
 });
 
+test('YouTube rejects a stale popup before it can write tracks or start a paid download', async () => {
+  const chrome = makeChrome();
+  chrome.tabs.get = async () => ({ url: 'https://www.youtube.com/watch?v=repevhXG7W0' });
+  const store = new FakeStore();
+  let downloads = 0;
+  const controller = new BackgroundController(chrome, store, {
+    localSubtitles: { async existing() { downloads += 1; return { status: 'missing' }; } },
+  });
+  const before = structuredClone(store.state);
+  for (const type of [MESSAGE.STATE_PATCH, MESSAGE.TRACK_UPSERT_LOCAL, MESSAGE.LOCAL_SUBTITLE_EXISTING]) {
+    const response = await controller.handle({ type, tabId: 77,
+      pageKey: 'https://www.youtube.com/watch?v=eXkFIwKSCjk', videoId: 'eXkFIwKSCjk',
+      patch: { secondTrackId: 'external:wrong' },
+      track: { id: 'youtube-eXkFIwKSCjk-youtube-zh', sourceType: 'local-server', cues: [{ start: 0, end: 1, text: 'Wrong' }] },
+    });
+    assert.equal(response.ok, false, type);
+  }
+  assert.equal(downloads, 0);
+  assert.deepEqual(store.state, before);
+});
+
+test('YouTube rejects a managed track whose video differs from the destination page', async () => {
+  const chrome = makeChrome();
+  chrome.tabs.get = async () => ({ url: 'https://www.youtube.com/watch?v=repevhXG7W0' });
+  const store = new FakeStore();
+  const controller = new BackgroundController(chrome, store);
+  const response = await controller.handle({ type: MESSAGE.TRACK_UPSERT_LOCAL, tabId: 77,
+    pageKey: 'https://www.youtube.com/watch?v=repevhXG7W0',
+    track: { id: 'youtube-eXkFIwKSCjk-youtube-zh', sourceType: 'local-server', cues: [{ start: 0, end: 1, text: 'Wrong' }] },
+  });
+  assert.equal(response.ok, false);
+  assert.equal(store.state.externalTracks.length, 0);
+});
+
 test('background forwards explicit YouTube subtitle actions to the local client', async () => {
   const calls = [];
   const localSubtitles = {
@@ -1170,7 +1204,8 @@ test('background forwards explicit YouTube subtitle actions to the local client'
   };
   const controller = new BackgroundController(makeChrome(), new FakeStore(), { localSubtitles });
 
-  const existing = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_EXISTING, videoId: 'rwnyaH6cTDE' });
+  const existing = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_EXISTING, tabId: 5,
+    pageKey: 'https://www.youtube.com/watch?v=rwnyaH6cTDE', videoId: 'rwnyaH6cTDE' });
 
   assert.equal(existing.ok, true);
   assert.deepEqual(calls, [
