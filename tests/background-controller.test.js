@@ -1197,6 +1197,72 @@ test('YouTube rejects a managed track whose video differs from the destination p
   assert.equal(store.state.externalTracks.length, 0);
 });
 
+test('failed YouTube downloads fall back to the matching page language without another paid request', async () => {
+  for (const language of ['en', 'zh']) {
+    for (const failure of ['error', 'missing', 'network']) {
+      const chrome = makeChrome();
+      const pageKey = 'https://www.youtube.com/watch?v=repevhXG7W0';
+      chrome.tabs.get = async () => ({ url: pageKey });
+      let paid = 0;
+      const pageReads = [];
+      chrome.scripting.executeScript = async (options) => {
+        pageReads.push(options);
+        return [{ frameId: 0, result: { status: 'ready', videoId: 'repevhXG7W0', language,
+          captionBody: JSON.stringify({ events: [{ tStartMs: 1000, dDurationMs: 2000, segs: [{ utf8: language === 'zh' ? '你好' : 'Hello' }] }] }),
+        } }];
+      };
+      const controller = new BackgroundController(chrome, new FakeStore(), { localSubtitles: {
+        async existing() { paid += 1; if (failure === 'network') throw new Error('Server offline'); return { status: failure, error: 'Provider failed' }; },
+      } });
+      const result = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_EXISTING, tabId: 77,
+        pageKey, videoId: 'repevhXG7W0', language });
+      assert.equal(result.ok, true);
+      assert.equal(result.data.status, 'ready');
+      assert.equal(result.data.source, 'youtube-page');
+      assert.equal(result.data.videoId, 'repevhXG7W0');
+      assert.equal(result.data.language, language);
+      assert.match(result.data.srt, /00:00:01,000 --> 00:00:03,000/);
+      assert.equal(paid, 1);
+      assert.equal(pageReads.length, 1);
+      assert.equal(pageReads[0].world, 'MAIN');
+      assert.deepEqual(pageReads[0].args, ['repevhXG7W0', language]);
+    }
+  }
+});
+
+test('YouTube page fallback does not replace pending API work or accept unsupported languages', async () => {
+  const chrome = makeChrome();
+  chrome.tabs.get = async () => ({ url: 'https://www.youtube.com/watch?v=repevhXG7W0' });
+  let primary = 0;
+  let reads = 0;
+  chrome.scripting.executeScript = async () => { reads += 1; return []; };
+  const controller = new BackgroundController(chrome, new FakeStore(), { localSubtitles: {
+    async existing() { primary += 1; return { status: 'running' }; },
+  } });
+  const message = { type: MESSAGE.LOCAL_SUBTITLE_EXISTING, tabId: 77,
+    pageKey: 'https://www.youtube.com/watch?v=repevhXG7W0', videoId: 'repevhXG7W0', language: 'zh' };
+  assert.equal((await controller.handle(message)).data.status, 'running');
+  assert.equal((await controller.handle({ ...message, language: 'ru' })).ok, false);
+  assert.equal(reads, 0);
+  assert.equal(primary, 1);
+});
+
+test('YouTube page fallback discards a result if the tab navigates while it is reading', async () => {
+  const chrome = makeChrome();
+  let url = 'https://www.youtube.com/watch?v=repevhXG7W0';
+  chrome.tabs.get = async () => ({ url });
+  chrome.scripting.executeScript = async () => {
+    url = 'https://www.youtube.com/watch?v=eXkFIwKSCjk';
+    return [{ frameId: 0, result: { status: 'ready', videoId: 'repevhXG7W0', language: 'zh', captionBody: '{}' } }];
+  };
+  const store = new FakeStore();
+  const controller = new BackgroundController(chrome, store, { localSubtitles: { async existing() { return { status: 'error' }; } } });
+  const result = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_EXISTING, tabId: 77,
+    pageKey: url, videoId: 'repevhXG7W0', language: 'zh' });
+  assert.equal(result.ok, false);
+  assert.equal(store.state.externalTracks.length, 0);
+});
+
 test('background forwards explicit YouTube subtitle actions to the local client', async () => {
   const calls = [];
   const localSubtitles = {
@@ -1205,7 +1271,7 @@ test('background forwards explicit YouTube subtitle actions to the local client'
   const controller = new BackgroundController(makeChrome(), new FakeStore(), { localSubtitles });
 
   const existing = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_EXISTING, tabId: 5,
-    pageKey: 'https://www.youtube.com/watch?v=rwnyaH6cTDE', videoId: 'rwnyaH6cTDE' });
+    pageKey: 'https://www.youtube.com/watch?v=rwnyaH6cTDE', videoId: 'rwnyaH6cTDE', language: 'zh' });
 
   assert.equal(existing.ok, true);
   assert.deepEqual(calls, [

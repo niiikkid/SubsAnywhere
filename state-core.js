@@ -254,7 +254,7 @@ export function addExternalTrack(state, track) {
 export function upsertManagedExternalTrack(state, track) {
   const current = normalizeState(state);
   const normalized = normalizeTrack(track);
-  if (!normalized || !normalized.cues.length || normalized.sourceType !== 'local-server') {
+  if (!normalized || !normalized.cues.length || !['local-server', 'youtube-page'].includes(normalized.sourceType)) {
     throw new Error('Managed external track is invalid');
   }
   const index = current.externalTracks.findIndex((existing) => existing.id === normalized.id);
@@ -262,7 +262,7 @@ export function upsertManagedExternalTrack(state, track) {
     return normalizeState({ ...current, externalTracks: [...current.externalTracks, normalized] });
   }
   const existing = current.externalTracks[index];
-  if (existing.sourceType !== 'local-server') {
+  if (!['local-server', 'youtube-page'].includes(existing.sourceType)) {
     throw new Error(`External track already exists: ${normalized.id}`);
   }
   const replacement = {

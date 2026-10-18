@@ -1,5 +1,6 @@
 import { canonicalPageKey } from './page-context.js';
 import { isLocalSubtitleTrack, subtitleTrackMatchesVideo, youtubeVideoId } from './local-subtitles-client.js';
+import { pageCaptionPayload, readYouTubePageCaptions } from './youtube-page-captions.js';
 import { MESSAGE, failure, ok } from './protocol.js';
 
 const CONTENT_SCRIPT_ID = 'dual-captions-player-discovery-v1';
@@ -127,6 +128,7 @@ export class BackgroundController {
   #tabPageKeys = new Map();
   #tabOperations = new Map();
   #playerRecoveries = new Map();
+  #youtubePageReads = new Map();
 
   constructor(chromeApi, store, options = {}) {
     this.#chrome = chromeApi;
@@ -247,18 +249,43 @@ export class BackgroundController {
 
 
         case MESSAGE.LOCAL_SUBTITLE_EXISTING:
-          if (!this.#localSubtitles) throw new Error('Локальный сервер субтитров недоступен');
           if (!Number.isInteger(message.tabId) || !message.pageKey
             || youtubeVideoId(message.pageKey) !== message.videoId) throw new Error('Страница видео изменилась');
-          {
-            const result = await this.#localSubtitles.existing(message.videoId, message.language);
-            await this.#assertCurrentPage(message);
-            return ok({ ...result, videoId: message.videoId });
-          }
+          if (!['en', 'zh'].includes(message.language)) throw new Error('Доступны только английские и китайские субтитры');
+          return ok(await this.#youtubeSubtitles(message));
 
         default:
           throw new Error(`Unknown message: ${message?.type ?? 'empty'}`);
       }
+  }
+
+  async #youtubeSubtitles(message) {
+    let result;
+    try {
+      result = await this.#localSubtitles?.existing(message.videoId, message.language);
+    } catch { /* A failed/offline download may use the open page, never a paid retry. */ }
+    await this.#assertCurrentPage(message);
+    if (result?.status === 'ready' || result?.status === 'running') {
+      if (result.videoId && result.videoId !== message.videoId) throw new Error('Субтитры относятся к другому видео');
+      return { ...result, videoId: message.videoId };
+    }
+    const key = `${message.tabId}:${message.videoId}:${message.language}`;
+    let pending = this.#youtubePageReads.get(key);
+    if (!pending) {
+      pending = (async () => {
+        await this.#assertCurrentPage(message);
+        const frames = await this.#chrome.scripting.executeScript({
+          target: { tabId: message.tabId, frameIds: [0] }, world: 'MAIN',
+          func: readYouTubePageCaptions, args: [message.videoId, message.language],
+        });
+        await this.#assertCurrentPage(message);
+        const page = frames.find((frame) => frame.frameId === 0)?.result;
+        if (!page) throw new Error('Не удалось получить субтитры из открытой вкладки YouTube');
+        return pageCaptionPayload(page, message.videoId, message.language);
+      })().finally(() => { if (this.#youtubePageReads.get(key) === pending) this.#youtubePageReads.delete(key); });
+      this.#youtubePageReads.set(key, pending);
+    }
+    return pending;
   }
 
   #authorize(message, sender) {

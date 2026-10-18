@@ -330,6 +330,18 @@ test('upsertManagedExternalTrack refreshes only a local-server track and keeps i
   assert.equal(next.externalTracks[0].timeScale, 1.01);
 });
 
+test('a saved YouTube page fallback persists without losing existing timing or video identity', () => {
+  const track = { id: 'youtube-repevhXG7W0-youtube-zh', sourceVideoId: 'repevhXG7W0',
+    sourceType: 'youtube-page', language: 'zh', cues: [{ start: 0, end: 1, text: '你好' }],
+    offsetSeconds: 2, timeScale: 1.02 };
+  const state = upsertManagedExternalTrack(normalizeState({}), track);
+  const next = upsertManagedExternalTrack(state, { ...track, cues: [{ start: 1, end: 2, text: '世界' }], offsetSeconds: 0, timeScale: 1 });
+  assert.equal(next.externalTracks[0].sourceType, 'youtube-page');
+  assert.equal(next.externalTracks[0].sourceVideoId, 'repevhXG7W0');
+  assert.equal(next.externalTracks[0].offsetSeconds, 2);
+  assert.equal(next.externalTracks[0].timeScale, 1.02);
+});
+
 test('upsertManagedExternalTrack never replaces a user-imported track with the same id', () => {
   const existing = {
     id: 'youtube-rwnyaH6cTDE-generated',

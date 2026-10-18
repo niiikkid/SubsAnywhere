@@ -261,7 +261,7 @@ function drawLanguageTracks() {
     button.disabled = !pageHydrated || !pageKey || Boolean(downloadingLanguage);
     button.setAttribute('aria-pressed', String(selected));
     $(`${prefix}SubtitleState`).textContent = downloadingLanguage === language ? 'Скачиваю…'
-      : selected ? 'Показываются' : track ? 'Сохранены · Показать'
+      : selected ? (track.sourceType === 'youtube-page' ? 'Со страницы · Показываются' : 'Показываются') : track ? 'Сохранены · Показать'
         : subtitleResults.get(language) || 'Скачать и показать';
   }
 }
@@ -282,6 +282,7 @@ function connectedPlayer() {
 
 function subtitleOrigin(track) {
   if (isBuiltInCacheTrack(track)) return 'Сохранены с сайта';
+  if (track?.sourceType === 'youtube-page') return 'Со страницы YouTube';
   if (track?.sourceType === 'local-server') return /-generated(?:-|$)/.test(track.id) ? 'Созданы из речи' : 'YouTube · Video Download API';
   return track ? 'Из файла SRT' : 'С сайта';
 }
@@ -562,7 +563,7 @@ async function installLocalSubtitle(payload, selectTrack = false, selectionAtSta
   if (payload.srt.length > 5 * 1024 * 1024) throw new Error('Локальный файл субтитров слишком большой');
   const cues = parseSrt(payload.srt);
   if (!cues.length) throw new Error('Локальный сервер вернул пустые субтитры');
-  const source = payload.source === 'generated' ? 'generated' : 'youtube';
+  const source = payload.source === 'youtube-page' ? 'page' : payload.source === 'generated' ? 'generated' : 'youtube';
   const track = localSubtitleTrack(payload.videoId, source, cues, payload.language);
   const revision = selectionRevision;
   const shouldSelect = (selectTrack && selectionAtStart === selectionRevision)
@@ -602,10 +603,10 @@ async function pollExistingSubtitle(epoch, language, selectionAtStart) {
   const existingReady = await installLocalSubtitle({ ...result, videoId }, true, selectionAtStart);
   if (popupClosed || epoch !== youtubeEpoch) return;
   downloadingLanguage = '';
-  if (existingReady) setYoutubeStatus('');
+  if (existingReady) setYoutubeStatus(result.source === 'youtube-page' ? 'Субтитры получены со страницы YouTube.' : '');
   else {
     subtitleResults.set(language, 'Нет субтитров');
-    setYoutubeStatus('Субтитров на этом языке нет.', true);
+    setYoutubeStatus(result.error || 'Субтитров на этом языке нет.', true);
   }
 }
 

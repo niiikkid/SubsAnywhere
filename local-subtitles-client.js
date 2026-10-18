@@ -40,7 +40,7 @@ export function youtubeVideoId(rawUrl) {
 }
 
 export function isLocalSubtitleTrack(track) {
-  return track?.sourceType === 'local-server' || /^youtube-/.test(track?.id || '');
+  return ['local-server', 'youtube-page'].includes(track?.sourceType) || /^youtube-/.test(track?.id || '');
 }
 
 export function subtitleTrackMatchesVideo(track, videoId) {
@@ -55,15 +55,16 @@ export function localSubtitleTrack(videoId, source, cues, language = '') {
   // Older servers have no language field; infer the label from their subtitle text.
   const safeLanguage = ['en', 'zh'].includes(language) ? language
     : cues.some((cue) => /\p{Script=Han}/u.test(cue.text)) ? 'zh' : 'en';
-  const label = safeLanguage === 'zh' ? 'Китайские с пиньинем' : 'Английские';
+  const fromPage = source === 'page';
+  const label = safeLanguage === 'zh' ? (fromPage ? 'Китайские' : 'Китайские с пиньинем') : 'Английские';
   return {
     id: `youtube-${safeId}-${safeSource}-${safeLanguage}`,
-    name: `${label} — YouTube`,
+    name: `${label} — ${fromPage ? 'со страницы YouTube' : 'YouTube'}`,
     language: safeLanguage,
     cues,
     offsetSeconds: 0,
     timeScale: 1,
-    sourceType: 'local-server',
+    sourceType: fromPage ? 'youtube-page' : 'local-server',
     sourceVideoId: safeId,
   };
 }

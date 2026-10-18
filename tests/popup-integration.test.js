@@ -251,6 +251,23 @@ test('YouTube never treats another video or an arbitrary imported file as its sa
   }
 });
 
+test('YouTube page fallback is imported, selected and labeled as a page track', async () => {
+  const { elements, messages } = await bootPopup({
+    'dualCaptions.localSubtitle.existing': () => ({ status: 'ready', videoId: 'repevhXG7W0',
+      source: 'youtube-page', language: 'zh', srt: '1\n00:00:01,000 --> 00:00:03,000\n你好\n' }),
+    'dualCaptions.track.upsertLocal': (message) => ({ state: { externalTracks: [message.track] } }),
+  }, { id: 77, url: 'https://www.youtube.com/watch?v=repevhXG7W0' });
+  elements.chineseSubtitles.listeners.get('click')();
+  await tick();
+  await tick();
+  const saved = messages.find((message) => message.type === 'dualCaptions.track.upsertLocal').track;
+  assert.equal(saved.sourceType, 'youtube-page');
+  assert.equal(saved.sourceVideoId, 'repevhXG7W0');
+  assert.equal(saved.language, 'zh');
+  assert.ok(messages.some((message) => message.patch?.secondTrackId === `external:${saved.id}`));
+  assert.match(elements.youtubeSubtitleStatus.textContent, /со страницы YouTube/);
+});
+
 test('English button downloads and selects its language instead of the previous track', async () => {
   const { elements, messages } = await bootPopup({
     'dualCaptions.state.get': () => ({ state: { settings: { secondTrackId: 'external:generated-old' } } }),
