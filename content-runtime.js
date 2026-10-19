@@ -1,5 +1,6 @@
 ((root) => {
   const cueIndexCache = new WeakMap();
+  const upcomingCueCache = new WeakMap();
   const PINYIN_MARKER = '\u2063';
   const SOURCE_MARKER = '\u2064';
 
@@ -168,22 +169,44 @@
     const seconds = Number(options.seconds);
     const limit = Number(options.limit);
     if (!Number.isFinite(now) || !Number.isFinite(seconds) || seconds <= 0 || !Number.isInteger(limit) || limit <= 0) return [];
-    const latestStart = now + seconds;
-    const unique = new Set();
-    return Array.from(cues ?? [])
-      .map((cue) => ({
-        start: Number(cue?.startTime ?? cue?.start),
-        text: cleanSubtitleText(cue?.text),
-      }))
-      .filter((cue) => Number.isFinite(cue.start) && cue.start > now && cue.start <= latestStart && cue.text)
-      .sort((left, right) => left.start - right.start)
-      .filter((cue) => {
-        if (unique.has(cue.text)) return false;
-        unique.add(cue.text);
-        return true;
-      })
-      .slice(0, limit)
-      .map((cue) => cue.text);
+    if (!cues || typeof cues !== 'object') return [];
+    let timeline = upcomingCueCache.get(cues);
+    if (!timeline || timeline.length !== cues.length) {
+      const normalized = Array.from(cues)
+        .map((cue) => ({
+          start: Number(cue?.startTime ?? cue?.start),
+          end: Number(cue?.endTime ?? cue?.end),
+          text: cleanSubtitleText(cue?.text),
+        }))
+        .filter((cue) => Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.end > cue.start && cue.text);
+      timeline = {
+        length: cues.length,
+        cues: normalized,
+        boundaries: [...new Set(normalized.flatMap((cue) => [cue.start, cue.end]))].sort((a, b) => a - b),
+      };
+      upcomingCueCache.set(cues, timeline);
+    }
+    const { boundaries } = timeline;
+    let low = 0;
+    let high = boundaries.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (boundaries[middle] <= now) low = middle + 1;
+      else high = middle;
+    }
+    const unique = new Set([cueTextAt(timeline.cues, now)]);
+    const texts = [];
+    for (let index = low; index + 1 < boundaries.length && boundaries[index] <= now + seconds; index += 1) {
+      // Prepare the exact displayed combination, including changes when an
+      // overlapping cue ends. Sample inside the interval, not its shared edge.
+      const time = boundaries[index] + (boundaries[index + 1] - boundaries[index]) / 2;
+      const text = cueTextAt(timeline.cues, time);
+      if (!text || unique.has(text)) continue;
+      unique.add(text);
+      texts.push(text);
+      if (texts.length >= limit) break;
+    }
+    return texts;
   }
 
   function isCaptionTrack(track) {

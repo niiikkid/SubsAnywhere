@@ -345,6 +345,22 @@ test('runtime returns the next three unique subtitle lines within a 30-second lo
   );
 });
 
+test('runtime prefetches displayed overlapping captions including changes at cue ends', async () => {
+  const runtime = await loadRuntime();
+  const cues = [
+    { start: 1, end: 4, text: "amazing that it couldn't do before." },
+    { start: 3, end: 6, text: "Uh but it's still somewhat confined to" },
+    { start: 5, end: 8, text: 'the digital realm.' },
+  ];
+  const expected = [3.5, 4.5, 5.5, 6.5].map((time) => runtime.cueTextAt(cues, time));
+  assert.deepEqual(
+    Array.from(runtime.upcomingCueTexts(cues, 2, { seconds: 30, limit: 6 })),
+    expected,
+  );
+  const native = cues.map(({ start, end, text }) => ({ startTime: start, endTime: end, text }));
+  assert.deepEqual(Array.from(runtime.upcomingCueTexts(native, 2, { seconds: 30, limit: 6 })), expected);
+});
+
 test('runtime reuses an indexed cue lookup instead of rescanning a large SRT', async () => {
   const runtime = await loadRuntime();
   let reads = 0;

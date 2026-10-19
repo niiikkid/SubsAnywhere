@@ -1089,6 +1089,49 @@ for (const failure of ['error', 'rejection', 'empty']) {
   });
 }
 
+test('production reuses prefetched translations when overlapping captions appear', async () => {
+  const harness = await makeHarness();
+  const video = harness.document.videos[0];
+  video.currentTime = 2;
+  let now = 10_000;
+  harness.context.Date = class extends Date { static now() { return now; } };
+  const cues = [
+    { start: 1, end: 4, text: "amazing that it couldn't do before." },
+    { start: 3, end: 6, text: "Uh but it's still somewhat confined to" },
+    { start: 5, end: 8, text: 'the digital realm.' },
+  ];
+  const requested = [];
+  harness.context.chrome.runtime.sendMessage = (message) => {
+    if (message.type !== 'dualCaptions.caption.translate') return Promise.resolve({ ok: true });
+    requested.push(message.text);
+    return Promise.resolve({ ok: true, data: { items: [{
+      start: 0, end: message.text.length, text: message.text,
+      dictionary: 'Готовый перевод', isSentenceTranslation: true,
+    }] } });
+  };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  [...harness.onMessage.listeners][0]({
+    type: 'dualCaptions.content.fullState',
+    settings: { secondTrackId: 'external:overlap' },
+    externalTracks: [{ id: 'overlap', cues }],
+  }, {}, () => {});
+  for (let step = 0; step < 12; step += 1) {
+    for (let index = 0; index < 10; index += 1) await Promise.resolve();
+    now += 1_000;
+    for (const callback of harness.scheduled.splice(0)) callback();
+  }
+  const count = requested.length;
+  for (const time of [3.5, 4.5, 5.5, 6.5]) {
+    video.currentTime = time;
+    video.dispatch('timeupdate');
+    for (let index = 0; index < 10; index += 1) await Promise.resolve();
+    const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+    assert.ok(overlay.children[0].children.some((child) => child.textContent === 'Готовый перевод'));
+    assert.equal(requested.length, count, 'displaying a prepared overlap must not make a new AI request');
+  }
+});
+
 test('production keeps the full original caption clickable when AI returns no phrases', async () => {
   const harness = await makeHarness();
   harness.context.chrome.runtime.sendMessage = (message) => {
