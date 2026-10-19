@@ -60,6 +60,7 @@
     const maxCachedTranslations = 80;
     const maxQueuedTranslations = 6;
     const maxConcurrentTranslations = 2;
+    const maxTranslationAttempts = 3;
     const queuedTranslations = [];
     const queuedTranslationSet = new Set();
     const inFlightTranslationKeys = new Set();
@@ -462,18 +463,15 @@
       caption.style.cssText = 'pointer-events:auto;cursor:pointer;border-radius:4px;padding:0 2px;color:inherit;text-decoration:underline;text-decoration-color:rgba(174,199,255,.9);text-decoration-style:dotted;text-decoration-thickness:2px;text-underline-offset:3px;transition:background .14s,color .14s;';
       makeCaptionFocusable(caption);
       const showStatus = () => {
-        if (failure) {
+        if (translationFailures.has(descriptor.key)) {
           translationFailures.delete(descriptor.key);
           requestTranslation(descriptor, true);
-          showTooltip({
-            dictionary: failure,
-            context: 'Нажмите, чтобы повторить.',
-          }, caption);
-          return;
+        } else {
+          requestTranslation(descriptor, true);
         }
         showTooltip({
-          dictionary: 'Перевод готовится…',
-          context: 'Нажмите ещё раз через мгновение.',
+          dictionary: failure || 'Перевод готовится…',
+          context: failure ? 'Нажмите, чтобы повторить.' : 'Результат появится автоматически.',
         }, caption);
       };
       caption.addEventListener('click', (event) => { event.stopPropagation(); showStatus(); });
@@ -533,7 +531,14 @@
 
     function requestTranslation(descriptor, priority = false) {
       if (!descriptor?.key || !descriptor.sourceText || translationCache.has(descriptor.key) || translationFailures.has(descriptor.key)
-        || queuedTranslationSet.has(descriptor.key) || inFlightTranslationKeys.has(descriptor.key)) return;
+        || inFlightTranslationKeys.has(descriptor.key)) return;
+      if (queuedTranslationSet.has(descriptor.key)) {
+        if (priority) {
+          const index = queuedTranslations.findIndex((item) => item.key === descriptor.key);
+          if (index > 0) queuedTranslations.unshift(queuedTranslations.splice(index, 1)[0]);
+        }
+        return;
+      }
       if (queuedTranslations.length >= maxQueuedTranslations) {
         if (!priority) return;
         const displaced = queuedTranslations.pop();
@@ -558,6 +563,8 @@
         if (!next) return;
         inFlightTranslationKeys.add(next.key);
         lastTranslationAt = Date.now();
+        let failed = false;
+        let failure = '';
         sendMessage({
           type: 'dualCaptions.caption.translate',
           text: next.sourceText,
@@ -566,23 +573,33 @@
         })
           .then((response) => {
             if (generation !== lifecycle) return;
-            if (response?.ok === true && Array.isArray(response?.data?.items)) {
+            if (response?.ok === true && Array.isArray(response?.data?.items) && response.data.items.length) {
               rememberTranslation(next.key, response.data.items);
             } else {
-              rememberTranslationFailure(next.key, response?.error);
+              failed = true;
+              failure = response?.error;
             }
           })
           .catch((error) => {
-            if (generation === lifecycle) rememberTranslationFailure(next.key, error?.message);
+            failed = true;
+            failure = error?.message;
           })
           .finally(() => {
             inFlightTranslationKeys.delete(next.key);
+            if (generation === lifecycle && !destroyed && failed) {
+              const attempt = next.translationAttempt || 1;
+              if (attempt < maxTranslationAttempts) {
+                requestTranslation({ ...next, translationAttempt: attempt + 1 }, true);
+              } else {
+                rememberTranslationFailure(next.key, failure);
+              }
+            }
             if (generation === lifecycle && !destroyed) render();
             pumpTranslations();
           });
         pumpTranslations();
       };
-      const delay = Math.max(0, 750 - (Date.now() - lastTranslationAt));
+      const delay = Math.max(0, 250 - (Date.now() - lastTranslationAt));
       if (delay) {
         translationDispatchScheduled = true;
         translationTimer = setTimeout(run, delay);

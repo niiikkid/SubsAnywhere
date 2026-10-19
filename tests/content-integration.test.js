@@ -893,7 +893,7 @@ test('production prepares six future captions with at most two translations in f
   await flush();
   assert.equal(pending.length, 2);
   for (let index = 0; index < 7; index += 1) {
-    pending.shift().resolve({ ok: true, data: { items: [] } });
+    pending.shift().resolve({ ok: true, data: { items: [{ isSentenceTranslation: true, dictionary: 'Перевод' }] } });
     await flush();
   }
   assert.equal(peak, 2);
@@ -925,7 +925,7 @@ test('production does not queue a second translation while the same caption is i
     settings: { secondTrackId: 'track-0', secondBottom: 8, fontSize: 24 },
     externalTracks: [],
   }, {}, () => {});
-  pending.shift().resolve({ ok: true, data: { items: [] } });
+  pending.shift().resolve({ ok: true, data: { items: [{ isSentenceTranslation: true, dictionary: 'Перевод' }] } });
   for (let index = 0; index < 4; index += 1) await Promise.resolve();
   harness.scheduled.shift()?.();
   await Promise.resolve();
@@ -933,7 +933,7 @@ test('production does not queue a second translation while the same caption is i
   harness.document.videos[0].currentTime = 5.5;
   harness.document.videos[0].textTracks[0].activeCues = [{ text: 'First next' }];
   harness.document.videos[0].dispatch('timeupdate');
-  pending.shift().resolve({ ok: true, data: { items: [] } });
+  pending.shift().resolve({ ok: true, data: { items: [{ isSentenceTranslation: true, dictionary: 'Перевод' }] } });
   for (let index = 0; index < 4; index += 1) await Promise.resolve();
   harness.scheduled.shift()?.();
   await Promise.resolve();
@@ -972,7 +972,7 @@ test('production makes the original caption clickable while its translation is l
   );
 });
 
-test('production shows an OpenAI translation error and retries only after a click', async () => {
+test('production shows an OpenAI translation error after bounded automatic retries and allows a manual retry', async () => {
   const harness = await makeHarness();
   let requests = 0;
   harness.context.chrome.runtime.sendMessage = (message) => {
@@ -989,6 +989,10 @@ test('production shows an OpenAI translation error and retries only after a clic
     externalTracks: [],
   }, {}, () => {});
   for (let index = 0; index < 5; index += 1) await Promise.resolve();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    harness.scheduled.shift()?.();
+    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+  }
 
   const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
   const token = overlay.children[0].children[0];
@@ -997,12 +1001,93 @@ test('production shows an OpenAI translation error and retries only after a clic
     'Обычно OpenAI временно недоступен (400). Попробуйте позже');
   assert.equal(overlay.children.at(-1).children[2].children.map((child) => child.textContent).join(' '),
     'Здесь Нажмите, чтобы повторить.');
-  assert.equal(requests, 1, 'a failed translation is not retried continuously');
+  assert.equal(requests, 3, 'automatic retries stop after three attempts');
 
   harness.scheduled.shift()?.();
   await Promise.resolve();
-  assert.equal(requests, 2, 'a click explicitly retries the failed current caption');
+  assert.equal(requests, 4, 'a click explicitly retries the failed current caption');
 });
+
+test('production renders a successful automatic retry and reuses it without more requests', async () => {
+  const harness = await makeHarness();
+  const video = harness.document.videos[0];
+  video.textTracks[0].cues = [];
+  let requests = 0;
+  harness.context.chrome.runtime.sendMessage = (message) => {
+    if (message.type !== 'dualCaptions.caption.translate') return Promise.resolve({ ok: true });
+    requests += 1;
+    return Promise.resolve(requests === 1 ? { ok: false, error: 'Unavailable' } : {
+      ok: true, data: { items: [{ text: 'Built in', start: 0, end: 8, isSentenceTranslation: true, dictionary: 'Встроено.' }] },
+    });
+  };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  [...harness.onMessage.listeners][0]({
+    type: 'dualCaptions.content.fullState', settings: { secondTrackId: 'track-0' }, externalTracks: [],
+  }, {}, () => {});
+  for (let index = 0; index < 10; index += 1) await Promise.resolve();
+  harness.scheduled.shift()?.();
+  for (let index = 0; index < 10; index += 1) await Promise.resolve();
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  assert.equal(overlay.children[0].children[0].textContent, 'Встроено.');
+  for (let index = 0; index < 10; index += 1) video.dispatch('timeupdate');
+  assert.equal(requests, 2);
+});
+
+for (const failure of ['error', 'rejection', 'empty']) {
+  test(`production prioritizes and bounds translation retries after ${failure}`, async () => {
+    const harness = await makeHarness();
+    const requested = [];
+    const pending = [];
+    let now = 10_000;
+    harness.context.Date = class extends Date { static now() { return now; } };
+    const video = harness.document.videos[0];
+    video.textTracks[0].activeCues = [{ text: 'Current line' }];
+    video.textTracks[0].cues = [
+      { startTime: 1, endTime: 2, text: 'Current line' },
+      { startTime: 3, endTime: 4, text: 'Future 1' },
+      { startTime: 5, endTime: 6, text: 'Future 2' },
+    ];
+    harness.context.chrome.runtime.sendMessage = (message) => {
+      if (message.type !== 'dualCaptions.caption.translate') return Promise.resolve({ ok: true });
+      requested.push(message.text);
+      return new Promise((resolve, reject) => pending.push({ text: message.text, resolve, reject }));
+    };
+    const flush = async () => {
+      for (let index = 0; index < 10; index += 1) await Promise.resolve();
+      now += 1_000;
+      const callbacks = harness.scheduled.splice(0);
+      for (const callback of callbacks) callback();
+    };
+    const failCurrent = () => {
+      const index = pending.findIndex((item) => item.text === 'Current line');
+      assert.notEqual(index, -1);
+      const item = pending.splice(index, 1)[0];
+      if (failure === 'rejection') item.reject(new Error('Network unavailable'));
+      else item.resolve(failure === 'empty' ? { ok: true, data: { items: [] } } : { ok: false, error: 'Unavailable' });
+    };
+    vm.runInContext(harness.runtimeSource, harness.context);
+    vm.runInContext(harness.contentSource, harness.context);
+    [...harness.onMessage.listeners][0]({
+      type: 'dualCaptions.content.fullState', settings: { secondTrackId: 'track-0' }, externalTracks: [],
+    }, {}, () => {});
+    await flush();
+    assert.deepEqual(requested, ['Current line', 'Future 1']);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      failCurrent();
+      await flush();
+      assert.ok(pending.length <= 2, 'retry shares the existing concurrency limit');
+    }
+    assert.deepEqual(requested, ['Current line', 'Future 1', 'Current line', 'Current line', 'Future 2']);
+    for (let index = 0; index < 10; index += 1) {
+      video.dispatch('timeupdate');
+      await flush();
+    }
+    assert.equal(requested.filter((text) => text === 'Current line').length, 3);
+    const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+    assert.equal(overlay.children[0].children[0].textContent, 'Current line');
+  });
+}
 
 test('production keeps the full original caption clickable when AI returns no phrases', async () => {
   const harness = await makeHarness();
@@ -1141,6 +1226,10 @@ test('production uses the saved fallback only after the native track disappears'
 
 test('production prepares the next three original captions before they appear', async () => {
   const harness = await makeHarness();
+  harness.context.chrome.runtime.sendMessage = (message) => {
+    harness.reports.push(structuredClone(message));
+    return Promise.resolve({ ok: true, data: { items: [{ isSentenceTranslation: true, dictionary: 'Перевод' }] } });
+  };
   harness.document.videos[0].textTracks[0].activeCues = [{ text: 'Current line' }];
   harness.document.videos[0].textTracks[0].cues = [
     { startTime: 1, endTime: 2, text: 'Current line' },
