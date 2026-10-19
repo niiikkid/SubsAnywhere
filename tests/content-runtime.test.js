@@ -245,6 +245,17 @@ test('runtime accepts only adjacent pinyin marker frames and preserves every Chi
   assert.equal(runtime.splitPinyinCaption('Hello\n\u2063nǐ hǎo\n\u2064你好'), null);
 });
 
+test('Chinese source extraction preserves complete Han lines and leaves other captions unchanged', async () => {
+  const runtime = await loadRuntime();
+  assert.equal(runtime.chineseSourceText('jīn tiān\r\n今天早上我6点半起床的\r\nThis morning I woke up at 6:30.'), '今天早上我6点半起床的');
+  assert.equal(runtime.chineseSourceText('nǐ hǎo<br><b>你好，</b><br>世界！<br>Hello, world!'), '你好，\n世界！');
+  assert.equal(runtime.chineseSourceText('我用 iPhone 16，花了$800。'), '我用 iPhone 16，花了$800。');
+  assert.equal(runtime.chineseSourceText('你好，\n世界！'), '你好，\n世界！');
+  assert.equal(runtime.chineseSourceText('Hello,\nworld!'), 'Hello,\nworld!');
+  assert.equal(runtime.chineseSourceText('nǐ hǎo'), 'nǐ hǎo');
+  assert.equal(runtime.chineseSourceText(''), '');
+});
+
 test('runtime splits a caption into plain text and clickable phrase segments', async () => {
   const runtime = await loadRuntime();
 

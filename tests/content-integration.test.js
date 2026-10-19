@@ -698,6 +698,32 @@ test('production makes pinyin the primary clickable line and keeps its character
   );
 });
 
+test('production extracts Chinese source from mixed teaching captions before display and translation', async () => {
+  const characters = '今天早上我6点半起床的';
+  const mixed = `jīn tiān zǎo shàng wǒ liù diǎn bàn qǐ chuáng de\n${characters}\nThis morning I woke up at 6:30.`;
+  for (const text of [mixed, `\u2063jīn tiān zǎo shàng\n\u2064${mixed}`]) {
+    const harness = await makeHarness();
+    vm.runInContext(harness.runtimeSource, harness.context);
+    vm.runInContext(harness.contentSource, harness.context);
+    const listener = [...harness.onMessage.listeners][0];
+    listener({
+      type: 'dualCaptions.content.fullState',
+      settings: { secondTrackId: 'external:chinese' },
+      externalTracks: [{ id: 'chinese', cues: [{ start: 1, end: 2, text }] }],
+    }, {}, () => {});
+    await Promise.resolve();
+
+    const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+    assert.equal(overlay.children[0].children[0].children.map((child) => child.textContent).join(''), characters);
+    assert.deepEqual(
+      harness.reports.filter((message) => message.type === 'dualCaptions.caption.translate').map((message) => ({
+        text: message.text, displayText: message.displayText, language: message.language,
+      })),
+      [{ text: characters, displayText: '', language: 'zh' }],
+    );
+  }
+});
+
 test('production shows a pinyin-to-Russian glossary with the full Chinese sentence translation', async () => {
   const harness = await makeHarness();
   harness.context.chrome.runtime.sendMessage = (message) => {

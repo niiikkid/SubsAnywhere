@@ -26,6 +26,15 @@
     return pinyin && /[\u3400-\u9fff\uf900-\ufaff]/.test(characters) ? { pinyin, characters } : null;
   }
 
+  function chineseSourceText(value) {
+    const text = cleanSubtitleText(value);
+    // Teaching tracks can contain pinyin, Han and an English translation in
+    // one cue. Keep whole Han lines, including embedded numbers/foreign words.
+    const lines = text.split(/\r?\n/).map((line) => line.trim());
+    const chinese = lines.filter((line) => /\p{Script=Han}/u.test(line));
+    return chinese.length ? chinese.join('\n') : text;
+  }
+
   function captionSegments(text, items = []) {
     const source = String(text ?? '');
     const segments = [];
@@ -433,6 +442,7 @@
     glossarySegments,
     chooseVideo,
     cleanSubtitleText,
+    chineseSourceText,
     createBuiltInTrackResolver,
     createVideoManager,
     cueTextAt,

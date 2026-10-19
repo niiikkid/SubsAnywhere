@@ -485,7 +485,8 @@
 
     function translationDescriptor(text) {
       const bilingual = runtime.splitPinyinCaption(text);
-      if (bilingual) {
+      const source = runtime.chineseSourceText(bilingual?.characters ?? text);
+      if (bilingual && source === bilingual.characters) {
         return {
           key: `zh\u0000${bilingual.characters}\u0000${bilingual.pinyin}`,
           sourceText: bilingual.characters,
@@ -494,6 +495,7 @@
           characters: bilingual.characters,
         };
       }
+      text = source;
       if (/\p{Script=Han}/u.test(text)) {
         return {
           key: `zh\u0000${text}\u0000`,
