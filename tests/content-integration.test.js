@@ -1132,6 +1132,40 @@ test('production reuses prefetched translations when overlapping captions appear
   }
 });
 
+test('prepared playback restores more than 80 captions and seeks without any translation requests', async () => {
+  const harness = await makeHarness();
+  const video = harness.document.videos[0];
+  const cues = Array.from({ length: 100 }, (_, index) => ({ start: index * 3, end: index * 3 + 2, text: `Prepared ${index}` }));
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  const entries = cues.map((cue) => ({
+    key: harness.context.DualCaptionsContentRuntime.captionTranslationDescriptor(cue.text).key,
+    items: [{ start: 0, end: cue.text.length, text: cue.text, dictionary: `Перевод ${cue.text}`, isSentenceTranslation: true }],
+  }));
+  harness.reports.length = 0;
+  video.currentTime = 0.5;
+  const listener = [...harness.onMessage.listeners][0];
+  listener({
+    type: 'dualCaptions.content.fullState', settings: { secondTrackId: 'external:prepared' },
+    externalTracks: [{ id: 'prepared', cues }],
+    preparation: { id: 'complete', trackId: 'external:prepared', status: 'ready', completed: 100, total: 100, revision: 5, entries },
+  }, {}, () => {});
+  for (const index of [0, 99, 50, 0]) {
+    video.currentTime = index * 3 + 0.5;
+    video.dispatch('timeupdate');
+    const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+    assert.ok(overlay.children[0].children.some((child) => child.textContent === `Перевод Prepared ${index}`));
+  }
+  listener({ type: 'dualCaptions.content.settings', settings: { secondTrackId: 'external:prepared', fontSize: 30 } }, {}, () => {});
+  listener({ type: 'dualCaptions.content.preparation', preparation: {
+    id: 'complete', trackId: 'external:prepared', status: 'running', revision: 2, completed: 1, total: 100, entries: [],
+  } }, {}, () => {});
+  await Promise.resolve();
+  assert.equal(harness.reports.filter((message) => message.type === 'dualCaptions.caption.translate').length, 0);
+  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
+  assert.ok(overlay.children[0].children.some((child) => child.textContent === 'Перевод Prepared 0'));
+});
+
 test('production keeps the full original caption clickable when AI returns no phrases', async () => {
   const harness = await makeHarness();
   harness.context.chrome.runtime.sendMessage = (message) => {

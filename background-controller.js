@@ -121,6 +121,7 @@ export class BackgroundController {
   #credentialStore;
   #aiClient;
   #localSubtitles;
+  #preparations;
 
   #discoveryTimeoutMs;
   #discoveryQuietMs;
@@ -137,6 +138,7 @@ export class BackgroundController {
     this.#credentialStore = options.credentialStore;
     this.#aiClient = options.aiClient ?? options.deepSeek;
     this.#localSubtitles = options.localSubtitles;
+    this.#preparations = options.preparations;
 
     this.#discoveryTimeoutMs = options.discoveryTimeoutMs ?? 5000;
     this.#discoveryQuietMs = options.discoveryQuietMs ?? 300;
@@ -239,13 +241,25 @@ export class BackgroundController {
 
         case MESSAGE.AI_CONFIG_PATCH:
           if (!this.#credentialStore) throw new Error('Настройки ИИ пока недоступны');
-          return ok(await this.#credentialStore.patch(message));
+          {
+            const config = await this.#credentialStore.patch(message);
+            await this.refreshPreparations();
+            return ok(config);
+          }
         case MESSAGE.AI_MODELS_GET:
           if (!this.#aiClient) throw new Error('ИИ пока недоступен');
           return ok({ provider: message.provider, models: await this.#aiClient.listModels(message.provider) });
         case MESSAGE.CAPTION_TRANSLATE:
-          await this.#enqueue(sender.tab.id, () => this.#selectedSender(message, sender));
-          return ok(await this.#translateCaption(message));
+          {
+            const { state, pageKey } = await this.#enqueue(sender.tab.id, () => this.#selectedSender(message, sender));
+            const cached = await this.#preparations?.lookup(pageKey, this.#preparationTrack(state), message);
+            return ok(cached ?? await this.#translateCaption(message));
+          }
+
+        case MESSAGE.TRANSLATION_PREPARE:
+        case MESSAGE.TRANSLATION_STATUS:
+        case MESSAGE.TRANSLATION_CANCEL:
+          return ok(await this.#preparationAction(message));
 
 
         case MESSAGE.LOCAL_SUBTITLE_EXISTING:
@@ -309,6 +323,55 @@ export class BackgroundController {
       return true;
     }
     throw new Error('Сообщение доступно только окну расширения');
+  }
+
+  #preparationTrack(state) {
+    const id = state.settings.secondTrackId;
+    const track = id.startsWith('external:')
+      ? state.externalTracks.find((item) => `external:${item.id}` === id)
+      : state.settings.secondTrackCacheSource === `${state.settings.selectedPlayerKey}\u0000${id}`
+        ? state.externalTracks.find((item) => item.id === state.settings.secondTrackCacheId && item.sourceType === 'builtin-cache')
+        : null;
+    return track ? { ...track, id } : null;
+  }
+
+  async #preparationAction(message) {
+    if (!this.#preparations || !Number.isInteger(message.tabId) || !message.pageKey) {
+      throw new Error('Подготовка перевода пока недоступна');
+    }
+    const pageKey = this.#pageKey(message, {});
+    const state = await this.#store.get(pageKey);
+    if (message.trackId && message.trackId !== state.settings.secondTrackId) throw new Error('Выбранные субтитры изменились');
+    const track = this.#preparationTrack(state);
+    if (track && isLocalSubtitleTrack(track) && !subtitleTrackMatchesVideo({ ...track, id: track.id.replace(/^external:/, '') }, youtubeVideoId(pageKey))) {
+      throw new Error('Субтитры относятся к другому видео');
+    }
+    const action = message.type === MESSAGE.TRANSLATION_PREPARE ? 'start'
+      : message.type === MESSAGE.TRANSLATION_CANCEL ? 'pause' : 'status';
+    if (!track && action === 'start') throw new Error('Полная дорожка ещё не сохранена. Выберите или загрузите субтитры');
+    const preparation = await this.#preparations[action](pageKey, track);
+    if (action !== 'status') await this.preparationUpdated({ pageKey });
+    return { preparation };
+  }
+
+  translatePreparedCaption(descriptor) {
+    return this.#translateCaption({ ...descriptor, text: descriptor.sourceText,
+      displayText: descriptor.generatedPinyin ? '' : descriptor.displayText });
+  }
+
+  async refreshPreparations() {
+    await Promise.all([...new Set(this.#tabPageKeys.values())].map((pageKey) => this.preparationUpdated({ pageKey })));
+  }
+
+  async preparationUpdated({ pageKey }) {
+    if (!this.#preparations) return;
+    const state = await this.#store.get(pageKey);
+    const preparation = await this.#preparations.payload(pageKey, this.#preparationTrack(state));
+    const targets = [...this.#tabPageKeys].filter(([, current]) => current === pageKey);
+    await Promise.all(targets.map(([tabId]) => this.#sendToSelected(tabId, state, {
+      type: MESSAGE.CONTENT_PREPARATION, videoId: youtubeVideoId(pageKey),
+      preparation, trackId: state.settings.secondTrackId,
+    })));
   }
 
   #pageKey(message, sender) {
@@ -507,6 +570,8 @@ export class BackgroundController {
       videoId: youtubeVideoId(pageKey),
       type: MESSAGE.CONTENT_SETTINGS,
       settings: state.settings,
+      ...(this.#preparations && Object.hasOwn(message.patch ?? {}, 'secondTrackId')
+        ? { preparation: await this.#preparations.payload(pageKey, this.#preparationTrack(state)) } : {}),
     });
     return { state, delivered };
   }
@@ -650,6 +715,11 @@ export class BackgroundController {
   }
 
   async #request(tabId, frameId, payload) {
+    if (this.#preparations && [MESSAGE.CONTENT_FULL_STATE, MESSAGE.CONTENT_TRACKS].includes(payload.type)) {
+      const pageKey = this.#tabPageKeys.get(tabId);
+      const state = await this.#store.get(pageKey);
+      payload = { ...payload, preparation: await this.#preparations.payload(pageKey, this.#preparationTrack(state)) };
+    }
     if (payload.videoId && this.#chrome.tabs.get) {
       const tab = await this.#chrome.tabs.get(tabId);
       if (youtubeVideoId(tab.url) !== payload.videoId) throw new Error('Страница видео изменилась');

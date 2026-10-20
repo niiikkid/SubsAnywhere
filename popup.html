@@ -66,6 +66,19 @@
         <section id="youtubeSubtitles" hidden>
           <p id="youtubeSubtitleStatus" class="hint" role="status" aria-live="polite"></p>
         </section>
+        <section id="translationPreparation" class="translation-preparation" aria-label="Подготовка перевода">
+          <p id="preparationStatus" class="hint" role="status" aria-live="polite">Сначала выберите субтитры.</p>
+          <div class="progress-row">
+            <progress id="preparationProgress" max="1" value="0" aria-label="Переведено реплик" hidden></progress>
+            <output id="preparationCount" aria-label="Готово / всего" hidden>0 / 0</output>
+          </div>
+          <div class="preparation-actions">
+            <button id="prepareTranslation" type="button" aria-describedby="preparationHint" disabled>Подготовить перевод целиком</button>
+            <button id="pausePreparation" type="button" hidden>Остановить подготовку</button>
+            <button id="refreshPreparation" type="button" class="text-button" hidden>Обновить статус</button>
+          </div>
+          <p id="preparationHint" class="hint">Запуск и продолжение разрешают платные API-запросы для всей дорожки. Результат сохраняется.</p>
+        </section>
         <div class="workspace-actions">
           <button id="showTiming" type="button" class="text-button" aria-controls="syncBox" aria-expanded="false" hidden>Сдвиг</button>
           <button id="hideSubtitles" type="button" class="text-button" hidden>Выключить</button>

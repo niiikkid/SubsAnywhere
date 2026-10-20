@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { MESSAGE } from '../protocol.js';
 
 class FakeClassList {
   values = new Set();
@@ -38,6 +39,8 @@ function makeDocument() {
     'youtubeActions', 'englishSubtitles', 'chineseSubtitles', 'englishSubtitleState', 'chineseSubtitleState', 'hideSubtitles', 'otherSubtitleActions',
     'aiProvider', 'aiKey', 'aiKeyLabel', 'aiModel', 'aiModelHint', 'loadAiModels', 'clearAiKey', 'saveAiSettings', 'aiKeyState',
     'youtubeSubtitles', 'youtubeSubtitleStatus',
+    'translationPreparation', 'preparationStatus', 'preparationProgress', 'preparationCount',
+    'prepareTranslation', 'pausePreparation', 'refreshPreparation', 'preparationHint',
     'playerTab', 'appearanceTab', 'settingsTab', 'playerPanel', 'appearancePanel', 'settingsPanel',
     'aiSettingsPanel',
     'subtitlePreview', 'inlineTranslations', 'saveStatus', 'retrySave', 'retrySettings', 'pageScope',
@@ -82,6 +85,7 @@ async function bootPopup(overrides = {}, tab = { id: 77, url: 'https://video.exa
     'dualCaptions.player.discover': () => ({ players: [{ frameId: 0, key: 'youtube-player', tracks: [] }] }),
     'dualCaptions.player.select': () => ({ delivered: true, state: { settings: { selectedPlayerKey: 'youtube-player', selectedPlayerFrameId: 0 } } }),
     'dualCaptions.ai.get': () => aiInfo(),
+    [MESSAGE.TRANSLATION_STATUS]: () => ({ preparation: { status: 'idle', completed: 0, total: 0 } }),
 
     'dualCaptions.state.patch': () => ({ state: {} }),
     ...overrides,
@@ -100,6 +104,127 @@ async function bootPopup(overrides = {}, tab = { id: 77, url: 'https://video.exa
   await tick();
   return { elements: document.elements, document, messages, handlers };
 }
+
+test('whole-track preparation is explicit, durable and guarded across polling, selection and popup close', async () => {
+  const nativeSetTimeout = globalThis.setTimeout;
+  const nativeClearTimeout = globalThis.clearTimeout;
+  const polls = new Map();
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    if (delay !== 1500) return nativeSetTimeout(callback, delay, ...args);
+    const token = {};
+    polls.set(token, callback);
+    return token;
+  };
+  globalThis.clearTimeout = (token) => {
+    if (!polls.delete(token)) nativeClearTimeout(token);
+  };
+  let popup;
+  try {
+    const hydration = deferred();
+    const ai = deferred();
+    const selectedTrack = 'external:active';
+    const progress = (status, completed = 2, trackId = selectedTrack) => ({ preparation: { status, completed, total: 5, trackId } });
+    let statusResult = progress('idle', 0);
+    let latePoll;
+    popup = await bootPopup({
+      [MESSAGE.STATE_GET]: () => hydration.promise,
+      [MESSAGE.AI_CONFIG_GET]: () => ai.promise,
+      [MESSAGE.TRANSLATION_STATUS]: () => latePoll ? latePoll.promise : statusResult,
+      [MESSAGE.TRANSLATION_PREPARE]: () => progress('running'),
+      [MESSAGE.TRANSLATION_CANCEL]: () => progress('paused'),
+    });
+    const { elements, messages, handlers, document } = popup;
+    assert.equal(elements.prepareTranslation.disabled, true, 'unknown page state cannot authorize billing');
+    hydration.resolve({ state: { settings: { secondTrackId: selectedTrack } } });
+    await tick();
+    assert.equal(elements.prepareTranslation.disabled, true, 'AI configuration must also hydrate');
+    ai.resolve(aiInfo({ deepseekKey: true, deepseekModel: 'selected-model' }));
+    await tick();
+    assert.equal(elements.prepareTranslation.disabled, false);
+    assert.equal(messages.some((message) => message.type === MESSAGE.TRANSLATION_PREPARE), false);
+    assert.equal(polls.size, 0, 'idle status must not poll forever');
+    assert.match(elements.preparationHint.textContent, /платные API/);
+    elements.aiModel.value = 'unsaved-model';
+    elements.aiModel.listeners.get('change')();
+    assert.equal(messages.some((message) => message.type === MESSAGE.TRANSLATION_PREPARE), false, 'model changes never authorize billing');
+
+    elements.prepareTranslation.listeners.get('click')();
+    await tick();
+    const start = messages.find((message) => message.type === MESSAGE.TRANSLATION_PREPARE);
+    assert.deepEqual(start, { type: MESSAGE.TRANSLATION_PREPARE, tabId: 77, pageKey: 'https://video.example/episode-1', trackId: selectedTrack });
+    assert.equal(elements.preparationCount.textContent, '2 / 5');
+    assert.equal(elements.pausePreparation.hidden, false);
+    assert.equal(polls.size, 1);
+    elements.pausePreparation.listeners.get('click')();
+    await tick();
+    assert.equal(polls.size, 0);
+    assert.match(elements.preparationStatus.textContent, /паузе/);
+    assert.equal(elements.prepareTranslation.textContent, 'Продолжить подготовку');
+    elements.prepareTranslation.listeners.get('click')();
+    await tick();
+    assert.equal(messages.filter((message) => message.type === MESSAGE.TRANSLATION_PREPARE).length, 2);
+    statusResult = progress('ready', 5);
+    const nextPoll = [...polls.values()][0];
+    polls.clear();
+    nextPoll();
+    await tick();
+    assert.match(elements.preparationStatus.textContent, /готов и сохранён/);
+    assert.equal(elements.prepareTranslation.hidden, true);
+    assert.equal(elements.pausePreparation.hidden, true);
+    assert.equal(polls.size, 0);
+
+    elements.originalTrack.value = 'external:other';
+    statusResult = progress('paused', 3, 'external:other');
+    elements.originalTrack.listeners.get('change')();
+    await tick();
+    assert.equal(elements.preparationCount.textContent, '3 / 5');
+    handlers[MESSAGE.TRANSLATION_PREPARE] = () => { throw new Error('Offline'); };
+    elements.prepareTranslation.listeners.get('click')();
+    await tick();
+    assert.match(elements.preparationStatus.textContent, /Offline/);
+    assert.equal(elements.preparationCount.textContent, '3 / 5', 'failed request must not erase known progress');
+    assert.equal(elements.prepareTranslation.disabled, true, 'recover ambiguous status before allowing paid restart');
+    elements.refreshPreparation.listeners.get('click')();
+    await tick();
+    assert.equal(elements.prepareTranslation.disabled, false);
+
+    handlers[MESSAGE.TRANSLATION_PREPARE] = () => progress('running', 3, 'external:other');
+    elements.prepareTranslation.listeners.get('click')();
+    await tick();
+    latePoll = deferred();
+    const stalePoll = [...polls.values()][0];
+    polls.clear();
+    stalePoll();
+    elements.originalTrack.value = '';
+    elements.originalTrack.listeners.get('change')();
+    latePoll.resolve(progress('ready', 5, 'external:other'));
+    await tick();
+    assert.match(elements.preparationStatus.textContent, /Сначала выберите/);
+    assert.equal(polls.size, 0);
+
+    latePoll = null;
+    statusResult = progress('running', 3);
+    elements.originalTrack.value = selectedTrack;
+    elements.originalTrack.listeners.get('change')();
+    await tick();
+    assert.equal(polls.size, 1);
+    latePoll = deferred();
+    const closingPoll = [...polls.values()][0];
+    polls.clear();
+    closingPoll();
+    document.defaultView.listeners.get('pagehide')();
+    const textAtClose = elements.preparationStatus.textContent;
+    latePoll.resolve(progress('ready', 5));
+    await tick();
+    assert.equal(polls.size, 0);
+    assert.equal(elements.preparationStatus.textContent, textAtClose, 'late response cannot touch closed popup');
+    assert.equal(messages.filter((message) => message.type === MESSAGE.TRANSLATION_CANCEL).length, 1, 'popup close never cancels the durable job');
+  } finally {
+    popup?.document.defaultView.listeners.get('pagehide')?.();
+    globalThis.setTimeout = nativeSetTimeout;
+    globalThis.clearTimeout = nativeClearTimeout;
+  }
+});
 
 test('video workspace separates saved subtitles from connection and edits only the active track timing', async () => {
   const first = { id: 'first', name: 'First file', cues: [{ start: 0, end: 1, text: 'one' }], offsetSeconds: 1 };
@@ -332,6 +457,9 @@ test('production popup startup performs read-only hydration and never overwrites
         if (message.type === 'dualCaptions.player.get') return { ok: true, data: { players: [] } };
         if (message.type === 'dualCaptions.ai.get') return { ok: true, data: { hasApiKey: false } };
 
+        if (message.type === MESSAGE.TRANSLATION_STATUS) return { ok: true, data: { preparation: {
+          status: 'idle', completed: 0, total: 0, trackId: message.trackId,
+        } } };
         throw new Error(`Unexpected startup write: ${message.type}`);
       },
     },
@@ -346,6 +474,7 @@ test('production popup startup performs read-only hydration and never overwrites
     'dualCaptions.player.get',
 
     'dualCaptions.state.get',
+    'dualCaptions.translation.status',
   ]);
   assert.equal(messages.find((message) => message.type === 'dualCaptions.state.get').pageKey, 'https://video.example/episode-1');
   assert.equal(document.elements.controls.hidden, false);

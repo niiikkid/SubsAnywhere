@@ -69,6 +69,15 @@ button:disabled, input:disabled, select:disabled { opacity: .55; cursor: not-all
 .language-track { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 10px; text-align: left; }
 .language-track[aria-pressed="true"] { border-color: #7898ff; background: #26334c; }
 .language-state { color: #aabbdc; font-size: 10px; font-weight: 400; }
+.translation-preparation { margin-top: 12px; padding-top: 10px; border-top: 1px solid #30394a; }
+.translation-preparation > .hint:first-child { margin-top: 0; }
+.translation-preparation .progress-row:has(progress:not([hidden])), .translation-preparation .progress-row:has(output:not([hidden])) { margin-top: 7px; }
+.translation-preparation .progress-row output { flex-shrink: 0; white-space: nowrap; }
+.preparation-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.preparation-actions button { padding: 7px 9px; font-size: 11px; }
+#preparationStatus.error { color: #ffb2bb; overflow-wrap: anywhere; }
+.translation-preparation[data-status="ready"] #preparationStatus { color: #a6d8b6; }
+.translation-preparation[data-status="ready"] #preparationStatus.error { color: #ffb2bb; }
 .sync-box .two-columns { grid-template-columns: 1fr; }
 .youtube-activity { margin-top: 12px; padding: 9px 10px; border: 1px solid #30394a; border-radius: 8px; background: #141923; }
 .youtube-activity .hint:first-child { margin-top: 0; }

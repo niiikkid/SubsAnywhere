@@ -119,6 +119,26 @@
         translation: segment.item?.translation ?? '', term: segment.item?.term ?? null }));
   }
 
+  function captionTranslationDescriptor(text) {
+    const bilingual = splitPinyinCaption(text);
+    const source = chineseSourceText(bilingual?.characters ?? text);
+    if (bilingual && source === bilingual.characters) {
+      return {
+        key: `zh\u0000${bilingual.characters}\u0000${bilingual.pinyin}`,
+        sourceText: bilingual.characters, displayText: bilingual.pinyin,
+        language: 'zh', characters: bilingual.characters,
+      };
+    }
+    text = source;
+    if (/\p{Script=Han}/u.test(text)) {
+      return {
+        key: `zh\u0000${text}\u0000`, sourceText: text, displayText: text,
+        language: 'zh', characters: text, generatedPinyin: true,
+      };
+    }
+    return { key: `caption\u0000${text}`, sourceText: text, displayText: text, language: '', characters: '' };
+  }
+
   function cueTextAt(cues, videoTime, offsetSeconds = 0, timeScale = 1) {
     const scale = Number(timeScale);
     const sourceTime = (Number(videoTime) - Number(offsetSeconds || 0)) / (Number.isFinite(scale) && scale > 0 ? scale : 1);
@@ -200,11 +220,15 @@
       // Prepare the exact displayed combination, including changes when an
       // overlapping cue ends. Sample inside the interval, not its shared edge.
       const time = boundaries[index] + (boundaries[index + 1] - boundaries[index]) / 2;
-      const text = cueTextAt(timeline.cues, time);
-      if (!text || unique.has(text)) continue;
-      unique.add(text);
-      texts.push(text);
-      if (texts.length >= limit) break;
+      const candidates = options.includeBoundaries
+        ? [cueTextAt(timeline.cues, boundaries[index]), cueTextAt(timeline.cues, time)]
+        : [cueTextAt(timeline.cues, time)];
+      for (const text of candidates) {
+        if (!text || unique.has(text)) continue;
+        unique.add(text);
+        texts.push(text);
+        if (texts.length >= limit) return texts;
+      }
     }
     return texts;
   }
@@ -462,6 +486,7 @@
     activeCueText,
     bindVideoEvents,
     captionSegments,
+    captionTranslationDescriptor,
     glossarySegments,
     chooseVideo,
     cleanSubtitleText,
