@@ -4,14 +4,15 @@ import { DeepSeekClient } from '../ai-client.js';
 
 const credentials = { get: async () => ({ apiKey: 'test-only', model: 'deepseek-v4-flash' }) };
 
-test('DeepSeek bounds network waits, omits cookies and refuses redirects', async () => {
+test('translation has no application deadline, omits cookies and refuses redirects', async () => {
   let options;
   const client = new DeepSeekClient(async (_url, request) => {
     options = request;
     return new Response(JSON.stringify({ choices: [{ message: { content: '{"translation":"Привет","glossary":[]}' } }] }));
   }, credentials);
   await client.translateCaption('Hello');
-  assert.ok(options.signal instanceof AbortSignal);
+  assert.equal(options.signal, undefined);
+  assert.equal(JSON.parse(options.body).stream, true);
   assert.equal(options.redirect, 'error');
   assert.equal(options.credentials, 'omit');
 });

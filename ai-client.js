@@ -133,7 +133,7 @@ export function buildAIRequest({ provider, model, system, user, maxTokens }) {
         text: { format: { type: 'json_object' } },
         max_output_tokens: maxTokens,
         store: false,
-        stream: false,
+        stream: true,
       },
     };
   }
@@ -144,7 +144,7 @@ export function buildAIRequest({ provider, model, system, user, maxTokens }) {
       { role: 'user', content: user },
     ],
     response_format: { type: 'json_object' },
-    stream: false,
+    stream: true,
   };
   body.thinking = { type: 'disabled' };
   body.max_tokens = maxTokens;
@@ -165,6 +165,65 @@ export function extractAIText(provider, payload) {
   return undefined;
 }
 
+
+async function readCompletionText(response, provider, label) {
+  if (!response.headers?.get('content-type')?.toLowerCase().includes('text/event-stream')) {
+    return extractAIText(provider, await response.json());
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let text = '';
+  let complete = false;
+  const consume = (block) => {
+    const data = block.split('\n').filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart()).join('\n');
+    if (!data) return;
+    if (provider !== 'openai' && data.trim() === '[DONE]') { complete = true; return; }
+    const event = JSON.parse(data);
+    if (event.error || ['error', 'response.failed', 'response.incomplete'].includes(event.type)) {
+      throw new Error(`${label} не завершил ответ. Сохранённые переводы не удалены`);
+    }
+    if (provider === 'openai') {
+      if (event.type === 'response.output_text.delta') text += event.delta || '';
+      if (event.type === 'response.completed') {
+        if (event.response?.error || (event.response?.status && event.response.status !== 'completed')) {
+          throw new Error(`${label} не завершил ответ. Сохранённые переводы не удалены`);
+        }
+        text = extractAIText(provider, event.response) || text;
+        complete = true;
+      }
+    } else {
+      const choice = event.choices?.[0];
+      text += choice?.delta?.content || '';
+      if (choice?.finish_reason && choice.finish_reason !== 'stop') {
+        throw new Error(`${label} не завершил ответ. Сохранённые переводы не удалены`);
+      }
+    }
+    if (text.length > 1_048_576) throw new Error(`${label} вернул слишком большой ответ`);
+  };
+  try {
+    while (!complete) {
+      const { done, value } = await reader.read();
+      buffer = (buffer + decoder.decode(value, { stream: !done })).replace(/\r\n/g, '\n');
+      if (buffer.length > 2_097_152) throw new Error(`${label} вернул слишком большой ответ`);
+      let boundary;
+      while (!complete && (boundary = buffer.indexOf('\n\n')) >= 0) {
+        consume(buffer.slice(0, boundary));
+        buffer = buffer.slice(boundary + 2);
+      }
+      if (done) {
+        if (!complete && buffer.trim()) consume(buffer);
+        break;
+      }
+    }
+    if (!complete) throw new Error(`${label} прервал соединение до завершения ответа`);
+    return text;
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
 
 function parseJsonContent(value) {
   const source = String(value ?? '').trim();
@@ -403,38 +462,37 @@ export class AIClient {
     const label = provider === 'openai' ? 'OpenAI' : 'DeepSeek';
     if (!apiKey || !model) throw new Error(`Сначала полностью настройте ${label}`);
     const request = buildAIRequest({ provider, model, system, user, maxTokens });
-    const signal = AbortSignal.timeout(25_000);
-    const response = await this.#fetch(request.url, {
-      method: 'POST',
-      signal,
-      redirect: 'error',
-      credentials: 'omit',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(request.body),
-    }).catch(() => {
-      throw new Error(signal.aborted
-        ? `${label} не ответил вовремя. Попробуйте ещё раз`
-        : `Не удалось связаться с ${label}. Проверьте соединение и повторите`);
-    });
-    if (!response.ok) {
-      await response.body?.cancel();
-      const hints = {
-        401: 'Проверьте API-ключ в настройках расширения',
-        402: `Недостаточно средств на балансе ${label}`,
-        403: `Доступ к ${label} запрещён. Проверьте ключ и доступность сервиса`,
-        429: `Достигнут лимит ${label}. Попробуйте позже`,
-      };
-      throw new Error(hints[response.status] || `${label} временно недоступен (${response.status}). Попробуйте позже`);
+    // No application deadline for paid generation. Streaming starts reception
+    // before the full answer exists; keep the MV3 worker alive while it arrives.
+    const heartbeat = typeof globalThis.chrome?.runtime?.getPlatformInfo === 'function'
+      ? setInterval(() => { Promise.resolve().then(() => chrome.runtime.getPlatformInfo()).catch(() => undefined); }, 20_000)
+      : null;
+    heartbeat?.unref?.();
+    try {
+      const response = await this.#fetch(request.url, {
+        method: 'POST', redirect: 'error', credentials: 'omit',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(request.body),
+      }).catch(() => { throw new Error(`Не удалось связаться с ${label}. Проверьте соединение и повторите`); });
+      if (!response.ok) {
+        await response.body?.cancel();
+        const hints = {
+          401: 'Проверьте API-ключ в настройках расширения',
+          402: `Недостаточно средств на балансе ${label}`,
+          403: `Доступ к ${label} запрещён. Проверьте ключ и доступность сервиса`,
+          429: `Достигнут лимит ${label}. Попробуйте позже`,
+        };
+        throw new Error(hints[response.status] || `${label} временно недоступен (${response.status}). Попробуйте позже`);
+      }
+      const content = await readCompletionText(response, provider, label).catch((error) => {
+        if (error?.message?.startsWith(`${label} `)) throw error;
+        throw new Error(`Не удалось прочитать ответ ${label}. Повторите запрос`);
+      });
+      if (!content) throw new Error(`${label} не вернул результат`);
+      return parseJsonContent(content);
+    } finally {
+      if (heartbeat !== null) clearInterval(heartbeat);
     }
-    const payload = await response.json().catch(() => {
-      throw new Error(signal.aborted ? `${label} не ответил вовремя. Попробуйте ещё раз` : `Не удалось прочитать ответ ${label}. Повторите запрос`);
-    });
-    const content = extractAIText(provider, payload);
-    if (!content) throw new Error(`${label} не вернул результат`);
-    return parseJsonContent(content);
   }
 
 
