@@ -3,6 +3,7 @@ import './content-runtime.js';
 const INDEX_KEY = 'subsAnywherePreparationIndexV1';
 const JOB_PREFIX = 'subsAnywherePreparationV1:';
 const VERSION = 1;
+export const PREPARATION_CONCURRENCY = 10;
 const runtime = globalThis.DualCaptionsContentRuntime;
 
 function summary(job, trackId = '') {
@@ -32,13 +33,18 @@ export class TranslationPreparation {
   #loading;
   #writes = Promise.resolve();
   #running = new Map();
+  #archive;
+  #archiveChecked = new Set();
+  #archiveErrors = new Map();
+  #archiveReads = new Map();
 
-  constructor(storage, { configuration, translate, onUpdate = () => {}, heartbeat = () => {} }) {
+  constructor(storage, { configuration, translate, onUpdate = () => {}, heartbeat = () => {}, archive }) {
     this.#storage = storage;
     this.#configuration = configuration;
     this.#translate = translate;
     this.#onUpdate = onUpdate;
     this.#heartbeat = heartbeat;
+    this.#archive = archive;
   }
 
   initialize() {
@@ -57,7 +63,7 @@ export class TranslationPreparation {
       // Never repeat an ambiguous paid request silently after worker interruption.
       if (job.status === 'running') await this.#update(job, () => ({
         status: 'paused', error: 'Подготовка прервана. Сохранённые переводы доступны; нажмите «Продолжить».',
-      }));
+      }), false);
     }
   }
 
@@ -67,16 +73,71 @@ export class TranslationPreparation {
     const config = await this.#configuration();
     if (!config?.provider || !config.model) return { config };
     const id = await digest([VERSION, pageKey, track.id, track.cues, config.provider, config.model]);
+    if (this.#archive && !this.#archiveChecked.has(id)) {
+      let pending = this.#archiveReads.get(id);
+      if (!pending) {
+        pending = this.#restoreArchive(id, pageKey, track, config).finally(() => this.#archiveReads.delete(id));
+        this.#archiveReads.set(id, pending);
+      }
+      await pending;
+    }
     return { id, config, job: this.#jobs.get(id) };
+  }
+
+  async #restoreArchive(id, pageKey, track, config) {
+    let job = this.#jobs.get(id);
+    try {
+      const saved = await this.#archive.get(id);
+      if (saved) {
+        if (saved.id !== id || saved.pageKey !== pageKey || saved.trackId !== track.id
+          || saved.provider !== config.provider || saved.model !== config.model
+          || !Array.isArray(saved.descriptors) || !saved.results) throw new Error('Архив перевода не соответствует выбранным субтитрам');
+        if (!job) {
+          job = { ...saved, status: saved.status === 'running' ? 'paused' : saved.status };
+          this.#jobs.set(id, job);
+        } else {
+          job.results = { ...saved.results, ...job.results };
+          if (saved.status === 'ready') { job.status = 'ready'; job.error = ''; }
+        }
+      }
+      if (job) {
+        job.sourceTrack = this.#sourceTrack(track);
+        const archived = await this.#archive.save(job);
+        job.results = { ...archived.results, ...job.results };
+        if (archived.status === 'ready') { job.status = 'ready'; job.error = ''; }
+        if (job.error === this.#archiveErrors.get(id)) job.error = '';
+        await this.#writeLocal(job);
+      }
+      this.#archiveErrors.delete(id);
+      this.#archiveChecked.add(id);
+    } catch (error) {
+      if (!job) throw error;
+      this.#archiveErrors.set(id, 'Копия есть в Chrome, но серверное сохранение не подтверждено. Проверьте локальный сервер.');
+    }
+  }
+
+  #sourceTrack(track) {
+    return {
+      id: track.id, name: track.name || '', language: track.language || '',
+      sourceType: track.sourceType || 'imported', sourceVideoId: track.sourceVideoId || '',
+      cues: structuredClone(track.cues),
+    };
+  }
+
+  #summary(job, trackId) {
+    return { ...summary(job, trackId), backendSaved: Boolean(job && this.#archiveChecked.has(job.id)),
+      error: job?.error || this.#archiveErrors.get(job?.id) || '' };
   }
 
   async status(pageKey, track) {
     const { job } = await this.#context(pageKey, track);
-    return summary(job, track?.id);
+    return this.#summary(job, track?.id);
   }
 
   async payload(pageKey, track) {
-    const { job } = await this.#context(pageKey, track);
+    let job;
+    try { ({ job } = await this.#context(pageKey, track)); }
+    catch { return null; } // Backend outage must not hide the original captions.
     if (!job) return null;
     return this.#payload(job);
   }
@@ -94,7 +155,7 @@ export class TranslationPreparation {
 
   #payload(job) {
     return {
-      ...summary(job),
+      ...this.#summary(job),
       entries: job.status === 'ready'
         ? job.descriptors.map((descriptor) => ({ key: descriptor.key, items: job.results[descriptor.key].items }))
         : [],
@@ -126,27 +187,51 @@ export class TranslationPreparation {
         id: context.id, pageKey, trackId: track.id,
         provider: context.config.provider, model: context.config.model,
         status: 'idle', error: '', descriptors, results: {},
+        sourceTrack: this.#sourceTrack(track),
       };
       this.#jobs.set(job.id, job);
     }
-    if (job.status === 'ready') return summary(job);
+    if (job.status === 'ready') return this.#summary(job);
     if (job.status !== 'running') await this.#update(job, () => ({ status: 'running', error: '' }));
     this.#launch(job);
-    return summary(job);
+    return this.#summary(job);
   }
 
   async pause(pageKey, track) {
     const { job } = await this.#context(pageKey, track);
-    if (job?.status === 'running') await this.#update(job, () => ({ status: 'paused', error: '' }));
-    return summary(job, track?.id);
+    if (job?.status === 'running') {
+      job.status = 'paused';
+      await this.#update(job, () => ({ status: 'paused', error: '' }));
+    }
+    return this.#summary(job, track?.id);
   }
 
-  #update(job, updater) {
+  async #writeLocal(job) {
+    const ids = this.#ids.includes(job.id) ? this.#ids : [...this.#ids, job.id];
+    await this.#storage.set({ [`${JOB_PREFIX}${job.id}`]: job, [INDEX_KEY]: ids });
+    this.#ids = ids;
+  }
+
+  #update(job, updater, syncArchive = true) {
     const operation = this.#writes.then(async () => {
       const next = { ...job, ...updater(job), updatedAt: Date.now(), revision: (job.revision || 0) + 1 };
-      const ids = this.#ids.includes(job.id) ? this.#ids : [...this.#ids, job.id];
-      await this.#storage.set({ [`${JOB_PREFIX}${job.id}`]: next, [INDEX_KEY]: ids });
-      this.#ids = ids;
+      await this.#writeLocal(this.#archive && syncArchive && next.status === 'ready'
+        ? { ...next, status: 'paused', error: 'Ожидается подтверждение серверного сохранения' } : next);
+      if (this.#archive && syncArchive) {
+        try {
+          const saved = await this.#archive.save(next);
+          next.results = { ...saved.results, ...next.results };
+          this.#archiveErrors.delete(job.id);
+          this.#archiveChecked.add(job.id);
+          await this.#writeLocal(next);
+        } catch (error) {
+          this.#archiveChecked.delete(job.id);
+          this.#archiveErrors.set(job.id, 'Не удалось сохранить перевод на сервере. Готовые строки сохранены в Chrome.');
+          Object.assign(job, next, { status: 'paused', error: this.#archiveErrors.get(job.id) });
+          await this.#writeLocal(job);
+          throw error;
+        }
+      }
       Object.assign(job, next);
       Promise.resolve().then(() => this.#onUpdate({ pageKey: job.pageKey, ...this.#payload(job) })).catch(() => undefined);
     });
@@ -157,13 +242,15 @@ export class TranslationPreparation {
   #launch(job) {
     if (this.#running.has(job.id)) return;
     const inFlight = new Set();
+    let stopAdmissions = false;
     const heartbeat = setInterval(() => { Promise.resolve().then(() => this.#heartbeat()).catch(() => undefined); }, 20_000);
     heartbeat.unref?.();
     const worker = async () => {
-      while (job.status === 'running') {
+      while (job.status === 'running' && !stopAdmissions) {
         const config = await this.#configuration();
-        if (job.status !== 'running') return;
+        if (job.status !== 'running' || stopAdmissions) return;
         if (config.provider !== job.provider || config.model !== job.model || !config.hasApiKey) {
+          stopAdmissions = true;
           await this.#update(job, () => ({ status: 'paused', error: 'Настройки ИИ изменились. Верните прежнюю модель для продолжения.' }));
           return;
         }
@@ -178,6 +265,8 @@ export class TranslationPreparation {
           }
           await this.#update(job, (current) => ({ results: { ...current.results, [descriptor.key]: result } }));
         } catch (error) {
+          stopAdmissions = true;
+          if (this.#archiveErrors.has(job.id)) return;
           await this.#update(job, () => ({ status: 'error', error: String(error?.message || 'Не удалось подготовить перевод').slice(0, 240) }));
           return;
         } finally {
@@ -185,7 +274,7 @@ export class TranslationPreparation {
         }
       }
     };
-    const work = Promise.all([worker(), worker()]).then(async () => {
+    const work = Promise.all(Array.from({ length: PREPARATION_CONCURRENCY }, () => worker())).then(async () => {
       if (job.status === 'running' && Object.keys(job.results).length === job.descriptors.length) {
         await this.#update(job, () => ({ status: 'ready', error: '' }));
       }

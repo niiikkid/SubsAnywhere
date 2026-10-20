@@ -42,6 +42,7 @@ launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/com.subsanywhere.lo
 ```text
 ~/Library/Application Support/SubsAnywhere/data/
   subtitles/       # текущие SRT и состояние заданий; старые файлы не удаляются
+    preparations/  # постоянные исходные дорожки и подготовленные переводы, без TTL
   words.sqlite3    # неиспользуемый архив; сервер его не открывает
 ```
 

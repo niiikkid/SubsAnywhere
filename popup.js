@@ -102,7 +102,8 @@ function drawPreparation() {
       : !state.settings.secondTrackId ? 'Сначала выберите субтитры.'
         : preparationBusy ? 'Проверяю состояние перевода…'
           : ({ idle: 'Перевод всей выбранной дорожки.', running: 'Готовлю перевод…',
-            ready: 'Перевод готов и сохранён.', paused: 'На паузе. Готовые переводы сохранены.',
+            ready: preparation.backendSaved ? 'Перевод готов и сохранён на сервере.' : 'Перевод готов и сохранён.',
+            paused: 'На паузе. Готовые переводы сохранены.',
             error: 'Не удалось завершить перевод. Готовые переводы сохранены.' })[preparation.status]
   );
   $('preparationStatus').classList.toggle('error', Boolean(preparationError || preparation.error || preparation.status === 'error'));
@@ -691,7 +692,7 @@ async function installLocalSubtitle(payload, selectTrack = false, selectionAtSta
   if (payload.srt.length > 5 * 1024 * 1024) throw new Error('Локальный файл субтитров слишком большой');
   const cues = parseSrt(payload.srt);
   if (!cues.length) throw new Error('Локальный сервер вернул пустые субтитры');
-  const source = payload.source === 'youtube-page' ? 'page' : payload.source === 'generated' ? 'generated' : 'youtube';
+  const source = ['youtube-page', 'page'].includes(payload.source) ? 'page' : payload.source === 'generated' ? 'generated' : 'youtube';
   const track = localSubtitleTrack(payload.videoId, source, cues, payload.language);
   const revision = selectionRevision;
   const shouldSelect = (selectTrack && selectionAtStart === selectionRevision)
@@ -731,7 +732,9 @@ async function pollExistingSubtitle(epoch, language, selectionAtStart) {
   const existingReady = await installLocalSubtitle({ ...result, videoId }, true, selectionAtStart);
   if (popupClosed || epoch !== youtubeEpoch) return;
   downloadingLanguage = '';
-  if (existingReady) setYoutubeStatus(result.source === 'youtube-page' ? 'Субтитры получены со страницы YouTube.' : '');
+  if (existingReady) setYoutubeStatus(result.backendSaved === false
+    ? 'Субтитры сохранены в Chrome. Серверная копия не подтверждена: проверьте локальный сервер.'
+    : ['youtube-page', 'page'].includes(result.source) ? 'Субтитры получены со страницы YouTube и сохранены.' : '', result.backendSaved === false);
   else {
     subtitleResults.set(language, 'Нет субтитров');
     setYoutubeStatus(result.error || 'Субтитров на этом языке нет.', true);

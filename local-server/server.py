@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import shutil
@@ -32,6 +33,126 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 43817
 MAX_SUBTITLE_BYTES = 5 * 1024 * 1024
 CAPTION_CACHE_VERSION = 1
+MAX_PREPARATION_BYTES = 32 * 1024 * 1024
+# JSON escaping can expand each SRT character to six bytes.
+MAX_CACHE_BODY_BYTES = MAX_SUBTITLE_BYTES * 6 + 1024
+PREPARATION_ID_PATTERN = re.compile(r"[a-f0-9]{64}\Z")
+PREPARATION_PATH_PATTERN = re.compile(r"/api/preparations/([a-f0-9]{64})\Z")
+
+
+def bounded_text(value, limit, nonempty=False):
+    if not isinstance(value, str) or len(value) > limit or (nonempty and not value.strip()):
+        raise ValueError("Invalid text")
+    # Reject unpaired surrogates before any UTF-8 storage or response encoding.
+    value.encode("utf-8")
+    return value
+
+
+def bounded_number(value, limit, integer=False):
+    if (type(value) not in (int, float) or not 0 <= value <= limit
+            or not math.isfinite(value) or (integer and type(value) is not int)):
+        raise ValueError("Invalid number")
+    return value
+
+
+def validate_preparation_id(value):
+    if not isinstance(value, str) or not PREPARATION_ID_PATTERN.fullmatch(value):
+        raise ValueError("Invalid preparation ID")
+    return value
+
+
+def validate_result_value(value, depth=0):
+    """Bound translation/glossary data without coupling storage to AI execution."""
+    if depth > 8:
+        raise ValueError("Translation nesting too deep")
+    if value is None or type(value) is bool:
+        return
+    if isinstance(value, str):
+        bounded_text(value, 32000)
+    elif type(value) in (int, float):
+        bounded_number(value, 2 ** 53 - 1)
+    elif isinstance(value, list) and len(value) <= 2000:
+        for item in value:
+            validate_result_value(item, depth + 1)
+    elif isinstance(value, dict) and len(value) <= 64:
+        for key, item in value.items():
+            bounded_text(key, 128, True)
+            if re.sub(r"[^a-z]", "", key.lower()) in {
+                    "apikey", "token", "accesstoken", "authorization", "password", "secret", "credentials"}:
+                raise ValueError("Credentials are not archive data")
+            validate_result_value(item, depth + 1)
+    else:
+        raise ValueError("Invalid translation value")
+
+
+def validate_preparation(job, preparation_id):
+    validate_preparation_id(preparation_id)
+    required = {"id", "pageKey", "trackId", "provider", "model", "status", "error",
+                "descriptors", "results", "revision", "updatedAt"}
+    if (not isinstance(job, dict) or not required.issubset(job)
+            or set(job) - required - {"sourceTrack"} or job["id"] != preparation_id):
+        raise ValueError("Invalid preparation fields")
+    for key, limit in (("pageKey", 4096), ("trackId", 1024), ("provider", 128), ("model", 512)):
+        bounded_text(job[key], limit, True)
+    if job["status"] not in ("idle", "running", "paused", "error", "ready"):
+        raise ValueError("Invalid preparation status")
+    bounded_text(job["error"], 4096)
+    bounded_number(job["revision"], 2 ** 53 - 1, integer=True)
+    bounded_number(job["updatedAt"], 2 ** 53 - 1)
+    descriptors = job["descriptors"]
+    if not isinstance(descriptors, list) or not 1 <= len(descriptors) <= 40000:
+        raise ValueError("Invalid descriptors")
+    keys = set()
+    for descriptor in descriptors:
+        fields = {"key", "sourceText", "displayText", "language", "characters"}
+        if (not isinstance(descriptor, dict) or not fields.issubset(descriptor)
+                or set(descriptor) - fields - {"generatedPinyin"}):
+            raise ValueError("Invalid descriptor")
+        key = bounded_text(descriptor["key"], 2048, True)
+        if key in keys or key in {"__proto__", "constructor", "prototype"}:
+            raise ValueError("Invalid descriptor key")
+        keys.add(key)
+        for field in ("sourceText", "displayText", "characters"):
+            bounded_text(descriptor[field], 1000, field == "sourceText")
+        if descriptor["language"] not in ("", "en", "zh"):
+            raise ValueError("Invalid descriptor language")
+        if "generatedPinyin" in descriptor and type(descriptor["generatedPinyin"]) is not bool:
+            raise ValueError("Invalid pinyin flag")
+    results = job["results"]
+    if not isinstance(results, dict) or not set(results).issubset(keys):
+        raise ValueError("Invalid result keys")
+    for result in results.values():
+        if not isinstance(result, dict) or set(result) != {"items"}:
+            raise ValueError("Invalid result")
+        items = result["items"]
+        if (not isinstance(items, list) or not 1 <= len(items) <= 1000
+                or not all(isinstance(item, dict) for item in items)):
+            raise ValueError("Invalid result items")
+        validate_result_value(items)
+        if not any(item.get("isSentenceTranslation") is True
+                   and isinstance(item.get("dictionary"), str) and item["dictionary"].strip() for item in items):
+            raise ValueError("Missing successful sentence dictionary")
+    if job["status"] == "ready" and set(results) != keys:
+        raise ValueError("Incomplete ready preparation")
+    if "sourceTrack" in job:
+        track = job["sourceTrack"]
+        fields = {"id", "name", "language", "sourceType", "sourceVideoId", "cues"}
+        if not isinstance(track, dict) or set(track) != fields or track["id"] != job["trackId"]:
+            raise ValueError("Invalid source track")
+        for key, limit in (("id", 1024), ("name", 1024), ("language", 64), ("sourceType", 128), ("sourceVideoId", 128)):
+            bounded_text(track[key], limit)
+        cues = track["cues"]
+        if not isinstance(cues, list) or not 1 <= len(cues) <= 20000:
+            raise ValueError("Invalid source cues")
+        for cue in cues:
+            if not isinstance(cue, dict) or set(cue) != {"start", "end", "text"}:
+                raise ValueError("Invalid source cue")
+            bounded_number(cue["start"], 1e9)
+            bounded_number(cue["end"], 1e9)
+            if cue["end"] <= cue["start"]:
+                raise ValueError("Invalid cue interval")
+            bounded_text(cue["text"], 32000, True)
+    return job
 ERROR_MESSAGES = {
     "start_failed": "Could not start subtitle download; retry.",
     "download_failed": "Subtitle download failed; previous subtitles were preserved.",
@@ -101,6 +222,8 @@ class SubtitleService:
         # Fixed lock stripes avoid growing a lock map for every requested ID.
         self.subtitle_locks = [threading.Lock() for _ in range(64)]
         self.download_locks = [threading.Lock() for _ in range(64)]
+        self.preparation_locks = [threading.Lock() for _ in range(64)]
+        self.browser_locks = [threading.Lock() for _ in range(64)]
         self.caption_slots = threading.BoundedSemaphore(1)
         self.caption_jobs = OrderedDict()
         self.caption_active = set()
@@ -142,9 +265,120 @@ class SubtitleService:
         return {"status": "missing", "source": source, "language_required": True,
                 "available_languages": ["en", "zh"]}
 
+    def _read_preparation(self, preparation_id):
+        path = self.output_root / "preparations" / (preparation_id + ".json")
+        try:
+            with path.open("rb") as source:
+                contents = source.read(MAX_PREPARATION_BYTES + 1)
+            if len(contents) > MAX_PREPARATION_BYTES:
+                raise ValueError("Archive too large")
+            return validate_preparation(json.loads(contents), preparation_id)
+        except FileNotFoundError:
+            return None
+
+    def preparation(self, preparation_id):
+        validate_preparation_id(preparation_id)
+        with self.preparation_locks[hash(preparation_id) % len(self.preparation_locks)]:
+            job = self._read_preparation(preparation_id)
+            return {"status": "ready", "job": job} if job else {"status": "missing"}
+
+    def save_preparation(self, preparation_id, job):
+        validate_preparation(job, preparation_id)
+        with self.preparation_locks[hash(preparation_id) % len(self.preparation_locks)]:
+            old = self._read_preparation(preparation_id)
+            merged = dict(job)
+            if old:
+                # An ID cannot be repurposed to overwrite another source/model.
+                for field in ("pageKey", "trackId", "provider", "model", "descriptors"):
+                    if old[field] != job[field]:
+                        raise ValueError("Archive identity mismatch")
+                if "sourceTrack" in old and "sourceTrack" in job:
+                    for field in ("id", "cues", "sourceVideoId"):
+                        if old["sourceTrack"][field] != job["sourceTrack"][field]:
+                            raise ValueError("Source track mismatch")
+                newer = (job["revision"], job["updatedAt"]) > (old["revision"], old["updatedAt"])
+                merged = dict(job if newer else old)
+                merged["results"] = {**job["results"], **old["results"]}
+                if newer:
+                    merged["results"].update(job["results"])
+                if "sourceTrack" in old or "sourceTrack" in job:
+                    merged["sourceTrack"] = old.get("sourceTrack", job.get("sourceTrack"))
+                merged["revision"] = max(old["revision"], job["revision"])
+                merged["updatedAt"] = max(old["updatedAt"], job["updatedAt"])
+                if old["status"] == "ready" or job["status"] == "ready":
+                    merged.update(status="ready", error="")
+            validate_preparation(merged, preparation_id)
+            contents = json.dumps(merged, ensure_ascii=False, allow_nan=False)
+            if len(contents.encode("utf-8")) > MAX_PREPARATION_BYTES:
+                raise ValueError("Archive too large")
+            path = self.output_root / "preparations" / (preparation_id + ".json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._write_text_atomically(path, contents)
+            self._cache_preparation_source(merged)
+            return {"status": "saved", "job": merged}
+
+    def _cache_preparation_source(self, job):
+        track = job.get("sourceTrack")
+        if not track or track["sourceType"] != "youtube-page" or track["language"] not in ("en", "zh"):
+            return
+        video_id = validate_video_id(track["sourceVideoId"])
+        paths = output_paths(self.output_root, video_id)
+        if self._browser_cache(paths, track["language"]):
+            return
+        def timestamp(seconds):
+            milliseconds = round(seconds * 1000)
+            hours, milliseconds = divmod(milliseconds, 3600000)
+            minutes, milliseconds = divmod(milliseconds, 60000)
+            seconds, milliseconds = divmod(milliseconds, 1000)
+            return f"{hours:02}:{minutes:02}:{seconds:02},{milliseconds:03}"
+        srt = "\n\n".join(
+            f"{index}\n{timestamp(cue['start'])} --> {timestamp(cue['end'])}\n{cue['text']}"
+            for index, cue in enumerate(track["cues"], 1)
+        ) + "\n"
+        self.cache_subtitles({"videoId": video_id, "language": track["language"], "source": "page", "srt": srt})
+
+    def cache_subtitles(self, payload):
+        if not isinstance(payload, dict) or set(payload) != {"videoId", "language", "srt", "source"}:
+            raise ValueError("Invalid browser cache fields")
+        video_id = validate_video_id(payload["videoId"])
+        language = payload["language"]
+        if language not in ("en", "zh") or payload["source"] != "page":
+            raise ValueError("Invalid browser caption source")
+        contents = bounded_text(payload["srt"], MAX_SUBTITLE_BYTES, True)
+        if len(contents.encode("utf-8")) > MAX_SUBTITLE_BYTES:
+            raise ValueError("Browser subtitles too large")
+        self._validate_srt(contents)
+        paths = output_paths(self.output_root, video_id)
+        with self.browser_locks[hash(video_id) % len(self.browser_locks)]:
+            paths.directory.mkdir(parents=True, exist_ok=True)
+            path = paths.directory / ("browser-" + language + ".srt")
+            record = {"version": CAPTION_CACHE_VERSION, "language": language, "source": "page",
+                      "sha256": hashlib.sha256(contents.encode("utf-8")).hexdigest()}
+            self._write_text_atomically(path, contents)
+            self._write_text_atomically(path.with_suffix(".language.json"), json.dumps(record))
+            return self._subtitle_payload(path, "page", contents, language)
+
+    def _browser_cache(self, paths, language):
+        with self.browser_locks[hash(paths.directory.name) % len(self.browser_locks)]:
+            path = paths.directory / ("browser-" + language + ".srt")
+            try:
+                with path.with_suffix(".language.json").open(encoding="utf-8") as source:
+                    record = json.loads(source.read(8192))
+                if (not isinstance(record, dict) or record.get("version") != CAPTION_CACHE_VERSION
+                        or record.get("language") != language or record.get("source") != "page"):
+                    return None
+                contents = self._read_subtitle(path)
+                if hashlib.sha256(contents.encode("utf-8")).hexdigest() != record.get("sha256"):
+                    return None
+                self._validate_srt(contents)
+                return self._subtitle_payload(path, "page", contents, language)
+            except (OSError, ValueError, ServiceError):
+                return None
+
     def _caption_cache(self, paths, language):
         localized = paths.youtube_srt.with_name(paths.youtube_srt.stem + "-" + language + ".srt")
-        return localized, (self._cached_youtube_payload(localized, language)
+        return localized, (self._browser_cache(paths, language)
+                           or self._cached_youtube_payload(localized, language)
                            or self._cached_youtube_payload(paths.youtube_srt, language))
 
     def existing(self, video_id: str, language: str = "") -> dict:
@@ -426,17 +660,40 @@ def handler_for(service):
             if self.headers.get_all("Transfer-Encoding") or len(lengths) > 1 or (lengths and not re.fullmatch(r"[0-9]{1,10}", lengths[0])):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid request framing"})
                 return False
-            if lengths and int(lengths[0]) > 0:
-                self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "Request bodies are not accepted"})
+            body_limit = self._body_limit()
+            if lengths and int(lengths[0]) > body_limit:
+                self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "Request body exceeds route limit"})
                 return False
             return True
+
+        def _new_route(self):
+            parsed = urlparse(self.path)
+            if self.path != parsed.path or parsed.params or parsed.query or parsed.fragment or parsed.netloc or parsed.scheme:
+                return None
+            match = PREPARATION_PATH_PATTERN.fullmatch(parsed.path)
+            if match:
+                return ("preparation", match[1])
+            if parsed.path == "/api/subtitles/cache":
+                return ("cache", None)
+            return None
+
+        def _body_limit(self):
+            route = self._new_route()
+            if route and self.command == "PUT" and route[0] == "preparation":
+                return MAX_PREPARATION_BYTES
+            if route and self.command == "POST" and route[0] == "cache":
+                return MAX_CACHE_BODY_BYTES
+            return 0
 
         def do_OPTIONS(self) -> None:
             origin = self.headers.get("Origin", "")
             requested_headers = {name.strip().lower() for name in self.headers.get("Access-Control-Request-Headers", "").split(",") if name.strip()}
+            route = self._new_route()
+            methods = {"GET", "PUT"} if route and route[0] == "preparation" else ({"POST"} if route else {"GET"})
+            allowed_headers = {"x-subsanywhere-client", "content-type"} if route else {"x-subsanywhere-client"}
             if (not EXTENSION_ORIGIN_PATTERN.fullmatch(origin)
-                    or self.headers.get("Access-Control-Request-Method", "GET") not in {"GET"}
-                    or not requested_headers.issubset({"x-subsanywhere-client"})):
+                    or self.headers.get("Access-Control-Request-Method", "GET") not in methods
+                    or not requested_headers.issubset(allowed_headers)):
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden origin"})
                 return
             self.send_response(HTTPStatus.NO_CONTENT)
@@ -452,17 +709,66 @@ def handler_for(service):
             if not self._authorized():
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden client"})
                 return
+            route = self._new_route()
+            if route and route[0] == "preparation":
+                self._archive_action(lambda: service.preparation(route[1]))
+                return
             actions = {
                 "/api/subtitles/existing": getattr(service, "existing_job", service.existing),
             }
             self._run_action(actions.get(parsed.path), parsed)
 
         def do_POST(self) -> None:
-            parsed = urlparse(self.path)
+            self._write_archive()
+
+        def do_PUT(self) -> None:
+            self._write_archive()
+
+        def _write_archive(self):
             if not self._authorized():
                 self._send_json(HTTPStatus.FORBIDDEN, {"error": "Forbidden client"})
                 return
-            self._run_action(None, parsed)
+            route = self._new_route()
+            if not route or not self._body_limit():
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
+                return
+            content_types = self.headers.get_all("Content-Type", [])
+            if (len(content_types) != 1 or not re.fullmatch(
+                    r'application/json(?:\s*;\s*charset\s*=\s*"?utf-8"?)?', content_types[0], re.I)):
+                self._send_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "JSON Content-Type required"})
+                return
+            def write():
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0:
+                    raise ValueError("Body required")
+                raw = self.rfile.read(length)
+                if len(raw) != length:
+                    raise ValueError("Incomplete body")
+                def unique_object(pairs):
+                    result = {}
+                    for key, value in pairs:
+                        if key in result:
+                            raise ValueError("Duplicate JSON field")
+                        result[key] = value
+                    return result
+                def invalid_constant(value):
+                    raise ValueError("Invalid JSON constant")
+                payload = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object,
+                                     parse_constant=invalid_constant)
+                return (service.save_preparation(route[1], payload) if route[0] == "preparation"
+                        else service.cache_subtitles(payload))
+            self._archive_action(write)
+
+        def _archive_action(self, action):
+            try:
+                self._send_json(HTTPStatus.OK, action())
+            except (ValueError, RecursionError, TimeoutError):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid archive request"})
+            except ServiceError as error:
+                status = HTTPStatus.BAD_REQUEST if error.code == "invalid_output" else HTTPStatus.INTERNAL_SERVER_ERROR
+                self._send_json(status, error_payload(error))
+            except Exception:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "Archive storage unavailable"})
 
         def _run_action(self, action, parsed) -> None:
             if action is None:
@@ -516,8 +822,10 @@ def handler_for(service):
 
         def _cors_headers(self, origin: str) -> None:
             self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "X-SubsAnywhere-Client")
+            route = self._new_route()
+            methods = "GET, PUT, OPTIONS" if route and route[0] == "preparation" else ("POST, OPTIONS" if route else "GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", methods)
+            self.send_header("Access-Control-Allow-Headers", "X-SubsAnywhere-Client, Content-Type" if route else "X-SubsAnywhere-Client")
             self.send_header("Vary", "Origin")
 
         def log_message(self, format: str, *args) -> None:

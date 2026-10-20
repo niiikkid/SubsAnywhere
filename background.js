@@ -1,6 +1,6 @@
 import { AIClient, AiCredentialStore } from './ai-client.js';
 import { BackgroundController } from './background-controller.js';
-import { LocalSubtitleClient } from './local-subtitles-client.js';
+import { LocalSubtitleClient, PreparationArchiveClient } from './local-subtitles-client.js';
 import { TranslationPreparation } from './translation-preparation.js';
 
 import { StateStore } from './state-store.js';
@@ -12,6 +12,7 @@ const credentialStore = new AiCredentialStore(storage);
 const aiClient = new AIClient(globalThis.fetch.bind(globalThis), credentialStore);
 const localSubtitles = new LocalSubtitleClient(globalThis.fetch.bind(globalThis));
 const preparations = new TranslationPreparation(storage, {
+  archive: new PreparationArchiveClient(globalThis.fetch.bind(globalThis)),
   configuration: async () => {
     const config = await credentialStore.publicInfo();
     return { provider: config.activeProvider, ...config.providers[config.activeProvider] };

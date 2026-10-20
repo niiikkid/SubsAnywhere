@@ -84,6 +84,14 @@ export class LocalSubtitleClient {
     return this.#request('/api/subtitles/existing', videoId, 'GET', language);
   }
 
+  async cachePageCaptions(videoId, language, srt) {
+    const payload = await archiveRequest(this.#fetch, this.#baseUrl, '/api/subtitles/cache', 'POST', {
+      videoId: assertVideoId(videoId), language, srt, source: 'page',
+    });
+    if (!['saved', 'ready'].includes(payload.status)) throw new Error('Сервер не подтвердил сохранение субтитров');
+    return payload;
+  }
+
 
   async #request(path, videoId, method = 'GET', language = '') {
     const safeId = assertVideoId(videoId);
@@ -126,5 +134,46 @@ export class LocalSubtitleClient {
     return payload.status === 'error'
       ? { ...payload, error: SERVER_ERRORS[payload.error_code] || payload.error || 'Не удалось обработать видео' }
       : payload;
+  }
+}
+
+async function archiveRequest(fetchImpl, baseUrl, path, method = 'GET', value) {
+  const response = await fetchImpl(`${baseUrl}${path}`, {
+    method, signal: AbortSignal.timeout(25_000), redirect: 'error', credentials: 'omit', cache: 'no-store',
+    headers: { Accept: 'application/json', 'X-SubsAnywhere-Client': 'extension-v1',
+      ...(value === undefined ? {} : { 'Content-Type': 'application/json' }) },
+    ...(value === undefined ? {} : { body: JSON.stringify(value) }),
+  }).catch(() => { throw new Error('Не удалось связаться с сервером хранения переводов'); });
+  const payload = await response.json().catch(() => { throw new Error('Сервер хранения вернул неверный ответ'); });
+  if (!response.ok) throw new Error('Не удалось сохранить или восстановить данные на сервере. Обновите локальный сервер');
+  return payload;
+}
+
+export class PreparationArchiveClient {
+  #fetch;
+  #baseUrl;
+  constructor(fetchImpl, baseUrl = DEFAULT_BASE_URL) {
+    this.#fetch = fetchImpl;
+    this.#baseUrl = baseUrl;
+  }
+  #path(id) {
+    if (!/^[a-f0-9]{64}$/.test(id || '')) throw new Error('Некорректный идентификатор перевода');
+    return `/api/preparations/${id}`;
+  }
+  async get(id) {
+    const payload = await archiveRequest(this.#fetch, this.#baseUrl, this.#path(id));
+    if (payload.status === 'missing') return null;
+    if (payload.status !== 'ready' || payload.job?.id !== id) throw new Error('Сервер вернул другой перевод');
+    return payload.job;
+  }
+  async save(job) {
+    const payload = await archiveRequest(this.#fetch, this.#baseUrl, this.#path(job.id), 'PUT', job);
+    if (payload.status !== 'saved' || payload.job?.id !== job.id) throw new Error('Сервер не подтвердил сохранение перевода');
+    const saved = await this.get(job.id);
+    if (!saved || Object.keys(job.results).some((key) => !Object.hasOwn(saved.results || {}, key))
+      || (job.status === 'ready' && saved.status !== 'ready')) {
+      throw new Error('Не удалось подтвердить записанный перевод на сервере');
+    }
+    return saved;
   }
 }

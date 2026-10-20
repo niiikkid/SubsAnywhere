@@ -295,7 +295,14 @@ export class BackgroundController {
         await this.#assertCurrentPage(message);
         const page = frames.find((frame) => frame.frameId === 0)?.result;
         if (!page) throw new Error('Не удалось получить субтитры из открытой вкладки YouTube');
-        return pageCaptionPayload(page, message.videoId, message.language);
+        const payload = pageCaptionPayload(page, message.videoId, message.language);
+        if (this.#localSubtitles?.cachePageCaptions) {
+          try {
+            await this.#localSubtitles.cachePageCaptions(message.videoId, message.language, payload.srt);
+            payload.backendSaved = true;
+          } catch { payload.backendSaved = false; }
+        }
+        return payload;
       })().finally(() => { if (this.#youtubePageReads.get(key) === pending) this.#youtubePageReads.delete(key); });
       this.#youtubePageReads.set(key, pending);
     }

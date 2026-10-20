@@ -179,6 +179,7 @@ async function backgroundHarness(setAccessLevel) {
     chrome, MESSAGE, failure, console, fetch() { throw new Error('No network in bootstrap tests'); },
     StateStore: class {}, AiCredentialStore: class {}, AIClient: class {}, LocalSubtitleClient: class {},
     TranslationPreparation: class { async initialize() {} },
+    PreparationArchiveClient: class {},
 
     BackgroundController: class {
       async handle(message) { handled.push(message); return { ok: true }; }
