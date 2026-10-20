@@ -856,22 +856,32 @@ test('English inline fallback still displays the full translation above the orig
   assert.equal(overlay.children[0].children[1].textContent, 'Built in');
 });
 
-test('production prepares six future captions with at most two translations in flight', async () => {
+test('production translates the full 30-second window with three in flight and 250ms start spacing', async () => {
   const harness = await makeHarness();
   const pending = [];
   const requested = [];
+  const starts = [];
+  const timers = new Map();
+  let timerId = 0;
   let now = 10_000;
   let peak = 0;
   harness.context.Date = class extends Date { static now() { return now; } };
+  harness.context.setTimeout = (callback, delay = 0) => {
+    const id = ++timerId;
+    timers.set(id, { callback, at: now + delay });
+    return id;
+  };
+  harness.context.clearTimeout = (id) => timers.delete(id);
   const video = harness.document.videos[0];
   video.textTracks[0].activeCues = [{ text: 'Current line' }];
-  video.textTracks[0].cues = Array.from({ length: 8 }, (_, index) => ({
+  video.textTracks[0].cues = Array.from({ length: 13 }, (_, index) => ({
     startTime: 1 + index * 3, endTime: 2 + index * 3,
     text: index ? `Future ${index}` : 'Current line',
   }));
   harness.context.chrome.runtime.sendMessage = (message) => {
     if (message.type !== 'dualCaptions.caption.translate') return Promise.resolve({ ok: true });
     requested.push(message.text);
+    starts.push(now);
     return new Promise((resolve) => {
       pending.push({ resolve });
       peak = Math.max(peak, pending.length);
@@ -879,8 +889,11 @@ test('production prepares six future captions with at most two translations in f
   };
   const flush = async () => {
     for (let index = 0; index < 8; index += 1) await Promise.resolve();
-    now += 750;
-    while (harness.scheduled.length) harness.scheduled.shift()();
+    now += 250;
+    for (const [id, timer] of [...timers]) {
+      if (timer.at <= now) { timers.delete(id); timer.callback(); }
+    }
+    for (let index = 0; index < 8; index += 1) await Promise.resolve();
   };
   vm.runInContext(harness.runtimeSource, harness.context);
   vm.runInContext(harness.contentSource, harness.context);
@@ -891,14 +904,59 @@ test('production prepares six future captions with at most two translations in f
   assert.deepEqual(requested, ['Current line', 'Future 1']);
   video.dispatch('timeupdate');
   await flush();
-  assert.equal(pending.length, 2);
-  for (let index = 0; index < 7; index += 1) {
+  assert.deepEqual(requested, ['Current line', 'Future 1', 'Future 2']);
+  assert.equal(pending.length, 3);
+  await flush();
+  assert.equal(pending.length, 3, 'a fourth request waits for a free slot');
+  for (let index = 0; index < 11; index += 1) {
     pending.shift().resolve({ ok: true, data: { items: [{ isSentenceTranslation: true, dictionary: 'Перевод' }] } });
     await flush();
   }
-  assert.equal(peak, 2);
-  assert.deepEqual(requested, ['Current line', ...Array.from({ length: 6 }, (_, index) => `Future ${index + 1}`)]);
+  assert.equal(peak, 3);
+  assert.deepEqual(requested, ['Current line', ...Array.from({ length: 10 }, (_, index) => `Future ${index + 1}`)]);
+  assert.ok(starts.every((time, index) => !index || time - starts[index - 1] >= 250));
   assert.equal(pending.length, 0);
+});
+
+test('seeking drops queued captions outside the new window and prioritizes the displayed caption', async () => {
+  const harness = await makeHarness();
+  const requested = [];
+  const pending = [];
+  let now = 10_000;
+  harness.context.Date = class extends Date { static now() { return now; } };
+  const video = harness.document.videos[0];
+  const cues = Array.from({ length: 80 }, (_, index) => ({ start: index * 3, end: index * 3 + 2, text: `Line ${index}` }));
+  video.currentTime = 0.5;
+  harness.context.chrome.runtime.sendMessage = (message) => {
+    if (message.type !== 'dualCaptions.caption.translate') return Promise.resolve({ ok: true });
+    requested.push(message.text);
+    return new Promise((resolve) => pending.push(resolve));
+  };
+  const flush = async () => {
+    for (let index = 0; index < 10; index += 1) await Promise.resolve();
+    now += 250;
+    for (const callback of harness.scheduled.splice(0)) callback();
+  };
+  vm.runInContext(harness.runtimeSource, harness.context);
+  vm.runInContext(harness.contentSource, harness.context);
+  [...harness.onMessage.listeners][0]({
+    type: 'dualCaptions.content.fullState', settings: { secondTrackId: 'external:seek' },
+    externalTracks: [{ id: 'seek', cues }],
+    preparation: { status: 'running', trackId: 'external:seek', entries: [] },
+  }, {}, () => {});
+  await flush();
+  await flush();
+  assert.deepEqual(requested, ['Line 0', 'Line 1', 'Line 2']);
+  video.currentTime = 150.5;
+  video.dispatch('timeupdate');
+  pending.shift()({ ok: true, data: { items: [{ isSentenceTranslation: true, dictionary: 'Готово' }] } });
+  await flush();
+  assert.equal(requested.at(-1), 'Line 50');
+  pending.shift()({ ok: true, data: { items: [{ isSentenceTranslation: true, dictionary: 'Готово' }] } });
+  await flush();
+  assert.equal(requested.at(-1), 'Line 51');
+  assert.ok(!requested.includes('Line 3'), 'old queued lookahead is never sent after seeking');
+  assert.equal(harness.reports.some((message) => message.type.includes('preparation') || message.type.includes('translation.status')), false);
 });
 
 test('production does not queue a second translation while the same caption is in flight', async () => {
@@ -1130,40 +1188,6 @@ test('production reuses prefetched translations when overlapping captions appear
     assert.ok(overlay.children[0].children.some((child) => child.textContent === 'Готовый перевод'));
     assert.equal(requested.length, count, 'displaying a prepared overlap must not make a new AI request');
   }
-});
-
-test('prepared playback restores more than 80 captions and seeks without any translation requests', async () => {
-  const harness = await makeHarness();
-  const video = harness.document.videos[0];
-  const cues = Array.from({ length: 100 }, (_, index) => ({ start: index * 3, end: index * 3 + 2, text: `Prepared ${index}` }));
-  vm.runInContext(harness.runtimeSource, harness.context);
-  vm.runInContext(harness.contentSource, harness.context);
-  const entries = cues.map((cue) => ({
-    key: harness.context.DualCaptionsContentRuntime.captionTranslationDescriptor(cue.text).key,
-    items: [{ start: 0, end: cue.text.length, text: cue.text, dictionary: `Перевод ${cue.text}`, isSentenceTranslation: true }],
-  }));
-  harness.reports.length = 0;
-  video.currentTime = 0.5;
-  const listener = [...harness.onMessage.listeners][0];
-  listener({
-    type: 'dualCaptions.content.fullState', settings: { secondTrackId: 'external:prepared' },
-    externalTracks: [{ id: 'prepared', cues }],
-    preparation: { id: 'complete', trackId: 'external:prepared', status: 'ready', completed: 100, total: 100, revision: 5, entries },
-  }, {}, () => {});
-  for (const index of [0, 99, 50, 0]) {
-    video.currentTime = index * 3 + 0.5;
-    video.dispatch('timeupdate');
-    const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
-    assert.ok(overlay.children[0].children.some((child) => child.textContent === `Перевод Prepared ${index}`));
-  }
-  listener({ type: 'dualCaptions.content.settings', settings: { secondTrackId: 'external:prepared', fontSize: 30 } }, {}, () => {});
-  listener({ type: 'dualCaptions.content.preparation', preparation: {
-    id: 'complete', trackId: 'external:prepared', status: 'running', revision: 2, completed: 1, total: 100, entries: [],
-  } }, {}, () => {});
-  await Promise.resolve();
-  assert.equal(harness.reports.filter((message) => message.type === 'dualCaptions.caption.translate').length, 0);
-  const overlay = harness.document.documentElement.children.find((child) => child.id === 'dual-captions-overlay');
-  assert.ok(overlay.children[0].children.some((child) => child.textContent === 'Перевод Prepared 0'));
 });
 
 test('production keeps the full original caption clickable when AI returns no phrases', async () => {

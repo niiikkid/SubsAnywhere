@@ -1,7 +1,6 @@
 import { AIClient, AiCredentialStore } from './ai-client.js';
 import { BackgroundController } from './background-controller.js';
-import { LocalSubtitleClient, PreparationArchiveClient } from './local-subtitles-client.js';
-import { TranslationPreparation } from './translation-preparation.js';
+import { LocalSubtitleClient } from './local-subtitles-client.js';
 
 import { StateStore } from './state-store.js';
 import { MESSAGE, failure, ok } from './protocol.js';
@@ -11,17 +10,7 @@ const store = new StateStore(storage);
 const credentialStore = new AiCredentialStore(storage);
 const aiClient = new AIClient(globalThis.fetch.bind(globalThis), credentialStore);
 const localSubtitles = new LocalSubtitleClient(globalThis.fetch.bind(globalThis));
-const preparations = new TranslationPreparation(storage, {
-  archive: new PreparationArchiveClient(globalThis.fetch.bind(globalThis)),
-  configuration: async () => {
-    const config = await credentialStore.publicInfo();
-    return { provider: config.activeProvider, ...config.providers[config.activeProvider] };
-  },
-  translate: (descriptor) => controller.translatePreparedCaption(descriptor),
-  onUpdate: (job) => controller.preparationUpdated(job),
-  heartbeat: () => chrome.runtime.getPlatformInfo(),
-});
-const controller = new BackgroundController(chrome, store, { credentialStore, aiClient, localSubtitles, preparations });
+const controller = new BackgroundController(chrome, store, { credentialStore, aiClient, localSubtitles });
 const PANEL_STORAGE_KEY = 'dualCaptionsPanel';
 
 function normalizePanelState(value = {}) {
@@ -61,7 +50,6 @@ async function handlePanelState(message, sender) {
 
 const protectedMessages = new Set([
   MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.AI_MODELS_GET, MESSAGE.CAPTION_TRANSLATE,
-  MESSAGE.TRANSLATION_PREPARE, MESSAGE.TRANSLATION_STATUS, MESSAGE.TRANSLATION_CANCEL,
 ]);
 const storageProtection = (async () => {
   try {
@@ -113,5 +101,4 @@ chrome.tabs.onRemoved.addListener((tabId) => controller.removeTab(tabId));
 
 // Persisted registrations outlive this worker and must follow revoked permissions.
 controller.initialize().catch(() => undefined);
-storageProtection.then((protectedStorage) => protectedStorage && preparations.initialize()).catch(() => undefined);
 chrome.permissions.onRemoved?.addListener(() => controller.initialize().catch(() => undefined));

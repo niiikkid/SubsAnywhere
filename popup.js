@@ -59,132 +59,6 @@ let youtubePollTimer;
 let youtubeEpoch = 0;
 let popupClosed = false;
 let selectionRevision = 0;
-let preparation = { status: 'idle', completed: 0, total: 0 };
-let preparationKey = '';
-let preparationRevision = 0;
-let preparationBusy = false;
-let preparationError = '';
-let preparationPollTimer;
-
-// The worker owns this durable job. Popup timers only read its progress.
-function preparationContext() {
-  return {
-    tabId, pageKey, trackId: state.settings.secondTrackId, selectionRevision,
-    provider: aiConfig.activeProvider,
-    model: aiConfig.providers[aiConfig.activeProvider]?.model,
-    hasApiKey: aiConfig.providers[aiConfig.activeProvider]?.hasApiKey,
-    aiKeyRevision, aiModelRevision,
-  };
-}
-
-function preparationContextKey() {
-  return JSON.stringify(preparationContext());
-}
-
-function preparationContextCurrent(context, revision) {
-  return !popupClosed && pageHydrated && revision === preparationRevision
-    && JSON.stringify(context) === preparationContextKey();
-}
-
-function preparationAvailable() {
-  const config = aiConfig.providers[aiConfig.activeProvider];
-  return pageHydrated && Number.isInteger(tabId) && Boolean(pageKey && state.settings.secondTrackId)
-    && aiLoaded && !hydrationErrors.has('ai') && config?.hasApiKey && Boolean(config.model);
-}
-
-function drawPreparation() {
-  const running = preparation.status === 'running';
-  const ready = preparation.status === 'ready';
-  const resumable = ['paused', 'error'].includes(preparation.status);
-  $('translationPreparation').dataset.status = preparation.status;
-  $('preparationStatus').textContent = preparationError || preparation.error || (
-    !pageHydrated ? 'Загружаю выбранные субтитры…'
-      : !state.settings.secondTrackId ? 'Сначала выберите субтитры.'
-        : preparationBusy ? 'Проверяю состояние перевода…'
-          : ({ idle: 'Перевод всей выбранной дорожки.', running: 'Готовлю перевод…',
-            ready: preparation.backendSaved ? 'Перевод готов и сохранён на сервере.' : 'Перевод готов и сохранён.',
-            paused: 'На паузе. Готовые переводы сохранены.',
-            error: 'Не удалось завершить перевод. Готовые переводы сохранены.' })[preparation.status]
-  );
-  $('preparationStatus').classList.toggle('error', Boolean(preparationError || preparation.error || preparation.status === 'error'));
-  $('preparationProgress').max = Math.max(1, preparation.total);
-  $('preparationProgress').value = preparation.completed;
-  $('preparationCount').value = `${preparation.completed} / ${preparation.total}`;
-  $('preparationCount').textContent = `${preparation.completed} / ${preparation.total}`;
-  $('preparationProgress').hidden = !preparation.total;
-  $('preparationCount').hidden = !preparation.total && preparation.status === 'idle';
-  $('prepareTranslation').hidden = running || ready;
-  $('prepareTranslation').textContent = resumable ? 'Продолжить подготовку' : 'Подготовить перевод целиком';
-  $('prepareTranslation').disabled = !preparationAvailable() || preparationBusy || Boolean(preparationError);
-  $('pausePreparation').hidden = !running;
-  $('pausePreparation').disabled = preparationBusy || !pageHydrated;
-  $('refreshPreparation').hidden = !preparationError;
-  $('refreshPreparation').disabled = preparationBusy || !pageHydrated || !state.settings.secondTrackId;
-  $('preparationHint').textContent = !preparationAvailable() && pageHydrated && state.settings.secondTrackId
-    ? 'Выберите активную модель и сохраните API-ключ в настройках. Запуск и продолжение — платные API-запросы.'
-    : 'Запуск и продолжение разрешают платные API-запросы для всей дорожки. Цена зависит от модели и объёма. Результат сохраняется; закрытие окна не останавливает подготовку.';
-}
-
-function schedulePreparationStatus() {
-  clearTimeout(preparationPollTimer);
-  if (popupClosed || preparation.status !== 'running') return;
-  preparationPollTimer = setTimeout(() => {
-    void readPreparation();
-  }, 1500);
-}
-
-async function updatePreparation(type) {
-  const context = preparationContext();
-  if (popupClosed || !pageHydrated || !context.pageKey || !context.trackId) return;
-  clearTimeout(preparationPollTimer);
-  const revision = ++preparationRevision;
-  preparationBusy = true;
-  preparationError = '';
-  drawPreparation();
-  try {
-    const data = await request(type, { tabId: context.tabId, pageKey: context.pageKey, trackId: context.trackId });
-    if (!preparationContextCurrent(context, revision)) return;
-    const next = data?.preparation;
-    if (!next || !['idle', 'running', 'ready', 'paused', 'error'].includes(next.status)) {
-      throw new Error('Не удалось прочитать состояние перевода. Обновите статус.');
-    }
-    if (next.trackId && next.trackId !== context.trackId) {
-      throw new Error('Дорожка изменилась. Обновите статус перевода.');
-    }
-    preparation = {
-      ...next,
-      completed: Math.max(0, Number(next.completed) || 0),
-      total: Math.max(0, Number(next.total) || 0),
-    };
-  } catch (error) {
-    if (!preparationContextCurrent(context, revision)) return;
-    // A lost response is not evidence that the saved job/cache was discarded.
-    preparationError = `${error.message} Готовый результат не удалён. Обновите статус перед повторным запуском.`;
-  } finally {
-    if (preparationContextCurrent(context, revision)) {
-      preparationBusy = false;
-      drawPreparation();
-      if (!preparationError) schedulePreparationStatus();
-    }
-  }
-}
-
-function readPreparation() {
-  return updatePreparation(MESSAGE.TRANSLATION_STATUS);
-}
-
-function syncPreparation(force = false) {
-  const key = preparationContextKey();
-  if (popupClosed || (!force && preparationKey === key)) return;
-  const changed = preparationKey !== key;
-  preparationKey = key;
-  clearTimeout(preparationPollTimer);
-  preparationRevision += 1;
-  preparationBusy = false;
-  preparationError = '';
-  if (changed) preparation = { status: 'idle', completed: 0, total: 0 };
-  if (pageHydrated && pageKey && state.settings.secondTrackId) void readPreparation();
-}
 
 function postPanelMessage(type, payload = {}) {
   if (!embeddedPanel) return;
@@ -468,8 +342,6 @@ function drawWorkspace() {
   $('captionState').hidden = Boolean(youtubeId);
   $('hideSubtitles').hidden = !selectedId;
   drawLanguageTracks();
-  syncPreparation();
-  drawPreparation();
 }
 
 function option(parent, value, label) {
@@ -644,7 +516,6 @@ function persistSetting(key, value) {
   const normalized = updateLocalSetting(key, value);
   if (key === 'secondTrackId') { drawWorkspace(); drawSync(); }
   return saveRequest(`setting:${key}`, MESSAGE.STATE_PATCH, { tabId, pageKey, patch: { [key]: normalized } }, (data) => {
-    if (key === 'secondTrackId' && state.settings.secondTrackId === normalized) syncPreparation(true);
     if (key === 'secondTrackId' && data.delivered === false && connectedPlayer()) {
       playerDeliveryFailed = true;
       setStatus('Не удалось передать субтитры на видео. Подключитесь снова; выбор сохранён.', true);
@@ -965,20 +836,6 @@ document.defaultView?.addEventListener('pagehide', () => {
   popupClosed = true;
   youtubeEpoch += 1;
   clearTimeout(youtubePollTimer);
-  clearTimeout(preparationPollTimer);
-  preparationRevision += 1;
-});
-$('prepareTranslation').addEventListener('click', () => {
-  if (!preparationAvailable() || preparationBusy || preparationError
-    || ['running', 'ready'].includes(preparation.status)) return;
-  void updatePreparation(MESSAGE.TRANSLATION_PREPARE);
-});
-$('pausePreparation').addEventListener('click', () => {
-  if (preparationBusy || preparation.status !== 'running') return;
-  void updatePreparation(MESSAGE.TRANSLATION_CANCEL);
-});
-$('refreshPreparation').addEventListener('click', () => {
-  if (!preparationBusy) void readPreparation();
 });
 $('retrySave').addEventListener('click', () => {
   for (const entry of [...saves.values()]) if (entry.error) void entry.retry().catch(() => {});

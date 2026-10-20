@@ -1,5 +1,4 @@
-"""Focused offline archive/storage and HTTP-boundary regression fixtures."""
-import copy
+"""Focused offline browser subtitle cache and HTTP-boundary regressions."""
 import http.client
 import json
 import pathlib
@@ -8,40 +7,22 @@ import sys
 import tempfile
 import threading
 import unittest
-from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import server
 
-ID = "a" * 64
 VIDEO = "rwnyaH6cTDE"
 ORIGIN = "chrome-extension://" + "a" * 32
-ROUTE = "/api/preparations/" + ID
+ROUTE = "/api/subtitles/cache"
 SRT = "1\r\n00:00:00,000 --> 00:00:01,000\r\n你好\r\n\r\n"
 
 
-def job(count=2):
-    descriptors = [{"key": "caption\x00Line " + str(index), "sourceText": "Line " + str(index),
-                    "displayText": "Line " + str(index), "language": "", "characters": ""}
-                   for index in range(count)]
-    return {"id": ID, "pageKey": "https://www.youtube.com/watch?v=" + VIDEO,
-            "trackId": "track", "provider": "openrouter", "model": "offline-fixture",
-            "status": "running", "error": "", "descriptors": descriptors, "results": {},
-            "revision": 1, "updatedAt": 1000,
-            "sourceTrack": {"id": "track", "name": "Captions", "language": "en",
-                            "sourceType": "youtube-page", "sourceVideoId": VIDEO,
-                            "cues": [{"start": index, "end": index + 1, "text": "Line " + str(index)}
-                                     for index in range(count)]}}
+def browser_captions(language="zh"):
+    return {"videoId": VIDEO, "language": language, "srt": SRT, "source": "page"}
 
 
-def result():
-    return {"items": [{"text": "Line", "dictionary": "Перевод", "isSentenceTranslation": True,
-                       "start": 0, "end": 4, "glossary": [{"text": "Line", "translation": "Строка",
-                                                             "sourceStart": 0, "sourceEnd": 4}]}]}
-
-
-class ArchiveTests(unittest.TestCase):
+class BrowserCacheTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -57,123 +38,32 @@ class ArchiveTests(unittest.TestCase):
         self.addCleanup(service.close)
         return service
 
-    def test_restart_reads_exact_preparation_and_browser_srt_without_provider(self):
-        initial = job()
-        initial["results"] = {item["key"]: result() for item in initial["descriptors"]}
-        initial["status"] = "ready"
-        saved = self.service.save_preparation(ID, initial)
-        self.assertEqual(saved, {"status": "saved", "job": initial})
+    def test_restart_reads_exact_browser_srt_and_preserves_historical_data_without_provider(self):
+        legacy = self.root / "preparations" / ("a" * 64 + ".json")
+        legacy.parent.mkdir()
+        legacy_contents = b'{"historical":"opaque legacy data"}\n'
+        legacy.write_bytes(legacy_contents)
         for language in ("en", "zh"):
-            self.service.cache_subtitles({"videoId": VIDEO, "language": language, "srt": SRT, "source": "page"})
+            self.service.cache_subtitles(browser_captions(language))
         self.service.close()
         restarted = self.new_service()
-        self.assertEqual(restarted.preparation(ID), {"status": "ready", "job": initial})
-        self.assertEqual(restarted.preparation("b" * 64), {"status": "missing"})
         for language in ("en", "zh"):
             for payload in (restarted.existing_job(VIDEO, language), restarted.existing(VIDEO, language)):
                 self.assertEqual(payload["source"], "page")
                 self.assertEqual(payload["srt"], SRT)
                 self.assertEqual(payload["file_name"], "browser-" + language + ".srt")
         self.provider.acquire.assert_not_called()
-        self.assertTrue((self.root / "preparations" / (ID + ".json")).is_file())
+        self.assertEqual(legacy.read_bytes(), legacy_contents)
         self.assertEqual(sorted(p.name for p in (self.root / VIDEO).iterdir()),
                          ["browser-en.language.json", "browser-en.srt", "browser-zh.language.json", "browser-zh.srt"])
 
-    def test_preparation_migrates_browser_only_source_and_allows_display_label_changes(self):
-        initial = job(1)
-        initial["results"] = {initial["descriptors"][0]["key"]: result()}
-        initial["status"] = "ready"
-        self.service.save_preparation(ID, initial)
-        restarted = self.new_service()
-        cached = restarted.existing_job(VIDEO, "en")
-        self.assertEqual(cached["source"], "page")
-        self.assertIn("Line 0", cached["srt"])
-        renamed = copy.deepcopy(initial)
-        renamed["sourceTrack"]["name"] = "A new display label"
-        renamed["revision"] += 1
-        self.assertEqual(restarted.save_preparation(ID, renamed)["job"]["status"], "ready")
-        self.provider.acquire.assert_not_called()
-
-    def test_stale_put_unions_successes_and_never_downgrades_ready(self):
-        first = job()
-        keys = [item["key"] for item in first["descriptors"]]
-        first["results"][keys[0]] = result()
-        first["revision"] = 8
-        self.service.save_preparation(ID, first)
-        stale = job()
-        stale["results"][keys[1]] = result()
-        merged = self.service.save_preparation(ID, stale)["job"]
-        self.assertEqual(set(merged["results"]), set(keys))
-        self.assertEqual(merged["revision"], 8)
-        merged.update(status="ready", revision=9)
-        self.service.save_preparation(ID, merged)
-        incoming = job()
-        incoming.update(status="error", error="interrupted", revision=100, updatedAt=2000)
-        kept = self.service.save_preparation(ID, incoming)["job"]
-        self.assertEqual(kept["status"], "ready")
-        self.assertEqual(kept["error"], "")
-        self.assertEqual(set(kept["results"]), set(keys))
-        self.assertIn("sourceTrack", kept)
-
-    def test_concurrent_puts_preserve_all_ten_successes(self):
-        initial = job(10)
-        barrier = threading.Barrier(10)
-        def save(index):
-            current = copy.deepcopy(initial)
-            current["results"][current["descriptors"][index]["key"]] = result()
-            barrier.wait(3)
-            return self.service.save_preparation(ID, current)
-        with ThreadPoolExecutor(max_workers=10) as workers:
-            list(workers.map(save, range(10)))
-        saved = self.service.preparation(ID)["job"]
-        self.assertEqual(set(saved["results"]), {item["key"] for item in initial["descriptors"]})
-        self.assertFalse(list((self.root / "preparations").glob("*.tmp")))
-
-    def test_validation_rejects_ids_credentials_unknown_fields_and_invalid_ready(self):
-        initial = job()
-        for invalid in ("A" * 64, "a" * 63, "../" + ID, ID + "\n", None):
-            with self.subTest(id=invalid), self.assertRaises(ValueError):
-                self.service.preparation(invalid)
-        variants = []
-        for field, value in (("id", "b" * 64), ("apiKey", "not-a-real-key"), ("extra", True),
-                             ("provider", ""), ("model", 3), ("status", "done"),
-                             ("revision", True), ("updatedAt", float("nan")), ("status", "ready")):
-            candidate = copy.deepcopy(initial)
-            candidate[field] = value
-            variants.append(candidate)
-        candidate = copy.deepcopy(initial)
-        candidate["results"]["unknown"] = result()
-        variants.append(candidate)
-        candidate = copy.deepcopy(initial)
-        candidate["descriptors"].append(candidate["descriptors"][0])
-        variants.append(candidate)
-        candidate = copy.deepcopy(initial)
-        candidate["sourceTrack"]["cues"][0]["end"] = -1
-        variants.append(candidate)
-        candidate = copy.deepcopy(initial)
-        candidate["results"][candidate["descriptors"][0]["key"]] = {"items": [{"dictionary": "", "isSentenceTranslation": True}]}
-        variants.append(candidate)
-        candidate = copy.deepcopy(initial)
-        candidate["results"][candidate["descriptors"][0]["key"]] = result()
-        candidate["results"][candidate["descriptors"][0]["key"]]["items"][0]["api_key"] = "fixture"
-        variants.append(candidate)
-        for candidate in variants:
-            with self.subTest(candidate=candidate), self.assertRaises(ValueError):
-                self.service.save_preparation(ID, candidate)
-        self.assertFalse((self.root / "preparations").exists())
-
-    def test_identity_mismatch_and_atomic_failure_preserve_prior_archive(self):
-        initial = job()
-        self.service.save_preparation(ID, initial)
-        changed = copy.deepcopy(initial)
-        changed["model"] = "other"
-        with self.assertRaises(ValueError):
-            self.service.save_preparation(ID, changed)
+    def test_atomic_failure_preserves_prior_browser_srt(self):
+        self.service.cache_subtitles(browser_captions())
         with mock.patch.object(server.os, "fsync", side_effect=OSError("offline fixture")):
             with self.assertRaises(OSError):
-                self.service.save_preparation(ID, {**initial, "revision": 2})
-        self.assertEqual(self.service.preparation(ID)["job"], initial)
-        self.assertEqual(len(list((self.root / "preparations").iterdir())), 1)
+                self.service.cache_subtitles({**browser_captions(), "srt": SRT.replace("你好", "再见")})
+        self.assertEqual(self.service.existing_job(VIDEO, "zh")["srt"], SRT)
+        self.assertFalse(list((self.root / VIDEO).glob("*.tmp")))
 
     def test_browser_cache_validates_srt_size_and_keeps_provider_files(self):
         paths = server.output_paths(self.root, VIDEO)
@@ -189,7 +79,7 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(paths.youtube_srt.read_text(), "historical provider file")
 
 
-class ArchiveHttpTests(unittest.TestCase):
+class BrowserCacheHttpTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.provider = mock.Mock(configured=False)
@@ -226,14 +116,12 @@ class ArchiveHttpTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def test_http_put_get_and_cached_existing_readback(self):
-        initial = job()
-        self.assertEqual(self.request()[2], {"status": "missing"})
-        self.assertEqual(self.request("PUT", payload=initial)[2], {"status": "saved", "job": initial})
-        self.assertEqual(self.request()[2], {"status": "ready", "job": initial})
-        payload = {"videoId": VIDEO, "language": "zh", "srt": SRT, "source": "page"}
-        self.assertEqual(self.request("POST", "/api/subtitles/cache", payload)[0], 200)
+    def test_http_browser_cache_and_exact_existing_readback(self):
+        status, _, saved = self.request("POST", payload=browser_captions())
+        self.assertEqual(status, 200)
+        self.assertEqual((saved["status"], saved["source"], saved["srt"]), ("ready", "page", SRT))
         ready = self.request(path="/api/subtitles/existing?video_id=" + VIDEO + "&language=zh")[2]
+        self.assertEqual(ready, saved)
         self.assertEqual((ready["source"], ready["srt"]), ("page", SRT))
         self.provider.acquire.assert_not_called()
 
@@ -241,48 +129,49 @@ class ArchiveHttpTests(unittest.TestCase):
         for headers in ({"Origin": "https://evil.example"}, {"Origin": "null"},
                         {"Host": "attacker.example"}, {"X-SubsAnywhere-Client": None}):
             with self.subTest(headers=headers):
-                self.assertEqual(self.request("PUT", payload=job(), headers=headers)[0], 403)
+                self.assertEqual(self.request("POST", payload=browser_captions(), headers=headers)[0], 403)
         for content_type in (None, "text/plain", "application/json; nope=1"):
-            self.assertEqual(self.request("PUT", payload=job(), headers={"Content-Type": content_type})[0], 415)
-        self.assertEqual(self.request("PUT", payload=job(), headers={"Content-Type": "application/json; charset=utf-8"})[0], 200)
-        self.assertEqual(self.request("PUT", body=b'{"id":1,"id":2}', headers={"Content-Type": "application/json"})[0], 400)
+            self.assertEqual(self.request("POST", payload=browser_captions(), headers={"Content-Type": content_type})[0], 415)
+        self.assertEqual(self.request("POST", payload=browser_captions(), headers={"Content-Type": "application/json; charset=utf-8"})[0], 200)
+        for body in (b'{"srt":1,"srt":2}', b'{"srt":NaN}', b'[]', b'{}'):
+            self.assertEqual(self.request("POST", body=body, headers={"Content-Type": "application/json"})[0], 400)
 
-    def test_exact_new_route_preflights_keep_legacy_get_only(self):
-        for path, method in ((ROUTE, "PUT"), ("/api/subtitles/cache", "POST")):
-            status, headers, _ = self.request("OPTIONS", path, headers={
-                "Access-Control-Request-Method": method,
-                "Access-Control-Request-Headers": "X-SubsAnywhere-Client, Content-Type"})
-            self.assertEqual(status, 204)
-            self.assertIn(method, headers["Access-Control-Allow-Methods"])
-            self.assertIn("Content-Type", headers["Access-Control-Allow-Headers"])
-        for path in ("/api/subtitles/existing", ROUTE + "?x=1", ROUTE + ";x", ROUTE + "/", "/api/words"):
+    def test_exact_cache_preflight_keeps_other_routes_get_only(self):
+        status, headers, _ = self.request("OPTIONS", headers={
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "X-SubsAnywhere-Client, Content-Type"})
+        self.assertEqual(status, 204)
+        self.assertEqual(headers["Access-Control-Allow-Methods"], "POST, OPTIONS")
+        self.assertIn("Content-Type", headers["Access-Control-Allow-Headers"])
+        for path in ("/api/subtitles/existing", ROUTE + "?x=1", ROUTE + ";x", ROUTE + "/", "/api/words",
+                     "/api/preparations/" + "a" * 64):
             self.assertEqual(self.request("OPTIONS", path, headers={
-                "Access-Control-Request-Method": "PUT", "Access-Control-Request-Headers": "Content-Type"})[0], 403)
+                "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "Content-Type"})[0], 403)
+        self.assertEqual(self.request("OPTIONS", headers={"Access-Control-Request-Method": "PUT"})[0], 403)
         status, headers, _ = self.request("OPTIONS", "/api/subtitles/existing", headers={"Access-Control-Request-Method": "GET"})
         self.assertEqual(status, 204)
         self.assertEqual(headers["Access-Control-Allow-Methods"], "GET, OPTIONS")
         self.assertNotIn("Content-Type", headers["Access-Control-Allow-Headers"])
 
-    def test_bodies_only_on_new_methods_and_bounded_framing(self):
-        for method, path in (("GET", ROUTE), ("POST", ROUTE), ("PUT", "/api/subtitles/cache"),
-                             ("POST", "/api/subtitles/existing"), ("PUT", ROUTE + "?x=1")):
+    def test_bodies_only_on_cache_post_and_bounded_framing(self):
+        for method, path in (("GET", ROUTE), ("PUT", ROUTE),
+                             ("POST", "/api/subtitles/existing"), ("POST", ROUTE + "?x=1"),
+                             ("POST", ROUTE + ";x"), ("POST", ROUTE + "/"),
+                             ("PUT", "/api/preparations/" + "a" * 64)):
             self.assertEqual(self.request(method, path, body=b"{}")[0], 413)
-        self.assertEqual(self.request("PUT", payload=job(), headers={"Transfer-Encoding": "chunked"})[0], 400)
-        for path, method, limit in ((ROUTE, "PUT", server.MAX_PREPARATION_BYTES),
-                                    ("/api/subtitles/cache", "POST", server.MAX_CACHE_BODY_BYTES)):
-            self.assertEqual(self.request(method, path, headers={"Content-Length": str(limit + 1)})[0], 413)
+        self.assertEqual(self.request("POST", payload=browser_captions(), headers={"Transfer-Encoding": "chunked"})[0], 400)
+        self.assertEqual(self.request("POST", headers={"Content-Length": str(server.MAX_CACHE_BODY_BYTES + 1)})[0], 413)
         # Use raw framing to prove duplicate lengths are rejected, even identical ones.
         with socket.create_connection(("127.0.0.1", self.port), timeout=3) as connection:
-            connection.sendall((f"PUT {ROUTE} HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n"
+            connection.sendall((f"POST {ROUTE} HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n"
                                 "X-SubsAnywhere-Client: extension-v1\r\nContent-Length: 2\r\n"
                                 "Content-Length: 2\r\nContent-Type: application/json\r\n\r\n{}").encode())
             self.assertIn(b"400 Bad Request", connection.recv(4096))
 
-    def test_invalid_id_routes_never_create_archives(self):
-        for suffix in ("A" * 64, "a" * 63, "..%2f" + ID, ID + "/", ID + ";x"):
-            self.assertEqual(self.request(path="/api/preparations/" + suffix)[0], 404)
-        self.assertEqual(self.request("PUT", payload={**job(), "id": "b" * 64})[0], 400)
-        self.assertEqual(self.request("PUT", payload={**job(), "status": "ready"})[0], 400)
+    def test_only_subtitle_cache_is_exposed_without_creating_legacy_data(self):
+        for path in (ROUTE, "/api/preparations/" + "a" * 64):
+            self.assertEqual(self.request(path=path)[0], 404)
+            self.assertEqual(self.request("PUT", path)[0], 501)
         self.assertFalse((pathlib.Path(self.directory.name) / "preparations").exists())
 
 

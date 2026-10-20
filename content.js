@@ -14,7 +14,6 @@
 
 
     CONTENT_RESET: 'dualCaptions.content.reset',
-    CONTENT_PREPARATION: 'dualCaptions.content.preparation',
   });
   function sendMessage(message) {
     try { return chrome.runtime.sendMessage(message); }
@@ -58,12 +57,11 @@
     const cleanup = [];
     const translationCache = new Map();
     const translationFailures = new Map();
-    let preparation = null;
-    let preparedTranslations = new Map();
     const maxCachedTranslations = 80;
-    const maxQueuedTranslations = 6;
-    const maxConcurrentTranslations = 2;
+    const maxQueuedTranslations = 80;
+    const maxConcurrentTranslations = 3;
     const maxTranslationAttempts = 3;
+    let translationWindowKeys = new Set();
     const queuedTranslations = [];
     const queuedTranslationSet = new Set();
     const inFlightTranslationKeys = new Set();
@@ -108,6 +106,7 @@
       lifecycle += 1;
       queuedTranslations.length = 0;
       queuedTranslationSet.clear();
+      translationWindowKeys.clear();
       clearTimeout(translationTimer);
       translationDispatchScheduled = false;
     }
@@ -474,8 +473,7 @@
         }
         showTooltip({
           dictionary: failure || 'Перевод готовится…',
-          context: selectedPreparation() ? 'Прогресс и продолжение доступны в панели расширения.'
-            : failure ? 'Нажмите, чтобы повторить.' : 'Результат появится автоматически.',
+          context: failure ? 'Нажмите, чтобы повторить.' : 'Результат появится автоматически.',
         }, caption);
       };
       caption.addEventListener('click', (event) => { event.stopPropagation(); showStatus(); });
@@ -486,19 +484,37 @@
     }
 
     function translationDescriptor(text) {
-      return runtime.captionTranslationDescriptor(text);
-    }
-
-    function selectedPreparation() {
-      return preparation?.trackId === state.settings.secondTrackId ? preparation : null;
-    }
-
-    function adoptPreparation(value) {
-      if (value?.id && value.id === preparation?.id && value.revision < preparation.revision) return;
-      if (value?.id !== preparation?.id || value?.status !== preparation?.status) cancelPendingWork();
-      preparation = value || null;
-      preparedTranslations = new Map((value?.entries || []).map((entry) => [entry.key, entry.items]));
-      state.renderedCaptionKey = '';
+      const bilingual = runtime.splitPinyinCaption(text);
+      const source = runtime.chineseSourceText(bilingual?.characters ?? text);
+      if (bilingual && source === bilingual.characters) {
+        return {
+          key: `zh\u0000${bilingual.characters}\u0000${bilingual.pinyin}`,
+          sourceText: bilingual.characters,
+          displayText: bilingual.pinyin,
+          language: 'zh',
+          characters: bilingual.characters,
+        };
+      }
+      text = source;
+      if (/\p{Script=Han}/u.test(text)) {
+        return {
+          key: `zh\u0000${text}\u0000`,
+          sourceText: text,
+          // Keep the Han text visible while the one translation request is in flight.
+          // Its returned sentence item replaces this line with generated pinyin.
+          displayText: text,
+          language: 'zh',
+          characters: text,
+          generatedPinyin: true,
+        };
+      }
+      return {
+        key: `caption\u0000${text}`,
+        sourceText: text,
+        displayText: text,
+        language: '',
+        characters: '',
+      };
     }
 
     function rememberTranslation(key, items) {
@@ -516,8 +532,8 @@
     }
 
     function requestTranslation(descriptor, priority = false) {
-      if (selectedPreparation()) return;
-      if (!descriptor?.key || !descriptor.sourceText || translationCache.has(descriptor.key) || translationFailures.has(descriptor.key)
+      if (!descriptor?.key || !descriptor.sourceText || !translationWindowKeys.has(descriptor.key)
+        || translationCache.has(descriptor.key) || translationFailures.has(descriptor.key)
         || inFlightTranslationKeys.has(descriptor.key)) return;
       if (queuedTranslationSet.has(descriptor.key)) {
         if (priority) {
@@ -538,7 +554,6 @@
     }
 
     function pumpTranslations() {
-      if (selectedPreparation()) return;
       if (!state.active || destroyed || inFlightTranslationKeys.size >= maxConcurrentTranslations
         || translationDispatchScheduled || !queuedTranslations.length) return;
       const generation = lifecycle;
@@ -602,13 +617,13 @@
         if (!external) return [];
         const scale = Number(external.timeScale) > 0 ? Number(external.timeScale) : 1;
         const sourceTime = (video.currentTime - Number(external.offsetSeconds || 0)) / scale;
-        return runtime.upcomingCueTexts(external.cues, sourceTime, { seconds: 30 / scale, limit: 6 });
+        return runtime.upcomingCueTexts(external.cues, sourceTime, { seconds: 30 / scale, limit: maxQueuedTranslations });
       }
       const track = builtInTrackResolver.find(video.textTracks, id, fallbackId);
       // A present native track owns its gaps, including an unloaded cue list.
-      if (track) return runtime.upcomingCueTexts(track.cues, video.currentTime, { seconds: 30, limit: 6 });
+      if (track) return runtime.upcomingCueTexts(track.cues, video.currentTime, { seconds: 30, limit: maxQueuedTranslations });
       const cached = cachedBuiltInTrack(id, video);
-      return runtime.upcomingCueTexts(cached?.cues, video.currentTime, { seconds: 30, limit: 6 });
+      return runtime.upcomingCueTexts(cached?.cues, video.currentTime, { seconds: 30, limit: maxQueuedTranslations });
     }
 
     function cachedBuiltInTrack(id, video) {
@@ -794,19 +809,14 @@
 
     function renderInteractiveCaption(text) {
       const sourceDescriptor = translationDescriptor(text);
-      const prepared = selectedPreparation();
-      const items = prepared ? preparedTranslations.get(sourceDescriptor.key) : translationCache.get(sourceDescriptor.key);
+      const items = translationCache.get(sourceDescriptor.key);
       const translatedPinyin = sourceDescriptor.language === 'zh'
         ? items?.find((item) => item?.isSentenceTranslation && typeof item.text === 'string' && item.text.trim())?.text.trim()
         : '';
       const descriptor = translatedPinyin
         ? { ...sourceDescriptor, displayText: translatedPinyin }
         : sourceDescriptor;
-      const failure = prepared
-        ? (items ? '' : prepared.status === 'ready' ? 'Нет сохранённого перевода этой строки'
-          : prepared.status === 'running' ? `Подготовка перевода: ${prepared.completed} из ${prepared.total}`
-            : prepared.error || 'Подготовка остановлена. Нажмите «Продолжить» в панели расширения.')
-        : translationFailures.get(sourceDescriptor.key) || '';
+      const failure = translationFailures.get(sourceDescriptor.key) || '';
       state.second.style.fontSize = `${state.settings.fontSize}px`;
       const key = `${state.settings.secondTrackId}\u0000${sourceDescriptor.key}\u0000${descriptor.displayText}\u0000${state.settings.inlineTranslations}\u0000${state.settings.showOriginalWithInline}\u0000${state.settings.translationFontSize}\u0000${state.settings.inlineTranslationFontSize}\u0000${state.settings.fontSize}\u0000${failure}`;
       if (state.renderedCaptionKey === key && state.renderedCaptionItems === items) return;
@@ -1038,10 +1048,19 @@
       );
       cacheSelectedBuiltInTrack(state.settings.secondTrackId, state.settings.secondTrackFallbackId, video);
       if (!state.drag) {
-        renderInteractiveCaption(secondText);
-        for (const text of futureCaptionTexts(state.settings.secondTrackId, state.settings.secondTrackFallbackId, video)) {
-          requestTranslation(translationDescriptor(text));
+        const upcoming = futureCaptionTexts(state.settings.secondTrackId, state.settings.secondTrackFallbackId, video)
+          .map(translationDescriptor);
+        translationWindowKeys = new Set([translationDescriptor(secondText).key, ...upcoming.map((item) => item.key)]);
+        // Seeking or changing the track must not spend requests on old lookahead.
+        for (let index = queuedTranslations.length - 1; index >= 0; index -= 1) {
+          if (!translationWindowKeys.has(queuedTranslations[index].key)) {
+            queuedTranslationSet.delete(queuedTranslations[index].key);
+            queuedTranslations.splice(index, 1);
+          }
         }
+        renderInteractiveCaption(secondText);
+        for (const descriptor of upcoming) requestTranslation(descriptor);
+        pumpTranslations();
       }
       state.second.style.color = state.settings.subtitleColor;
       state.second.style.background = state.settings.subtitleBackground ? subtitleBackgroundStyle() : 'transparent';
@@ -1087,7 +1106,7 @@
 
     function handle(message) {
       syncPage();
-      if ([MESSAGE.CONTENT_FULL_STATE, MESSAGE.CONTENT_SETTINGS, MESSAGE.CONTENT_TRACKS, MESSAGE.CONTENT_PREPARATION].includes(message?.type)) {
+      if ([MESSAGE.CONTENT_FULL_STATE, MESSAGE.CONTENT_SETTINGS, MESSAGE.CONTENT_TRACKS].includes(message?.type)) {
         const currentVideoId = pageVideoId();
         if (currentVideoId && message.videoId !== currentVideoId) return { ok: false };
         state.videoId = message.videoId || '';
@@ -1099,7 +1118,6 @@
       if (message?.type === MESSAGE.CONTENT_FULL_STATE) {
         state.settings = runtime.normalizeSettings(message.settings);
         state.externalTracks = Array.isArray(message.externalTracks) ? message.externalTracks : [];
-        adoptPreparation(message.preparation);
         state.active = true;
         // Reports restore state; reporting that restoration creates an endless handshake.
         if (!manager.current().video) discover();
@@ -1108,7 +1126,6 @@
       }
       if (message?.type === MESSAGE.CONTENT_SETTINGS) {
         state.settings = runtime.normalizeSettings(message.settings);
-        if (Object.hasOwn(message, 'preparation')) adoptPreparation(message.preparation);
         state.active = true;
         render();
         return { ok: true };
@@ -1116,23 +1133,13 @@
       if (message?.type === MESSAGE.CONTENT_TRACKS) {
         state.settings = runtime.normalizeSettings(message.settings);
         state.externalTracks = Array.isArray(message.externalTracks) ? message.externalTracks : [];
-        adoptPreparation(message.preparation);
         state.active = true;
-        render();
-        return { ok: true };
-      }
-
-      if (message?.type === MESSAGE.CONTENT_PREPARATION) {
-        if ((message.preparation?.trackId || message.trackId) !== state.settings.secondTrackId) return { ok: false };
-        adoptPreparation(message.preparation);
         render();
         return { ok: true };
       }
 
       if (message?.type === MESSAGE.CONTENT_RESET) {
         cancelPendingWork();
-        preparation = null;
-        preparedTranslations.clear();
         const { video } = manager.current();
         restoreModes(video);
         state.settings = runtime.normalizeSettings();

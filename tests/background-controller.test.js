@@ -5,7 +5,6 @@ import vm from 'node:vm';
 import { BackgroundController as RuntimeBackgroundController, PlayerRegistry, stablePlayerKey } from '../background-controller.js';
 import { MESSAGE, failure } from '../protocol.js';
 import { StateStore } from '../state-store.js';
-import { TranslationPreparation } from '../translation-preparation.js';
 import { builtInTrackFallbackPatch, normalizeState, patchSettings as patchState } from '../state-core.js';
 
 const EXTENSION_ID = 'fixture-extension';
@@ -109,9 +108,8 @@ test('content cannot invoke popup-only credential, state, discovery or local-job
   const controller = new BackgroundController(makeChrome(), store, { credentialStore });
   const before = structuredClone(store.state);
   for (const type of [MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.AI_MODELS_GET, MESSAGE.STATE_GET, MESSAGE.STATE_PATCH,
-    MESSAGE.PLAYER_GET, MESSAGE.PLAYER_DISCOVER, MESSAGE.LOCAL_SUBTITLE_EXISTING, MESSAGE.TRACK_REMOVE,
-    MESSAGE.TRANSLATION_PREPARE, MESSAGE.TRANSLATION_STATUS, MESSAGE.TRANSLATION_CANCEL]) {
-    const response = await controller.handle({ type, tabId: 77, pageKey: 'https://private.example/', patch: { fontSize: 48 }, apiKey: 'not-a-real-key' }, { tab: { id: 3 }, frameId: 8 });
+    MESSAGE.PLAYER_GET, MESSAGE.PLAYER_DISCOVER, MESSAGE.LOCAL_SUBTITLE_EXISTING, MESSAGE.TRACK_REMOVE]) {
+    const response = await controller.handle({ type, tabId: 77, pageKey: 'https://private.example/', patch: { fontSize: 48 }, apiKey: 'untrusted-test-value' }, { tab: { id: 3 }, frameId: 8 });
     assert.equal(response.ok, false, type);
   }
   assert.equal(accesses, 0);
@@ -178,8 +176,6 @@ async function backgroundHarness(setAccessLevel) {
   const sandbox = {
     chrome, MESSAGE, failure, console, fetch() { throw new Error('No network in bootstrap tests'); },
     StateStore: class {}, AiCredentialStore: class {}, AIClient: class {}, LocalSubtitleClient: class {},
-    TranslationPreparation: class { async initialize() {} },
-    PreparationArchiveClient: class {},
 
     BackgroundController: class {
       async handle(message) { handled.push(message); return { ok: true }; }
@@ -207,8 +203,7 @@ test('background waits for trusted-only storage access before handling AI creden
 test('storage access protection failures fail closed for AI without crashing the worker', async () => {
   for (const setter of [undefined, () => { throw new Error('Unsupported'); }, () => Promise.reject(new Error('Denied'))]) {
     const harness = await backgroundHarness(setter);
-    for (const type of [MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.AI_MODELS_GET, MESSAGE.CAPTION_TRANSLATE,
-      MESSAGE.TRANSLATION_PREPARE, MESSAGE.TRANSLATION_STATUS, MESSAGE.TRANSLATION_CANCEL]) {
+    for (const type of [MESSAGE.AI_CONFIG_GET, MESSAGE.AI_CONFIG_PATCH, MESSAGE.AI_MODELS_GET, MESSAGE.CAPTION_TRANSLATE]) {
       assert.equal((await harness.request(type)).ok, false);
     }
     assert.equal(harness.handled.length, 0);
@@ -636,56 +631,6 @@ async function selectTranslationPlayer(controller) {
   await controller.handle({ type: MESSAGE.PLAYER_SELECT, tabId: 3, frameId: 0, playerKey: player.key });
   return sender;
 }
-
-test('whole-track preparation restores into the selected player and serves cached caption messages', async () => {
-  const pageKey = 'https://www.youtube.com/watch?v=GgXaTa4k_QU';
-  const chrome = makeChrome();
-  chrome.tabs.get = async () => ({ url: pageKey });
-  const store = new FakeStore();
-  const data = {};
-  const storage = {
-    async get(keys) { return Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map((key) => [key, structuredClone(data[key])])); },
-    async set(values) { Object.assign(data, structuredClone(values)); },
-  };
-  let calls = 0;
-  let controller;
-  const preparations = new TranslationPreparation(storage, {
-    configuration: async () => ({ provider: 'deepseek', model: 'deepseek-chat', hasApiKey: true }),
-    translate: (descriptor) => controller.translatePreparedCaption(descriptor),
-    onUpdate: (job) => controller.preparationUpdated(job),
-  });
-  controller = new BackgroundController(chrome, store, { preparations, deepSeek: {
-    async translateCaption() { calls += 1; return { translation: 'Сохранённый перевод', glossary: [] }; },
-  } });
-  const sender = { tab: { id: 3, url: pageKey }, frameId: 0, url: pageKey, documentId: 'current-document' };
-  const report = { type: MESSAGE.PLAYER_REPORT, player: { title: 'Video', videoIndex: 0, tracks: [] } };
-  await controller.handle(report, sender);
-  await controller.handle({ type: MESSAGE.PLAYER_SELECT, tabId: 3, pageKey, frameId: 0, playerKey: controller.players(3)[0].key });
-  store.state.externalTracks = [{ id: 'whole', cues: [{ start: 1, end: 2, text: 'Hello' }] }];
-  await controller.handle({ type: MESSAGE.STATE_PATCH, tabId: 3, pageKey, patch: { secondTrackId: 'external:whole' } });
-  const payload = { tabId: 3, pageKey, trackId: 'external:whole' };
-  assert.equal((await controller.handle({ type: MESSAGE.TRANSLATION_STATUS, ...payload })).data.preparation.status, 'idle');
-  assert.equal(calls, 0);
-  assert.equal((await controller.handle({ type: MESSAGE.TRANSLATION_PREPARE, ...payload, trackId: 'external:stale' })).ok, false);
-  assert.equal((await controller.handle({ type: MESSAGE.TRANSLATION_PREPARE, ...payload })).ok, true);
-  let progress;
-  for (let index = 0; index < 200; index += 1) {
-    progress = await controller.handle({ type: MESSAGE.TRANSLATION_STATUS, ...payload });
-    if (progress.data?.preparation.status === 'ready') break;
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
-  assert.equal(progress.data.preparation.status, 'ready');
-  assert.equal(calls, 1);
-  const cached = await controller.handle({ type: MESSAGE.CAPTION_TRANSLATE, text: 'Hello', displayText: 'Hello' }, sender);
-  assert.equal(cached.data.items[0].dictionary, 'Сохранённый перевод');
-  assert.equal(calls, 1);
-  chrome.sent.length = 0;
-  await controller.handle(report, sender);
-  const restored = chrome.sent.find((entry) => entry.message.type === MESSAGE.CONTENT_FULL_STATE)?.message.preparation;
-  assert.equal(restored.status, 'ready');
-  assert.equal(restored.trackId, 'external:whole');
-  assert.equal(restored.entries.length, 1);
-});
 
 test('only the selected current frame document can spend a translation request', async () => {
   let calls = 0;

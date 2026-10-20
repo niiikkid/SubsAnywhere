@@ -15,10 +15,6 @@ export const MESSAGE = Object.freeze({
   AI_CONFIG_PATCH: 'dualCaptions.ai.patch',
   AI_MODELS_GET: 'dualCaptions.ai.models.get',
   CAPTION_TRANSLATE: 'dualCaptions.caption.translate',
-  TRANSLATION_PREPARE: 'dualCaptions.translation.prepare',
-  TRANSLATION_STATUS: 'dualCaptions.translation.status',
-  TRANSLATION_CANCEL: 'dualCaptions.translation.cancel',
-  CONTENT_PREPARATION: 'dualCaptions.content.preparation',
 
   LOCAL_SUBTITLE_EXISTING: 'dualCaptions.localSubtitle.existing',
 
