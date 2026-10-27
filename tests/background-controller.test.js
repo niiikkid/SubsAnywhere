@@ -1197,9 +1197,9 @@ test('YouTube rejects a managed track whose video differs from the destination p
   assert.equal(store.state.externalTracks.length, 0);
 });
 
-test('failed YouTube downloads fall back to the matching page language without another paid request', async () => {
+test('YouTube uses page captions without contacting the download provider in any server state', async () => {
   for (const language of ['en', 'zh']) {
-    for (const failure of ['error', 'missing', 'network']) {
+    for (const failure of ['ready', 'running', 'error', 'missing', 'network']) {
       const chrome = makeChrome();
       const pageKey = 'https://www.youtube.com/watch?v=repevhXG7W0';
       chrome.tabs.get = async () => ({ url: pageKey });
@@ -1222,7 +1222,7 @@ test('failed YouTube downloads fall back to the matching page language without a
       assert.equal(result.data.videoId, 'repevhXG7W0');
       assert.equal(result.data.language, language);
       assert.match(result.data.srt, /00:00:01,000 --> 00:00:03,000/);
-      assert.equal(paid, 1);
+      assert.equal(paid, 0);
       assert.equal(pageReads.length, 1);
       assert.equal(pageReads[0].world, 'MAIN');
       assert.deepEqual(pageReads[0].args, ['repevhXG7W0', language]);
@@ -1230,21 +1230,27 @@ test('failed YouTube downloads fall back to the matching page language without a
   }
 });
 
-test('YouTube page fallback does not replace pending API work or accept unsupported languages', async () => {
+test('missing YouTube page captions never start or poll API work, and unsupported languages are rejected', async () => {
   const chrome = makeChrome();
   chrome.tabs.get = async () => ({ url: 'https://www.youtube.com/watch?v=repevhXG7W0' });
   let primary = 0;
   let reads = 0;
-  chrome.scripting.executeScript = async () => { reads += 1; return []; };
+  let saves = 0;
+  chrome.scripting.executeScript = async () => {
+    reads += 1;
+    return [{ frameId: 0, result: { status: 'missing', videoId: 'repevhXG7W0', language: 'zh' } }];
+  };
   const controller = new BackgroundController(chrome, new FakeStore(), { localSubtitles: {
     async existing() { primary += 1; return { status: 'running' }; },
+    async cachePageCaptions() { saves += 1; },
   } });
   const message = { type: MESSAGE.LOCAL_SUBTITLE_EXISTING, tabId: 77,
     pageKey: 'https://www.youtube.com/watch?v=repevhXG7W0', videoId: 'repevhXG7W0', language: 'zh' };
-  assert.equal((await controller.handle(message)).data.status, 'running');
+  assert.equal((await controller.handle(message)).data.status, 'missing');
   assert.equal((await controller.handle({ ...message, language: 'ru' })).ok, false);
-  assert.equal(reads, 0);
-  assert.equal(primary, 1);
+  assert.equal(reads, 1);
+  assert.equal(primary, 0);
+  assert.equal(saves, 0);
 });
 
 test('YouTube page fallback discards a result if the tab navigates while it is reading', async () => {
@@ -1263,20 +1269,24 @@ test('YouTube page fallback discards a result if the tab navigates while it is r
   assert.equal(store.state.externalTracks.length, 0);
 });
 
-test('background forwards explicit YouTube subtitle actions to the local client', async () => {
+test('YouTube page captions remain available without a local server', async () => {
   const calls = [];
   const localSubtitles = {
     async existing(videoId) { calls.push(['existing', videoId]); return { status: 'ready' }; },
   };
-  const controller = new BackgroundController(makeChrome(), new FakeStore(), { localSubtitles });
+  const chrome = makeChrome();
+  chrome.scripting.executeScript = async () => [{ frameId: 0, result: {
+    status: 'ready', videoId: 'rwnyaH6cTDE', language: 'zh',
+    captionBody: JSON.stringify({ events: [{ tStartMs: 0, dDurationMs: 1000, segs: [{ utf8: '你好' }] }] }),
+  } }];
+  const controller = new BackgroundController(chrome, new FakeStore(), { localSubtitles });
 
   const existing = await controller.handle({ type: MESSAGE.LOCAL_SUBTITLE_EXISTING, tabId: 5,
     pageKey: 'https://www.youtube.com/watch?v=rwnyaH6cTDE', videoId: 'rwnyaH6cTDE', language: 'zh' });
 
   assert.equal(existing.ok, true);
-  assert.deepEqual(calls, [
-    ['existing', 'rwnyaH6cTDE'],
-  ]);
+  assert.equal(existing.data.source, 'youtube-page');
+  assert.deepEqual(calls, []);
 });
 
 test('background stores a local-server subtitle and delivers it to the selected player', async () => {

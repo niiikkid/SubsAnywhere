@@ -242,7 +242,7 @@ test('YouTube never treats another video or an arbitrary imported file as its sa
       } }),
       'dualCaptions.localSubtitle.existing': () => ({ status: 'missing' }),
     }, { id: 77, url: 'https://www.youtube.com/watch?v=repevhXG7W0' });
-    assert.equal(elements.chineseSubtitleState.textContent, 'Скачать и показать');
+    assert.equal(elements.chineseSubtitleState.textContent, 'Показать с YouTube');
     elements.chineseSubtitles.listeners.get('click')();
     await tick();
     await tick();

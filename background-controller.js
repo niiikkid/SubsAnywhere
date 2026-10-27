@@ -260,15 +260,7 @@ export class BackgroundController {
   }
 
   async #youtubeSubtitles(message) {
-    let result;
-    try {
-      result = await this.#localSubtitles?.existing(message.videoId, message.language);
-    } catch { /* A failed/offline download may use the open page, never a paid retry. */ }
     await this.#assertCurrentPage(message);
-    if (result?.status === 'ready' || result?.status === 'running') {
-      if (result.videoId && result.videoId !== message.videoId) throw new Error('Субтитры относятся к другому видео');
-      return { ...result, videoId: message.videoId };
-    }
     const key = `${message.tabId}:${message.videoId}:${message.language}`;
     let pending = this.#youtubePageReads.get(key);
     if (!pending) {
@@ -282,7 +274,7 @@ export class BackgroundController {
         const page = frames.find((frame) => frame.frameId === 0)?.result;
         if (!page) throw new Error('Не удалось получить субтитры из открытой вкладки YouTube');
         const payload = pageCaptionPayload(page, message.videoId, message.language);
-        if (this.#localSubtitles?.cachePageCaptions) {
+        if (payload.status === 'ready' && this.#localSubtitles?.cachePageCaptions) {
           try {
             await this.#localSubtitles.cachePageCaptions(message.videoId, message.language, payload.srt);
             payload.backendSaved = true;

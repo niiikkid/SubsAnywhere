@@ -260,9 +260,9 @@ function drawLanguageTracks() {
     const button = $(`${prefix}Subtitles`);
     button.disabled = !pageHydrated || !pageKey || Boolean(downloadingLanguage);
     button.setAttribute('aria-pressed', String(selected));
-    $(`${prefix}SubtitleState`).textContent = downloadingLanguage === language ? 'Скачиваю…'
+    $(`${prefix}SubtitleState`).textContent = downloadingLanguage === language ? 'Получаю со страницы…'
       : selected ? (track.sourceType === 'youtube-page' ? 'Со страницы · Показываются' : 'Показываются') : track ? 'Сохранены · Показать'
-        : subtitleResults.get(language) || 'Скачать и показать';
+        : subtitleResults.get(language) || 'Показать с YouTube';
   }
 }
 
@@ -562,7 +562,7 @@ async function installLocalSubtitle(payload, selectTrack = false, selectionAtSta
   if (payload.videoId !== youtubeId) throw new Error('Субтитры относятся к другому видео');
   if (payload.srt.length > 5 * 1024 * 1024) throw new Error('Локальный файл субтитров слишком большой');
   const cues = parseSrt(payload.srt);
-  if (!cues.length) throw new Error('Локальный сервер вернул пустые субтитры');
+  if (!cues.length) throw new Error('Получены пустые субтитры');
   const source = ['youtube-page', 'page'].includes(payload.source) ? 'page' : payload.source === 'generated' ? 'generated' : 'youtube';
   const track = localSubtitleTrack(payload.videoId, source, cues, payload.language);
   const revision = selectionRevision;
@@ -594,12 +594,12 @@ async function pollExistingSubtitle(epoch, language, selectionAtStart) {
     throw new Error('Субтитры относятся к другому видео');
   }
   if (result.status === 'running') {
-    setYoutubeStatus('Скачиваю субтитры…', false, 'loading');
+    setYoutubeStatus('Получаю субтитры со страницы…', false, 'loading');
     youtubePollTimer = setTimeout(() => pollExistingSubtitle(epoch, language, selectionAtStart)
       .catch((error) => youtubeFailure(error, epoch)), 1500);
     return;
   }
-  if (result.status === 'error') throw new Error(result.error || 'Не удалось скачать дорожку YouTube');
+  if (result.status === 'error') throw new Error(result.error || 'Не удалось получить дорожку YouTube');
   const existingReady = await installLocalSubtitle({ ...result, videoId }, true, selectionAtStart);
   if (popupClosed || epoch !== youtubeEpoch) return;
   downloadingLanguage = '';
